@@ -20,6 +20,7 @@ add_executable(ps2ur_tests
     test_time.cpp
     test_gfx.cpp
     test_swizzle.cpp
+    test_texcache.cpp
 )
 target_link_libraries(ps2ur_tests PRIVATE ps2ur GTest::gtest_main)
 

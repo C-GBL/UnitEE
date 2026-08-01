@@ -25,6 +25,7 @@ set(PS2UR_SOURCES
     src/gfx/gs_device.cpp
     src/gfx/gs_overlay.cpp
     src/gfx/gs_swizzle.cpp
+    src/gfx/gs_texcache.cpp
     src/vu/vu.cpp
     src/scene/scene.cpp
     src/anim/anim.cpp
