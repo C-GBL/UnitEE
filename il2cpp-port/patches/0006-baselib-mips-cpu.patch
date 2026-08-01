@@ -1,0 +1,24 @@
+diff --git a/baselib/Include/C/Internal/Compiler/Baselib_Cpu_Gcc.inl.h b/baselib/Include/C/Internal/Compiler/Baselib_Cpu_Gcc.inl.h
+index d490457..d40e2da 100644
+--- a/baselib/Include/C/Internal/Compiler/Baselib_Cpu_Gcc.inl.h
++++ b/baselib/Include/C/Internal/Compiler/Baselib_Cpu_Gcc.inl.h
+@@ -3,6 +3,7 @@
+     || defined(__x86_64__)  \
+     || defined(__wasm__)    \
+     || defined(__aarch64__) \
++    || defined(__mips__)    \
+     || (defined(__ARM_ARCH) && __ARM_ARCH >= 7))
+     #error "Unsupported CPU Architecture"
+ #endif
+@@ -32,6 +33,11 @@ static FORCE_INLINE bool Baselib_Cpu_Hint_SpinLoop(void)
+ #elif defined(__wasm__)
+     return false;
+ 
++// MIPS R5900 (PlayStation 2): single-core, single-threaded build -- there is
++// nothing to yield to, so report no spin-relaxation support.
++#elif defined(__mips__)
++    return false;
++
+ #else
+     #error Unknown spin loop relaxation instruction for CPU
+ 

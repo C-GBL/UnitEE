@@ -6,7 +6,11 @@ Subcommands (prepare is the default when none is given):
   prepare   Wipe build/il2cpp and redo it from scratch (idempotent):
               1. copy <unity-root>/il2cpp/libil2cpp        -> build/il2cpp/libil2cpp
                  copy <unity-root>/il2cpp/external/bdwgc   -> build/il2cpp/bdwgc
-                 (skips .git-ish junk, preserves the tree)
+                 copy <unity-root>/il2cpp/external/baselib -> build/il2cpp/baselib
+                 copy <unity-root>/il2cpp/external/google  -> build/il2cpp/external/google
+                 (skips .git-ish junk, preserves the tree; baselib and
+                 sparsehash are compile-time dependencies of libil2cpp on
+                 the EE build -- M6)
               2. snapshot the pristine state: a local git repo inside
                  build/il2cpp (commit + tag "pristine") for patch authoring,
                  plus a sha256 file manifest (.ps2port-pristine.json)
@@ -129,7 +133,9 @@ def cmd_prepare(ns):
     unity_root = Path(ns.unity_root)
     lib_src = unity_root / "il2cpp" / "libil2cpp"
     gc_src = unity_root / "il2cpp" / "external" / "bdwgc"
-    for p in (lib_src, gc_src):
+    baselib_src = unity_root / "il2cpp" / "external" / "baselib"
+    google_src = unity_root / "il2cpp" / "external" / "google"
+    for p in (lib_src, gc_src, baselib_src, google_src):
         if not p.is_dir():
             fail("source dir not found: %s (bad --unity-root?)" % p)
     build_dir = Path(ns.build_dir).resolve()
@@ -143,8 +149,15 @@ def cmd_prepare(ns):
     shutil.copytree(lib_src, build_dir / "libil2cpp", ignore=_copy_ignore)
     print("copying bdwgc from %s" % gc_src)
     shutil.copytree(gc_src, build_dir / "bdwgc", ignore=_copy_ignore)
+    print("copying baselib from %s" % baselib_src)
+    shutil.copytree(baselib_src, build_dir / "baselib", ignore=_copy_ignore)
+    print("copying google (sparsehash) from %s" % google_src)
+    shutil.copytree(google_src, build_dir / "external" / "google",
+                    ignore=_copy_ignore)
     lib_count = count_and_unlock(build_dir / "libil2cpp")
     gc_count = count_and_unlock(build_dir / "bdwgc")
+    baselib_count = count_and_unlock(build_dir / "baselib")
+    google_count = count_and_unlock(build_dir / "external" / "google")
 
     # Local staging git repo: the pristine baseline that patches are authored
     # against (see il2cpp-port/patches/README.md). build/ is gitignored in the
@@ -218,6 +231,8 @@ def cmd_prepare(ns):
     print("  build dir       : %s" % build_dir)
     print("  libil2cpp files : %d" % lib_count)
     print("  bdwgc files     : %d" % gc_count)
+    print("  baselib files   : %d" % baselib_count)
+    print("  sparsehash files: %d" % google_count)
     print("  patches applied : %d%s"
           % (len(applied), (" (" + ", ".join(applied) + ")") if applied else ""))
     print("  overlay files   : %d%s"

@@ -1,0 +1,43 @@
+diff --git a/libil2cpp/il2cpp-config.h b/libil2cpp/il2cpp-config.h
+index 308c2b0..866c149 100644
+--- a/libil2cpp/il2cpp-config.h
++++ b/libil2cpp/il2cpp-config.h
+@@ -134,7 +134,9 @@ typedef void (STDCALL *CultureInfoChangedCallback)(const Il2CppChar* arg);
+ #define IL2CPP_ENABLE_PLATFORM_THREAD_STACKSIZE 1
+ #endif
+ 
++#ifndef IL2CPP_ENABLE_STACKTRACES
+ #define IL2CPP_ENABLE_STACKTRACES !IL2CPP_TARGET_QNX
++#endif
+ 
+ /* Platforms which use OS specific implementation to extract stracktrace */
+ #if !defined(IL2CPP_ENABLE_NATIVE_STACKTRACES)
+@@ -174,7 +176,9 @@ typedef void (STDCALL *CultureInfoChangedCallback)(const Il2CppChar* arg);
+ 
+ /* we always need to NULL pointer free memory with our current allocators */
+ #define NEED_TO_ZERO_PTRFREE 1
+-#define IL2CPP_HAS_GC_DESCRIPTORS 1
++#ifndef IL2CPP_HAS_GC_DESCRIPTORS
++#define IL2CPP_HAS_GC_DESCRIPTORS IL2CPP_GC_BOEHM
++#endif
+ 
+ #if defined(_MSC_VER)
+     #define IL2CPP_ZERO_LEN_ARRAY 0
+diff --git a/libil2cpp/vm/Array.cpp b/libil2cpp/vm/Array.cpp
+index 9b03cc9..bb993ec 100644
+--- a/libil2cpp/vm/Array.cpp
++++ b/libil2cpp/vm/Array.cpp
+@@ -131,12 +131,12 @@ namespace vm
+             memset((char*)o + sizeof(Il2CppObject), 0, byte_len - sizeof(Il2CppObject));
+ #endif
+         }
++#if IL2CPP_HAS_GC_DESCRIPTORS
+         else if (klass->element_class->byval_arg.valuetype &&
+                  ((GC_descr)klass->element_class->gc_desc & GC_DS_TAGS) == GC_DS_BITMAP)
+         {
+             o = (Il2CppObject*)GC_gcj_vector_malloc(byte_len, klass);
+         }
+-#if IL2CPP_HAS_GC_DESCRIPTORS
+         else if (klass->gc_desc != GC_NO_DESCRIPTOR)
+         {
+             o = Object::AllocateSpec(byte_len, klass);

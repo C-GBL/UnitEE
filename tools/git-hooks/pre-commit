@@ -41,20 +41,24 @@ port_hits=$(printf '%s\n' "$staged" | grep -E '^il2cpp-port/' || true)
 if [ -n "$port_hits" ]; then
     bad=$(printf '%s\n' "$port_hits" | grep -vE \
         -e '^il2cpp-port/[^/]+\.(md|py)$' \
+        -e '^il2cpp-port/(CMakeLists\.txt|main_ee\.cpp|keep-eh\.ld)$' \
         -e '^il2cpp-port/patches/[^/]+\.(patch|md)$' \
         -e '^il2cpp-port/os/ps2/.+$' \
         -e '^il2cpp-port/bdwgc/.+$' \
-        -e '^il2cpp-port/notes/.+$' || true)
+        -e '^il2cpp-port/notes/.+$' \
+        -e '^il2cpp-port/tests/[^/]+\.(cs|md)$' || true)
     if [ -n "$bad" ]; then
         echo "pre-commit: REJECTED -- unexpected paths under il2cpp-port/:"
         printf '%s\n' "$bad" | sed 's/^/  /'
         note ""
         note "il2cpp-port/ accepts only:"
-        note "  *.md, *.py                 (README, apply.py)"
+        note "  *.md, *.py                 (README, apply.py, build_m6.py)"
+        note "  CMakeLists.txt, main_ee.cpp, keep-eh.ld  (the EE build, M6)"
         note "  patches/*.patch, *.md      (patches against Unity's copy)"
         note "  os/ps2/**                  (our IL2CPP_TARGET_PS2 OS layer)"
         note "  bdwgc/**                   (our GC config + notes)"
         note "  notes/**                   (our investigation notes)"
+        note "  tests/*.cs                 (our managed gate/test programs)"
         note "Edits to Unity's sources belong in patches/, not as copied files."
         fail=1
     fi

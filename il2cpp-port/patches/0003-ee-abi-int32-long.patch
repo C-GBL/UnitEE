@@ -1,0 +1,95 @@
+diff --git a/libil2cpp/icalls/System.Core/System.IO.MemoryMappedFiles/MemoryMapImpl.cpp b/libil2cpp/icalls/System.Core/System.IO.MemoryMappedFiles/MemoryMapImpl.cpp
+index dc169db..9b73100 100644
+--- a/libil2cpp/icalls/System.Core/System.IO.MemoryMappedFiles/MemoryMapImpl.cpp
++++ b/libil2cpp/icalls/System.Core/System.IO.MemoryMappedFiles/MemoryMapImpl.cpp
+@@ -126,7 +126,9 @@ namespace MemoryMappedFiles
+         if (path != NULL)
+         {
+             std::string filePath = utils::StringUtils::Utf16ToUtf8(path);
+-            file = os::File::Open(filePath, mode, ConvertMemoryMappedFileAccessToIL2CPPFileAccess((os::MemoryMappedFileAccess)access), 0, options, error);
++            int openError = 0;
++            file = os::File::Open(filePath, mode, ConvertMemoryMappedFileAccessToIL2CPPFileAccess((os::MemoryMappedFileAccess)access), 0, options, &openError);
++            *error = openError;
+ 
+             s_OwnedFileHandles.push_back(file);
+         }
+diff --git a/libil2cpp/icalls/mscorlib/System/Object.cpp b/libil2cpp/icalls/mscorlib/System/Object.cpp
+index d547fdd..b7e914a 100644
+--- a/libil2cpp/icalls/mscorlib/System/Object.cpp
++++ b/libil2cpp/icalls/mscorlib/System/Object.cpp
+@@ -14,7 +14,7 @@ namespace mscorlib
+ {
+ namespace System
+ {
+-    int32_t Object::InternalGetHashCode(Il2CppObject* obj)
++    int Object::InternalGetHashCode(Il2CppObject* obj)
+     {
+         return il2cpp::vm::Object::GetHash(obj);
+     }
+diff --git a/libil2cpp/il2cpp-mono-api.cpp b/libil2cpp/il2cpp-mono-api.cpp
+index baf09e6..f1e582c 100644
+--- a/libil2cpp/il2cpp-mono-api.cpp
++++ b/libil2cpp/il2cpp-mono-api.cpp
+@@ -604,7 +604,7 @@ static void il2cpp_g_ptr_array_grow(Il2CppGPtrArrayPriv* array, uint32_t length)
+     while (array->size < new_length)
+         array->size <<= 1;
+ 
+-    array->size = std::max(array->size, 16U);
++    array->size = std::max<uint32_t>(array->size, 16U);
+     array->pdata = (void**)IL2CPP_REALLOC(array->pdata, array->size * sizeof(void*));
+ }
+ 
+diff --git a/libil2cpp/mono/ThreadPool/threadpool-ms.cpp b/libil2cpp/mono/ThreadPool/threadpool-ms.cpp
+index e1296ea..7cb0901 100644
+--- a/libil2cpp/mono/ThreadPool/threadpool-ms.cpp
++++ b/libil2cpp/mono/ThreadPool/threadpool-ms.cpp
+@@ -806,7 +806,7 @@ void ves_icall_System_Threading_ThreadPool_GetAvailableThreadsNative (int32_t *w
+ 
+ 	counter.as_int64_t = COUNTER_READ ();
+ 
+-	*worker_threads = std::max (0, g_ThreadPool->limit_worker_max - counter._.active);
++	*worker_threads = std::max<int32_t>(0, g_ThreadPool->limit_worker_max - counter._.active);
+ 	*completion_port_threads = g_ThreadPool->limit_io_max;
+ }
+ 
+diff --git a/libil2cpp/vm/Exception.cpp b/libil2cpp/vm/Exception.cpp
+index 566ddc8..ea8a755 100644
+--- a/libil2cpp/vm/Exception.cpp
++++ b/libil2cpp/vm/Exception.cpp
+@@ -218,8 +218,8 @@ namespace vm
+         il2cpp_hresult_t hr = errorInfo->GetErrorDetails(&bstrDescription, &error, &bstrRestrictedDescription, &bstrCapabilitySid);
+         if (IL2CPP_HR_SUCCEEDED(hr))
+         {
+-            int descriptionLength = 0;
+-            int restrictedDescriptionLength = 0;
++            int32_t descriptionLength = 0;
++            int32_t restrictedDescriptionLength = 0;
+ 
+             if (bstrDescription != NULL)
+                 os::MarshalStringAlloc::GetBStringLength(bstrDescription, &descriptionLength);
+diff --git a/libil2cpp/vm/PlatformInvoke.cpp b/libil2cpp/vm/PlatformInvoke.cpp
+index 73b859b..83e223c 100644
+--- a/libil2cpp/vm/PlatformInvoke.cpp
++++ b/libil2cpp/vm/PlatformInvoke.cpp
+@@ -129,7 +129,7 @@ namespace vm
+         }
+         else
+         {
+-            int32_t stringLength = std::min(utils::StringUtils::GetLength(managedString), numberOfCharacters - 1);
++            int32_t stringLength = std::min<int32_t>(utils::StringUtils::GetLength(managedString), numberOfCharacters - 1);
+             for (int32_t i = 0; i < stringLength; ++i)
+                 buffer[i] = managedString->chars[i];
+ 
+diff --git a/libil2cpp/vm/Type.h b/libil2cpp/vm/Type.h
+index 85708cc..1ff1b7f 100644
+--- a/libil2cpp/vm/Type.h
++++ b/libil2cpp/vm/Type.h
+@@ -73,7 +73,7 @@ namespace vm
+             return _assembly_name;
+         }
+ 
+-        inline const std::vector<int> &modifiers() const
++        inline const std::vector<int32_t> &modifiers() const
+         {
+             return _modifiers;
+         }

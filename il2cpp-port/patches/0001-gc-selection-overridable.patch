@@ -1,0 +1,14 @@
+diff --git a/libil2cpp/il2cpp-config.h b/libil2cpp/il2cpp-config.h
+index c5c32a8..308c2b0 100644
+--- a/libil2cpp/il2cpp-config.h
++++ b/libil2cpp/il2cpp-config.h
+@@ -166,7 +166,9 @@ typedef void (STDCALL *CultureInfoChangedCallback)(const Il2CppChar* arg);
+ #define IL2CPP_CAN_USE_MULTIPLE_SYMBOL_MAPS IL2CPP_TARGET_IOS
+ 
+ /* GC defines*/
++#ifndef IL2CPP_GC_BOEHM
+ #define IL2CPP_GC_BOEHM 1
++#endif
+ #define IL2CPP_GC_NULL !IL2CPP_GC_BOEHM
+ #define IL2CPP_ENABLE_DEFERRED_GC   IL2CPP_TARGET_JAVASCRIPT
+ 

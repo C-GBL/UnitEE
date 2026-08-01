@@ -1,0 +1,55 @@
+diff --git a/bdwgc/include/private/gcconfig.h b/bdwgc/include/private/gcconfig.h
+index fdd3162..8458c53 100644
+--- a/bdwgc/include/private/gcconfig.h
++++ b/bdwgc/include/private/gcconfig.h
+@@ -213,13 +213,17 @@ EXTERN_C_BEGIN
+ #    define VAX
+ #    define mach_type_known
+ # endif
++# if defined(_EE) && defined(__mips__) && !defined(PS2)
++    /* Sony PlayStation 2 Emotion Engine: bare metal on ps2sdk/newlib. */
++#   define PS2
++# endif
+ # if defined(mips) || defined(__mips) || defined(_mips)
+ #    define MIPS
+ #    if defined(nec_ews) || defined(_nec_ews)
+ #      define EWS4800
+ #    endif
+ #    if !defined(LINUX) && !defined(EWS4800) && !defined(NETBSD) \
+-        && !defined(OPENBSD)
++        && !defined(OPENBSD) && !defined(PS2)
+ #      if defined(ultrix) || defined(__ultrix)
+ #        define ULTRIX
+ #      else
+@@ -1741,6 +1745,31 @@ EXTERN_C_BEGIN
+ 
+ # ifdef MIPS
+ #   define MACH_TYPE "MIPS"
++#   ifdef PS2
++#     define OS_TYPE "PS2"
++#     define CPP_WORDSZ 32
++#     define ALIGNMENT 4
++#     ifndef HBLKSIZE
++#       define HBLKSIZE 4096
++#     endif
++#     define GETPAGESIZE() 4096
++      /* il2cpp registers static roots itself                           */
++      /* (GC_DONT_REGISTER_MAIN_STATIC_DATA); the bounds must still     */
++      /* exist.  Symbols from the ps2sdk linkfile.                      */
++      extern int _fdata[], _end[];
++#     define DATASTART ((ptr_t)_fdata)
++#     define DATAEND ((ptr_t)_end)
++      /* The BIOS chooses the initial sp, so no link-time constant is   */
++      /* correct: captured in main() before GC_INIT.                    */
++      extern char* ps2ur_gc_stack_bottom;
++#     define STACKBOTTOM ((ptr_t)ps2ur_gc_stack_bottom)
++      /* HBLKSIZE-aligned chunks out of the newlib heap.                */
++      extern void* ps2ur_gc_get_mem(size_t lb);
++#     define GET_MEM(lb) (struct hblk *)ps2ur_gc_get_mem(lb)
++#     define NO_CLOCK 1
++#     define DONT_USE_ATEXIT 1
++#     define NO_GETENV 1
++#   endif
+ #   ifdef LINUX
+ #     define OS_TYPE "LINUX"
+ #     define DYNAMIC_LOADING
