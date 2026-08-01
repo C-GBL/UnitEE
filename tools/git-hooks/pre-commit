@@ -1,0 +1,90 @@
+#!/bin/sh
+#
+# Enforces the hard rule from ps2port.txt section 8:
+#
+#   "il2cpp-port/ contains *only* patches and our own new files. A copy of
+#    Unity's libil2cpp is fetched from the local Editor install at build time
+#    into build/, never committed."
+#
+# Unity's libil2cpp and bdwgc sources are licensed for use with the Editor,
+# not for redistribution. Committing them -- even accidentally, even once --
+# puts non-redistributable third-party source into this repository's history,
+# where removing it means rewriting history rather than making a new commit.
+# This hook is the mechanism that makes that mistake impossible.
+#
+# Install: powershell -ExecutionPolicy Bypass -File tools/git-hooks/install.ps1
+# Bypass (do not, without a very good reason): git commit --no-verify
+
+set -e
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -z "$staged" ] && exit 0
+
+fail=0
+note() { printf '  %s\n' "$1"; }
+
+# --- 1. build/ is the fetch/staging target and is never committed ----------
+build_hits=$(printf '%s\n' "$staged" | grep -E '^build/' || true)
+if [ -n "$build_hits" ]; then
+    echo "pre-commit: REJECTED -- staged files under build/ (never committed):"
+    printf '%s\n' "$build_hits" | sed 's/^/  /'
+    note ""
+    note "build/ holds the Unity libil2cpp copy and all generated output."
+    note "If these were added with 'git add -f', unstage them: git reset HEAD build/"
+    fail=1
+fi
+
+# --- 2. il2cpp-port/ allowlist --------------------------------------------
+# Only our own files belong here. Anything outside this shape is assumed to be
+# Unity source that leaked out of build/.
+port_hits=$(printf '%s\n' "$staged" | grep -E '^il2cpp-port/' || true)
+if [ -n "$port_hits" ]; then
+    bad=$(printf '%s\n' "$port_hits" | grep -vE \
+        -e '^il2cpp-port/[^/]+\.(md|py)$' \
+        -e '^il2cpp-port/patches/[^/]+\.(patch|md)$' \
+        -e '^il2cpp-port/os/ps2/.+$' \
+        -e '^il2cpp-port/bdwgc/.+$' \
+        -e '^il2cpp-port/notes/.+$' || true)
+    if [ -n "$bad" ]; then
+        echo "pre-commit: REJECTED -- unexpected paths under il2cpp-port/:"
+        printf '%s\n' "$bad" | sed 's/^/  /'
+        note ""
+        note "il2cpp-port/ accepts only:"
+        note "  *.md, *.py                 (README, apply.py)"
+        note "  patches/*.patch, *.md      (patches against Unity's copy)"
+        note "  os/ps2/**                  (our IL2CPP_TARGET_PS2 OS layer)"
+        note "  bdwgc/**                   (our GC config + notes)"
+        note "  notes/**                   (our investigation notes)"
+        note "Edits to Unity's sources belong in patches/, not as copied files."
+        fail=1
+    fi
+
+    # A nested libil2cpp/ or external/ directory means a tree got copied in.
+    shape=$(printf '%s\n' "$port_hits" | grep -E '/(libil2cpp|external|bdwgc/(include|libatomic_ops))/' || true)
+    if [ -n "$shape" ]; then
+        echo "pre-commit: REJECTED -- these look like copies of Unity's source tree:"
+        printf '%s\n' "$shape" | sed 's/^/  /'
+        note "Fetch it at build time instead: python il2cpp-port/apply.py prepare"
+        fail=1
+    fi
+
+    # Bulk-copy guard: our own files are small and few.
+    for f in $port_hits; do
+        [ -f "$f" ] || continue
+        size=$(wc -c < "$f" | tr -d ' ')
+        if [ "$size" -gt 204800 ]; then
+            echo "pre-commit: REJECTED -- $f is ${size} bytes (>200 KB)."
+            note "Files this large under il2cpp-port/ are assumed to be copied"
+            note "Unity source. If this is genuinely ours, raise the limit here."
+            fail=1
+        fi
+    done
+fi
+
+if [ "$fail" -ne 0 ]; then
+    echo ""
+    echo "See ps2port.txt section 8 and il2cpp-port/README.md."
+    exit 1
+fi
+
+exit 0

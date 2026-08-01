@@ -1,0 +1,44 @@
+# Normalize everything to LF in the repo and in checkouts by default.
+* text=auto eol=lf
+
+# Windows script types need CRLF to run reliably (cmd.exe mangles LF batch files).
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Patches must survive byte-exact. il2cpp-port/patches/*.patch are generated
+# against Unity's libil2cpp, whose sources may use CRLF; the staging copy in
+# build/il2cpp is deliberately checked out with core.autocrlf=false. If git
+# normalized a patch's line endings on commit, its context lines would stop
+# matching and "git apply" would reject it.
+*.patch -text
+*.diff -text
+
+# Binary types -- never diff or normalize.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.tga binary
+*.bmp binary
+*.dds binary
+*.psd binary
+*.wav binary
+*.ogg binary
+*.mp3 binary
+*.vag binary
+*.p2b binary
+*.bin binary
+*.elf binary
+*.irx binary
+*.iso binary
+*.icn binary
+*.dll binary
+*.pdb binary
+*.so binary
+*.a binary
+*.lib binary
+*.exe binary
+*.zip binary
+*.7z binary
+*.tar.gz binary
+*.unitypackage binary

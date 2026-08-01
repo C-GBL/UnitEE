@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Listed in the plan's repository layout (section 8: managed/PS2.UnityShim.Editor).
+    Its purpose is defined by the missing managed-shim spec.
+    TODO(spec missing: section 12): expected contents are Editor-side support
+    for the shim (play-mode stand-in wiring, conformance driver, shim
+    authoring helpers). Kept to a placeholder until the spec arrives.
+  -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <RootNamespace>PS2.UnityShim.Editor</RootNamespace>
+    <AssemblyName>PS2.UnityShim.Editor</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\PS2.UnityShim\PS2.UnityShim.csproj" />
+  </ItemGroup>
+</Project>

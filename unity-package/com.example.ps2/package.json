@@ -1,0 +1,18 @@
+{
+  "name": "com.example.ps2",
+  "version": "0.1.0",
+  "displayName": "PlayStation 2 Build Support (Community)",
+  "unity": "6000.0",
+  "description": "Write your game in the Unity Editor using a constrained Unity-compatible API, press Build, get a PS2 disc image.",
+  "author": {
+    "name": "TODO: project author",
+    "email": "author@example.com"
+  },
+  "keywords": [
+    "ps2",
+    "playstation2",
+    "build",
+    "il2cpp",
+    "console"
+  ]
+}

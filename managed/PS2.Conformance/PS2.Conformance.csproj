@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The D5 conformance suite (plan section 2, D5): golden-value assertions run
+    both in the Unity Editor and on the PS2 target. Deliberately a plain
+    classlib with NO external test framework - the same code must AOT-compile
+    through il2cpp and run on the EE. Entry point: ConformanceRunner.RunAll().
+    TODO(spec missing: section 14): the full testing spec.
+  -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <RootNamespace>PS2.Conformance</RootNamespace>
+    <AssemblyName>PS2.Conformance</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\PS2.UnityShim\PS2.UnityShim.csproj" />
+  </ItemGroup>
+</Project>

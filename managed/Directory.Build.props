@@ -1,0 +1,15 @@
+<Project>
+  <!--
+    Shared build settings for all managed projects (plan section 8: managed/).
+    C# 9 matches the "Full C# 9-ish as IL2CPP supports it" language contract in
+    plan section 7.1. Deterministic builds are required so the exporter can do
+    reliable incremental script rebuilds (plan section 2, D6).
+  -->
+  <PropertyGroup>
+    <LangVersion>9.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Deterministic>true</Deterministic>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+</Project>

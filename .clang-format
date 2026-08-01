@@ -1,0 +1,15 @@
+# Applies ONLY to C/C++ sources we own (runtime/, tools/, il2cpp-port/os/ps2/).
+# NEVER run clang-format over libil2cpp or il2cpp-generated output
+# (ps2port.txt section 4.3) -- patches against Unity source must stay minimal.
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 120
+PointerAlignment: Left
+DerivePointerAlignment: false
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+BreakBeforeBraces: Attach
+IndentCaseLabels: false
+SortIncludes: CaseSensitive

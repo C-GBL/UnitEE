@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The facade assembly (plan sections 6, 7, 8). User scripts compile against
+    this instead of Unity's UnityEngine.dll; il2cpp then AOT-compiles both to
+    C++ for the EE. TODO(spec missing: section 12): the detailed managed shim
+    spec is referenced by the plan but absent; surface here is derived from the
+    section 7.1 support table only.
+  -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <RootNamespace>UnityEngine</RootNamespace>
+    <AssemblyName>PS2.UnityShim</AssemblyName>
+    <!-- CS0649: fields assigned only by the native runtime / serializer. -->
+    <NoWarn>$(NoWarn);CS0649</NoWarn>
+  </PropertyGroup>
+</Project>

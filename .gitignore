@@ -1,0 +1,24 @@
+# Build outputs (any level; the repo-root build/ holds the fetched libil2cpp copy
+# and all native/managed build artifacts -- never committed, see ps2port.txt section 8)
+build/
+obj/
+bin/
+
+# IDE / editor state
+*.user
+.vs/
+.idea/
+
+# Toolchain tarballs (ps2dev prebuilt releases etc.)
+*.tar.gz
+
+# Unity-side transient folders -- scoped to the trees that contain Unity projects
+# (sample projects and the UPM package dev host), not the whole repo.
+samples/**/Library/
+samples/**/Temp/
+samples/**/Logs/
+samples/**/UserSettings/
+unity-package/**/Library/
+unity-package/**/Temp/
+unity-package/**/Logs/
+unity-package/**/UserSettings/
