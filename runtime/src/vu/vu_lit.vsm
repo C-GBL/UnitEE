@@ -1,0 +1,133 @@
+; runtime/src/vu/vu_lit.vsm
+;
+; VU1 transform + per-vertex lighting (plan section 9, M4 task 3), the
+; `vu_lit` material kind from section 7.3: up to 4 directional lights plus
+; ambient, computed per vertex.
+;
+; Same pipeline as vu_unlit with a lighting stage inserted between the vertex
+; load and the transform. Four lights are done as ONE 4x4 matrix multiply
+; rather than four dot products in a loop: the light directions are packed as
+; the columns of a matrix, so MULAx/MADDAy/MADDAz produces all four N.L terms
+; in a single vector. That is the whole reason lighting is affordable here.
+;
+; ---------------------------------------------------------------------------
+; VU1 DATA MEMORY LAYOUT (quadwords)
+; ---------------------------------------------------------------------------
+;   0..3    MVP matrix, column-major
+;   4       viewport scale   : (sx, sy, sz, 0)
+;   5       viewport offset  : (ox, oy, oz, 0)
+;   6       GIF tag template
+;   7       vertex count     : (n, 0, 0, 0)
+;   8..10   light direction matrix: rows x/y/z, one COLUMN per light,
+;           pre-negated and normalised on the EE, and already transformed into
+;           object space so the microprogram needs no inverse-transpose
+;   11      light colour R   : (l0.r, l1.r, l2.r, l3.r)
+;   12      light colour G
+;   13      light colour B
+;   14      ambient          : (r, g, b, 0)
+;   15      colour clamp     : (255, 255, 255, 128) -- the GS ceiling, and 128
+;                              is opaque alpha on this hardware
+;   16..    vertices, 3 qwords each: position (x,y,z,1), normal (x,y,z,0),
+;           colour (r,g,b,a)
+;
+; Output is built from qword 300 onwards.
+;
+; Splitting the light colours by channel (11/12/13) rather than storing four
+; RGB triples is what lets the four N.L intensities be applied with three
+; MULA/MADD chains instead of four separate colour multiplies.
+
+		.vu
+		.align 4
+		.global	VuLit_CodeStart
+		.global	VuLit_CodeEnd
+
+VuLit_CodeStart:
+
+; --- Per-batch constants ----------------------------------------------------
+		NOP							lq		VF01, 0(VI00)		; MVP col 0
+		NOP							lq		VF02, 1(VI00)		; MVP col 1
+		NOP							lq		VF03, 2(VI00)		; MVP col 2
+		NOP							lq		VF04, 3(VI00)		; MVP col 3
+		NOP							lq		VF05, 4(VI00)		; viewport scale
+		NOP							lq		VF06, 5(VI00)		; viewport offset
+		NOP							lq		VF07, 6(VI00)		; GIF tag
+		NOP							ilw.x	VI05, 7(VI00)		; vertex count
+
+		NOP							lq		VF20, 8(VI00)		; light dirs, x row
+		NOP							lq		VF21, 9(VI00)		; light dirs, y row
+		NOP							lq		VF22, 10(VI00)		; light dirs, z row
+		NOP							lq		VF23, 11(VI00)		; light colour R
+		NOP							lq		VF24, 12(VI00)		; light colour G
+		NOP							lq		VF25, 13(VI00)		; light colour B
+		NOP							lq		VF26, 14(VI00)		; ambient
+
+; --- GIF tag ----------------------------------------------------------------
+		NOP							iaddiu	VI08, VI00, 300
+		NOP							sq		VF07, 0(VI08)
+		NOP							iaddiu	VI08, VI08, 1
+
+		NOP							iaddiu	VI06, VI00, 16		; input cursor
+		NOP							iaddiu	VI07, VI00, 0		; counter
+
+vertex_loop:
+		NOP							lq		VF10, 0(VI06)		; position
+		NOP							lq		VF16, 1(VI06)		; normal
+		NOP							lq		VF11, 2(VI06)		; vertex colour
+
+; --- Lighting ---------------------------------------------------------------
+; VF17 = (N.L0, N.L1, N.L2, N.L3), all four lights at once.
+		MULAx	ACC, VF20, VF16x	NOP
+		MADDAy	ACC, VF21, VF16y	NOP
+		MADDz	VF17, VF22, VF16z	NOP
+
+; Clamp negatives to zero: a surface facing away from a light receives nothing,
+; and without this the back faces would be lit by the NEGATIVE of the term.
+		MAX		VF17, VF17, VF00	NOP
+
+; Accumulate the four intensities into one RGB colour, per channel.
+		MULAx	ACC, VF23, VF17x	NOP
+		MADDAy	ACC, VF24, VF17y	NOP
+		MADDAz	ACC, VF25, VF17z	NOP
+		MADDw	VF18, VF26, VF00w	NOP
+
+; Modulate by the vertex colour, then clamp to the 0..255 the GS expects.
+; Overflow here shows up as wrapped, psychedelic colours rather than as
+; clipping, so the MINI is not optional.
+		MUL		VF19, VF18, VF11	NOP
+		NOP							lq		VF27, 15(VI00)		; (255,255,255,128)
+		MINI	VF19, VF19, VF27	NOP
+		MAX		VF19, VF19, VF00	NOP
+
+; --- Transform --------------------------------------------------------------
+		MULAx	ACC, VF01, VF10x	NOP
+		MADDAy	ACC, VF02, VF10y	NOP
+		MADDAz	ACC, VF03, VF10z	NOP
+		MADDw	VF12, VF04, VF10w	NOP
+
+		NOP							DIV		Q, VF00w, VF12w
+		NOP							WAITQ
+		MULq	VF12, VF12, Q		NOP
+
+; Explicit MUL then ADD -- see vu_unlit.vsm for why MADD with VF00 silently
+; drops the offset.
+		MUL		VF13, VF12, VF05	NOP
+		ADD		VF13, VF13, VF06	NOP
+
+		FTOI4	VF14, VF13			NOP
+		FTOI0	VF15, VF19			NOP
+
+		NOP							sq		VF15, 0(VI08)		; RGBAQ
+		NOP							sq		VF14, 1(VI08)		; XYZ2
+
+		NOP							iaddiu	VI08, VI08, 2
+		NOP							iaddiu	VI06, VI06, 3
+		NOP							iaddiu	VI07, VI07, 1
+		NOP							ibne	VI07, VI05, vertex_loop
+
+		NOP							iaddiu	VI09, VI00, 300
+		NOP							xgkick	VI09
+
+		NOP[E]						NOP
+		NOP							NOP
+		.align 4
+VuLit_CodeEnd:
