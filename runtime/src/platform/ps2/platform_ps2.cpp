@@ -62,16 +62,36 @@ void log_sink(int level, const char* message)
     // during early bring-up before the GS device owns the framebuffer.
 }
 
+namespace {
+
+// COP0 Count increments once every two CPU cycles, so at half the EE's
+// 294.912 MHz core clock (plan section 3.1).
+constexpr uint64_t kCountHz = 294912000ull / 2ull;
+
+uint32_t g_last_count = 0;
+uint64_t g_count_high = 0; // accumulated wraps, in units of 2^32 ticks
+
+} // namespace
+
 uint64_t now_ticks()
 {
-    // TODO(ps2dev): read COP0 Count (or T0/T1 EE timers) and extend to 64 bits;
-    // EE core clock is 294.912 MHz (section 3.1).
-    return 0;
+    uint32_t count;
+    __asm__ __volatile__("mfc0 %0, $9" : "=r"(count));
+
+    // Count is 32 bits and wraps roughly every 29 seconds at 147 MHz, which is
+    // well inside a play session. Extend it by detecting the wrap; this is
+    // exact provided it is sampled more than once per wrap period, which the
+    // per-frame time::update() guarantees.
+    if (count < g_last_count) {
+        g_count_high += 1ull << 32;
+    }
+    g_last_count = count;
+    return g_count_high + count;
 }
 
 uint64_t ticks_per_second()
 {
-    return 294912000ull; // EE clock, section 3.1 -- placeholder until timer choice
+    return kCountHz;
 }
 
 } // namespace platform

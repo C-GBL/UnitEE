@@ -49,6 +49,14 @@ const uint8_t kCubeIndices[36] = {
     4, 5, 1, 4, 1, 0, // bottom
 };
 
+// Golden-image window: centred on the cube so the CRCs actually cover
+// geometry rather than empty background.
+constexpr uint32_t kGoldenX = 128;
+constexpr uint32_t kGoldenY = 96;
+constexpr uint32_t kGoldenW = 256;
+constexpr uint32_t kGoldenH = 256;
+alignas(16) uint8_t g_readback[kGoldenW * kGoldenH * 4];
+
 // One colour per face, so rotation is obvious even without lighting.
 const uint8_t kFaceColours[6][3] = {
     {220, 60, 60}, {60, 220, 60}, {60, 60, 220},
@@ -141,9 +149,37 @@ int main(void)
         drawn_frames++;
     }
 
+    const float elapsed = time::seconds();
+    const float fps = elapsed > 0.0f ? static_cast<float>(drawn_frames) / elapsed : 0.0f;
+
     printf("[01-spinning-cube] %u frames, %ux%u PSMCT32 + PSMZ24, 12 tris/frame\n",
            static_cast<unsigned>(drawn_frames), static_cast<unsigned>(kScreenWidth),
            static_cast<unsigned>(kScreenHeight));
+    // Printed as milli-fps to avoid %f, which drags in soft-float formatting.
+    printf("[01-spinning-cube] elapsed_ms=%u fps_milli=%u\n",
+           static_cast<unsigned>(elapsed * 1000.0f),
+           static_cast<unsigned>(fps * 1000.0f));
+
+    // Golden-image data (plan section 14.3). The animation is driven by frame
+    // index, never wall clock, so the final frame is bit-identical run to run
+    // and these CRCs can be checked in and diffed.
+    if (device.read_framebuffer(g_readback, kGoldenX, kGoldenY, kGoldenW, kGoldenH)) {
+        printf("GOLDEN %ux%u at (%u,%u) tiles %ux%u\n",
+               static_cast<unsigned>(kGoldenW), static_cast<unsigned>(kGoldenH),
+               static_cast<unsigned>(kGoldenX), static_cast<unsigned>(kGoldenY),
+               static_cast<unsigned>(kGoldenW / 32u), static_cast<unsigned>(kGoldenH / 32u));
+        for (uint32_t ty = 0; ty < kGoldenH / 32u; ++ty) {
+            for (uint32_t tx = 0; tx < kGoldenW / 32u; ++tx) {
+                printf("GOLDEN_TILE %u %u %08X\n", static_cast<unsigned>(tx),
+                       static_cast<unsigned>(ty),
+                       static_cast<unsigned>(gfx::GsDevice::tile_crc32(
+                           g_readback, kGoldenW, kGoldenH, tx, ty)));
+            }
+        }
+    } else {
+        printf("GOLDEN_UNAVAILABLE readback failed\n");
+    }
+
     printf("PS2UR_TOKEN_SPINNING_CUBE_OK\n");
 
     device.shutdown();

@@ -1,0 +1,107 @@
+#!/bin/sh
+#
+# tools/goldens/check.sh -- golden-image regression check (plan section 14.3).
+#
+# Boots an ELF that emits GOLDEN_TILE lines, then diffs its per-tile CRC32s
+# against a checked-in golden. Tile granularity is the point: a failure says
+# "tiles (3,5) and (4,5) changed" rather than "the image is different", which
+# is the difference between a five-minute fix and an afternoon.
+#
+# Usage:
+#   tools/goldens/check.sh <elf> <golden-file> [timeout]
+#   tools/goldens/check.sh --update <elf> <golden-file> [timeout]
+#
+# --update rewrites the golden from the current run. Only do that when you
+# have decided the new output is correct; that is a deliberate act, not a
+# convenience.
+#
+# Exit: 0 match / 1 mismatch / 2 setup or capture problem.
+
+UPDATE=0
+if [ "$1" = "--update" ]; then
+    UPDATE=1
+    shift
+fi
+
+ELF=$1
+GOLDEN=$2
+TIMEOUT=${3:-90}
+
+[ -n "$ELF" ] && [ -n "$GOLDEN" ] || {
+    echo "usage: $0 [--update] <elf> <golden-file> [timeout]" >&2
+    exit 2
+}
+[ -f "$ELF" ] || { echo "check: ELF not found: $ELF" >&2; exit 2; }
+
+ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+RUNNER="$ROOT/tools/ci/run-emu-test.sh"
+[ -x "$RUNNER" ] || [ -f "$RUNNER" ] || {
+    echo "check: $RUNNER missing" >&2; exit 2;
+}
+
+WORK=${GOLDEN_WORKDIR:-build/goldens}
+mkdir -p "$WORK"
+ACTUAL="$WORK/$(basename "$GOLDEN").actual"
+
+# run-emu-test.sh handles the space-in-path staging and the absolute-path
+# requirement; reuse it rather than duplicating that knowledge here.
+echo "check: running $(basename "$ELF") ..."
+sh "$RUNNER" "$ELF" "GOLDEN_TILE" "$TIMEOUT" >/dev/null 2>&1
+RC=$?
+
+LOG=${EMU_TEST_STAGE:-/tmp/ps2-emu-stage}/emulog.txt
+[ -f "$LOG" ] || LOG="$ROOT/build/emu-test/emulog.txt"
+[ -f "$LOG" ] || { echo "check: no emulator log found" >&2; exit 2; }
+
+# Header line plus the tile rows, stripped of the emulator's timestamps.
+{
+    grep -oE "GOLDEN [0-9]+x[0-9]+ at \([0-9]+,[0-9]+\) tiles [0-9]+x[0-9]+" "$LOG" | head -1
+    grep -oE "GOLDEN_TILE [0-9]+ [0-9]+ [0-9A-F]{8}" "$LOG" | sed 's/^GOLDEN_TILE //'
+} > "$ACTUAL"
+
+TILES=$(grep -cE "^[0-9]+ [0-9]+ [0-9A-F]{8}$" "$ACTUAL" 2>/dev/null || echo 0)
+if [ "$TILES" -eq 0 ]; then
+    echo "check: FAILED to capture any tiles (emulator rc=$RC)." >&2
+    echo "       The ELF must print GOLDEN_TILE <x> <y> <crc32> lines." >&2
+    exit 2
+fi
+echo "check: captured $TILES tiles"
+
+if [ "$UPDATE" -eq 1 ]; then
+    {
+        echo "# Golden tile CRC32s -- regenerated $(date -u +%Y-%m-%d) by tools/goldens/check.sh --update"
+        echo "# Source ELF: $(basename "$ELF")"
+        echo "# Format: <tile_x> <tile_y> <crc32>."
+        cat "$ACTUAL"
+    } > "$GOLDEN"
+    echo "check: golden UPDATED -> $GOLDEN"
+    exit 0
+fi
+
+[ -f "$GOLDEN" ] || {
+    echo "check: no golden at $GOLDEN. Create one with --update once the" >&2
+    echo "       output has been confirmed correct." >&2
+    exit 2
+}
+
+# Compare only the data rows; comments and capture dates must not matter.
+EXPECTED_ROWS="$WORK/expected.rows"
+ACTUAL_ROWS="$WORK/actual.rows"
+grep -E "^[0-9]+ [0-9]+ [0-9A-F]{8}$" "$GOLDEN" | sort > "$EXPECTED_ROWS"
+grep -E "^[0-9]+ [0-9]+ [0-9A-F]{8}$" "$ACTUAL" | sort > "$ACTUAL_ROWS"
+
+if cmp -s "$EXPECTED_ROWS" "$ACTUAL_ROWS"; then
+    echo "check: PASS -- all $TILES tiles match $GOLDEN"
+    exit 0
+fi
+
+echo "check: FAIL -- tile CRCs differ from $GOLDEN"
+echo "--- changed tiles (tile_x tile_y expected -> actual) ---"
+join -j 1 \
+    -o 0,1.2,2.2 \
+    <(awk '{print $1"_"$2, $3}' "$EXPECTED_ROWS" | sort) \
+    <(awk '{print $1"_"$2, $3}' "$ACTUAL_ROWS" | sort) 2>/dev/null |
+    awk '$2 != $3 { split($1, t, "_"); printf "  tile(%s,%s)  %s -> %s\n", t[1], t[2], $2, $3 }'
+echo ""
+echo "If the change is intended, re-run with --update."
+exit 1

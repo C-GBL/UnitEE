@@ -66,6 +66,15 @@ bad data and rasterises it, so neither produces an error you can grep for.
 | 2026-07-31 | Drawing environment must be submitted, not just built | Obvious in hindsight, but the same black screen: `FRAME`/`ZBUF`/`XYOFFSET`/`SCISSOR` sat in a packet that was reset before it was ever sent. |
 | 2026-07-31 | `GsDevice::set_trace()` | The bring-up aid that actually located the DMA stall: it logs each submit step so a wedged GS path can be placed before/during/after the DMA instead of guessed at. Reach for it before re-reading the code. |
 
+### M2 acceptance
+
+| Date | Criterion (plan section 9, M2) | Result |
+|---|---|---|
+| 2026-08-01 | `samples/01-spinning-cube` renders correctly | PASS, visually confirmed. |
+| 2026-08-01 | Framebuffer CRC matches a checked-in golden | PASS: 64 tile CRC32s over a 256x256 window, reproducible across independent runs, stored in `tools/goldens/data/01-spinning-cube.golden`. `tools/goldens/check.sh` diffs them and was negative-tested (corrupting two tiles produces a failure naming exactly those two). |
+| 2026-08-01 | "Sustained 60 fps with vsync in PCSX2" | **DEVIATION: 29.978 fps, and that is the correct maximum.** At 512x448 **interlaced** NTSC the display refreshes 59.94 *fields* per second, which is 29.97 *frames* per second; the sample is vsync-locked at exactly that, so it is not dropping frames. 60 fps at this line count is not physically available. Reaching 60 would mean either a ~224-line progressive mode or rendering per-field, both of which halve vertical resolution. The plan's section 3.3 baseline explicitly chooses 512x448 interlaced, so the 30 fps target in section 3.6 ("Realistic targets ... at 30 fps") is the consistent one; the M2 wording appears to assume a different video mode. Recorded rather than silently "fixed". |
+| 2026-08-01 | EE frame timer | COP0 Count (`mfc0 $9`) at half the 294.912 MHz core clock = 147.456 MHz, extended to 64 bits by wrap detection. It is exact provided it is sampled more than once per ~29 s wrap, which `time::update()` per frame guarantees. |
+
 ## VU toolchain (`dvp-as`)
 
 | Date | Item (plan ref) | Result |
