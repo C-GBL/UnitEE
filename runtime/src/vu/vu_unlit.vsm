@@ -1,37 +1,52 @@
 ; runtime/src/vu/vu_unlit.vsm
 ;
-; VU1 transform microprogram (plan section 9, M4 task 2), the `vu_unlit`
+; VU1 transform microprogram (plan section 9, M4 tasks 2 and 4), the `vu_unlit`
 ; material kind from section 7.3: texture x vertex colour, no lighting.
 ;
-; Per vertex it does what the EE used to do in draw_triangles_immediate:
-; transform to clip space, perspective divide, scale to screen coordinates,
-; convert to GS 12.4 fixed point, and pack the result into a GIF packet built
-; in VU data memory. Then one XGKICK sends the whole batch.
+; Per vertex: transform to clip space, perspective divide, viewport map, GS
+; 12.4 fixed-point conversion, packed into a GIF packet in VU data memory and
+; sent with one XGKICK per batch.
+;
+; CLIPPING (M4 task 4, the staged version the plan asks for first):
+; per TRIANGLE, reject when any of its three vertices is
+;   - behind the near plane (clip-space w < near), or
+;   - outside the guard band (screen x or y outside 0..4095 GS pixels).
+; A rejected triangle has its three XYZ2 qwords overwritten with a degenerate
+; point far off-screen, so it rasterises nothing. This is rejection, not true
+; clipping: a triangle straddling the near plane POPS rather than being cut.
+; True near-plane clipping is the follow-up the plan schedules after this
+; version is proven; without THIS version, a vertex behind the camera divides
+; by a negative/zero w and the 16-bit packed coordinates wrap, which draws
+; garbage smears across the whole screen.
+;
+; The guard band matters for the same reason: GS packed X/Y are 16-bit 12.4,
+; so anything past 4095 pixels wraps back into the visible range. 0..4095 is
+; a huge margin around the 512x448 screen (scissor culls the rest), so this
+; almost never rejects a visible triangle.
+;
+; HOW THE TESTS WORK -- and the trap that broke the first version. The VU
+; status register keeps STICKY flags, and EVERY upper-pipeline instruction
+; updates them: a transform whose intermediate values are negative (half of
+; all clip-space coordinates!) sets sticky S just as surely as a failed test.
+; So the three test SUBs must run in an ISOLATED window: finish ALL transform
+; arithmetic first, then FSSET 0 to clear the stickies, then only the test
+; SUBs (upper NOPs write no flags), then FSAND at least 4 pairs after the last
+; SUB (the flag pipeline latency). FSAND bit 7 = sticky sign.
 ;
 ; ---------------------------------------------------------------------------
 ; VU1 DATA MEMORY LAYOUT (quadwords), written by the EE via VIF UNPACK
 ; ---------------------------------------------------------------------------
-;   0..3    MVP matrix, column-major (VF01..VF04 after load)
+;   0..3    MVP matrix, column-major (VF01..VF04)
 ;   4       viewport scale   : (sx, sy, sz, 0)
 ;   5       viewport offset  : (ox, oy, oz, 0)
-;   6       GIF tag template : the tag this batch kicks
-;   7       vertex count     : (n, 0, 0, 0) as an integer in x
-;   8..     vertices, 2 qwords each: position (x,y,z,1) then colour (r,g,b,a)
+;   6       clip constants   : (4095, 4095, 0, w_near)
+;   7       GIF tag template
+;   8       vertex count     : (n, 0, 0, 0) integer in x; n multiple of 3
+;   9       reserved
+;   10..    vertices, 2 qwords each: position (x,y,z,1), colour (r,g,b,a)
 ;
-; Output is built from qword 200 onwards: the GIF tag, then per vertex an
-; RGBAQ qword and an XYZ2 qword in PACKED layout.
-;
-; ---------------------------------------------------------------------------
-; WHY THE OUTPUT IS BUILT AT A FIXED OFFSET
-; ---------------------------------------------------------------------------
-; XGKICK takes a VU-memory address and streams from there until it sees the
-; end of the GIF packet. Building output away from the input avoids any overlap
-; while the program is still reading vertices.
-;
-; Double buffering (VIF STCYCL into alternating halves, plan M4 task 2) is NOT
-; here yet: this version processes one batch at a time so the maths can be
-; verified in isolation. Overlapping unpack with execution is M4 task 5's job,
-; and doing both at once would make a failure ambiguous.
+; Output is built from qword 200: tag, then RGBAQ + XYZ2 per vertex.
+; Capacity: (200-10)/2 = 95 vertices in, 1+2*95 = 191 out (200+191 < 1024).
 
 		.vu
 		.align 4
@@ -40,67 +55,126 @@
 
 VuUnlit_CodeStart:
 
-; --- Load the per-batch constants -------------------------------------------
-		NOP							lq		VF01, 0(VI00)		; MVP column 0
-		NOP							lq		VF02, 1(VI00)		; MVP column 1
-		NOP							lq		VF03, 2(VI00)		; MVP column 2
-		NOP							lq		VF04, 3(VI00)		; MVP column 3
+; --- Per-batch constants ----------------------------------------------------
+		NOP							lq		VF01, 0(VI00)
+		NOP							lq		VF02, 1(VI00)
+		NOP							lq		VF03, 2(VI00)
+		NOP							lq		VF04, 3(VI00)
 		NOP							lq		VF05, 4(VI00)		; viewport scale
 		NOP							lq		VF06, 5(VI00)		; viewport offset
-		NOP							lq		VF07, 6(VI00)		; GIF tag template
-		NOP							ilw.x	VI05, 7(VI00)		; vertex count
+		NOP							lq		VF26, 6(VI00)		; clip constants
+		NOP							lq		VF07, 7(VI00)		; GIF tag
+		NOP							ilw.x	VI05, 8(VI00)		; vertex count
 
-; --- Emit the GIF tag at the output base ------------------------------------
-		NOP							iaddiu	VI08, VI00, 200		; VI08 = output cursor
-		NOP							sq		VF07, 0(VI08)		; store the tag
-		NOP							iaddiu	VI08, VI08, 1		; past the tag
+; Degenerate point for rejected triangles: FTOI4 of (0,0,0,1) = int (0,0,0,16).
+; GS (0,0) is 2048 px off-screen and the three identical points have zero area.
+		FTOI4	VF31, VF00			iaddiu	VI08, VI00, 200
 
-; --- Vertex loop ------------------------------------------------------------
-		NOP							iaddiu	VI06, VI00, 8		; VI06 = input cursor
-		NOP							iaddiu	VI07, VI00, 0		; VI07 = loop counter
+		NOP							sq		VF07, 0(VI08)		; emit the tag
+		NOP							iaddiu	VI08, VI08, 1
+		NOP							iaddiu	VI06, VI00, 10		; input cursor
+		NOP							iaddiu	VI07, VI00, 0		; vertex counter
 
-vertex_loop:
-		NOP							lq		VF10, 0(VI06)		; position (x,y,z,1)
-		NOP							lq		VF11, 1(VI06)		; colour   (r,g,b,a)
+tri_loop:
+		NOP							iadd	VI11, VI00, VI00	; reject accum = 0
+		NOP							iadd	VI12, VI08, VI00	; this tri's out base
 
-; Transform: VF12 = MVP * VF10, built as a sum of scaled columns.
+; ============================ vertex 0 =======================================
+		NOP							lq		VF10, 0(VI06)
+		NOP							lq		VF11, 1(VI06)
+		MULAx	ACC, VF01, VF10x	NOP
+		MADDAy	ACC, VF02, VF10y	NOP
+		MADDAz	ACC, VF03, VF10z	NOP
+		MADDw	VF12, VF04, VF10w	NOP							; VF12 = clip space
+		NOP							div		Q, VF00w, VF12w
+		NOP							waitq
+		MULq	VF13, VF12, Q		NOP							; VF12 preserved
+		MUL		VF13, VF13, VF05	NOP
+		ADD		VF13, VF13, VF06	NOP							; VF13 = GS pixels
+		FTOI4	VF14, VF13			NOP
+		FTOI0	VF15, VF11			NOP
+; --- isolated clip-test window (no other upper op may write flags here) -----
+		NOP							fsset	0x000
+		SUB.w	VF29, VF12, VF26	NOP							; w < near ?
+		SUB.xy	VF29, VF13, VF00	NOP							; x<0 or y<0 ?
+		SUB.xy	VF29, VF26, VF13	NOP							; x>4095 or y>4095 ?
+		NOP							NOP
+		NOP							NOP
+		NOP							NOP
+		NOP							fsand	VI10, 0x080			; sticky S
+		NOP							ior		VI11, VI11, VI10
+		NOP							sq		VF15, 0(VI08)
+		NOP							sq		VF14, 1(VI08)
+		NOP							iaddiu	VI08, VI08, 2
+		NOP							iaddiu	VI06, VI06, 2
+
+; ============================ vertex 1 =======================================
+		NOP							lq		VF10, 0(VI06)
+		NOP							lq		VF11, 1(VI06)
 		MULAx	ACC, VF01, VF10x	NOP
 		MADDAy	ACC, VF02, VF10y	NOP
 		MADDAz	ACC, VF03, VF10z	NOP
 		MADDw	VF12, VF04, VF10w	NOP
-
-; Perspective divide: q = 1/w, then xyz *= q.
-		NOP							DIV		Q, VF00w, VF12w
-		NOP							WAITQ
-		MULq	VF12, VF12, Q		NOP
-
-; Screen mapping: xyz = xyz * scale + offset.
-;
-; Done as an explicit MUL then ADD rather than MULA/MADD. The tempting
-; `MULA ACC, VF12, VF05 / MADD VF13, VF00, VF06` is WRONG: MADD computes
-; ACC + (VF00 * VF06), and VF00 is the hardwired constant (0,0,0,1), so it
-; multiplies the offset by zero in x, y and z and silently drops it. That
-; loses the +2048 GS origin bias, which sends every vertex far off-screen and
-; renders as a full-screen smear rather than as nothing.
-		MUL		VF13, VF12, VF05	NOP
+		NOP							div		Q, VF00w, VF12w
+		NOP							waitq
+		MULq	VF13, VF12, Q		NOP
+		MUL		VF13, VF13, VF05	NOP
 		ADD		VF13, VF13, VF06	NOP
-
-; The GS wants integers: FTOI4 puts x and y in 12.4 fixed point, which is
-; exactly the format XYZ2 expects. Z is handled by the same conversion because
-; the viewport scale above already mapped it into the 24-bit range.
 		FTOI4	VF14, VF13			NOP
-
-; Colour is 0..255 float in, integer out. FTOI0 = no fractional bits.
 		FTOI0	VF15, VF11			NOP
-
-; Store this vertex: RGBAQ then XYZ2, matching the register list in the tag.
+		NOP							fsset	0x000
+		SUB.w	VF29, VF12, VF26	NOP
+		SUB.xy	VF29, VF13, VF00	NOP
+		SUB.xy	VF29, VF26, VF13	NOP
+		NOP							NOP
+		NOP							NOP
+		NOP							NOP
+		NOP							fsand	VI10, 0x080
+		NOP							ior		VI11, VI11, VI10
 		NOP							sq		VF15, 0(VI08)
 		NOP							sq		VF14, 1(VI08)
+		NOP							iaddiu	VI08, VI08, 2
+		NOP							iaddiu	VI06, VI06, 2
 
-		NOP							iaddiu	VI08, VI08, 2		; advance output
-		NOP							iaddiu	VI06, VI06, 2		; advance input
-		NOP							iaddiu	VI07, VI07, 1		; ++i
-		NOP							ibne	VI07, VI05, vertex_loop
+; ============================ vertex 2 =======================================
+		NOP							lq		VF10, 0(VI06)
+		NOP							lq		VF11, 1(VI06)
+		MULAx	ACC, VF01, VF10x	NOP
+		MADDAy	ACC, VF02, VF10y	NOP
+		MADDAz	ACC, VF03, VF10z	NOP
+		MADDw	VF12, VF04, VF10w	NOP
+		NOP							div		Q, VF00w, VF12w
+		NOP							waitq
+		MULq	VF13, VF12, Q		NOP
+		MUL		VF13, VF13, VF05	NOP
+		ADD		VF13, VF13, VF06	NOP
+		FTOI4	VF14, VF13			NOP
+		FTOI0	VF15, VF11			NOP
+		NOP							fsset	0x000
+		SUB.w	VF29, VF12, VF26	NOP
+		SUB.xy	VF29, VF13, VF00	NOP
+		SUB.xy	VF29, VF26, VF13	NOP
+		NOP							NOP
+		NOP							NOP
+		NOP							NOP
+		NOP							fsand	VI10, 0x080
+		NOP							ior		VI11, VI11, VI10
+		NOP							sq		VF15, 0(VI08)
+		NOP							sq		VF14, 1(VI08)
+		NOP							iaddiu	VI08, VI08, 2
+		NOP							iaddiu	VI06, VI06, 2
+		NOP							iaddiu	VI07, VI07, 3
+
+; --- Reject patch: any flagged vertex degenerates the whole triangle --------
+; (branch delay slots execute unconditionally; keep them NOP)
+		NOP							ibeq	VI11, VI00, tri_ok
+		NOP							NOP
+		NOP							sq		VF31, 1(VI12)
+		NOP							sq		VF31, 3(VI12)
+		NOP							sq		VF31, 5(VI12)
+tri_ok:
+		NOP							ibne	VI07, VI05, tri_loop
+		NOP							NOP
 
 ; --- Kick the finished packet ------------------------------------------------
 		NOP							iaddiu	VI09, VI00, 200

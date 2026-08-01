@@ -34,8 +34,8 @@ constexpr uint32_t kScreenH = 448;
 constexpr uint32_t kQuadCount = 3;
 constexpr uint32_t kVertexCount = kQuadCount * 6;
 
-// 16 header qwords + 3 per vertex.
-constexpr uint32_t kDataQwords = 16 + kVertexCount * 3;
+// 18 header qwords (layout v2, clip constants at 6) + 3 per vertex.
+constexpr uint32_t kDataQwords = 18 + kVertexCount * 3;
 alignas(16) gfx::Qword g_data[kDataQwords];
 alignas(16) uint8_t g_pixels[kScreenW * 64 * 4];
 
@@ -91,6 +91,9 @@ int main(void)
     set_float4(g_data[4], half_w, -half_h, z_scale, 0.0f);
     set_float4(g_data[5], half_w + 2048.0f, half_h + 2048.0f, z_scale, 0.0f);
 
+    // Clip constants: guard band + near plane. Test vertices sit at w = 1.
+    set_float4(g_data[6], 4095.0f, 4095.0f, 0.0f, 0.0625f);
+
     gfx::Qword tag_holder[1];
     gfx::GsPacket tag_builder;
     tag_builder.init(tag_holder, 1);
@@ -99,20 +102,20 @@ int main(void)
     tag_builder.begin_packed(kVertexCount, 2,
                              gfx::gs_reglist(gfx::GsReg::RGBAQ, gfx::GsReg::XYZ2),
                              true, true, prim);
-    g_data[6] = tag_holder[0];
-    g_data[7].lo = kVertexCount;
-    g_data[7].hi = 0;
+    g_data[7] = tag_holder[0];
+    g_data[8].lo = kVertexCount;
+    g_data[8].hi = 0;
 
     // Light directions as columns: light 0 points along +Z (pre-negated on the
     // EE, so a normal of +Z gives N.L = 1). Lights 1-3 are off.
-    set_float4(g_data[8], 0.0f, 0.0f, 0.0f, 0.0f);  // x row
-    set_float4(g_data[9], 0.0f, 0.0f, 0.0f, 0.0f);  // y row
-    set_float4(g_data[10], 1.0f, 0.0f, 0.0f, 0.0f); // z row: only light 0
-    set_float4(g_data[11], kLightR, 0.0f, 0.0f, 0.0f); // per-light R
-    set_float4(g_data[12], kLightG, 0.0f, 0.0f, 0.0f); // per-light G
-    set_float4(g_data[13], kLightB, 0.0f, 0.0f, 0.0f); // per-light B
-    set_float4(g_data[14], kAmbR, kAmbG, kAmbB, 0.0f);
-    set_float4(g_data[15], 255.0f, 255.0f, 255.0f, 128.0f); // clamp ceiling
+    set_float4(g_data[9], 0.0f, 0.0f, 0.0f, 0.0f);  // x row
+    set_float4(g_data[10], 0.0f, 0.0f, 0.0f, 0.0f); // y row
+    set_float4(g_data[11], 1.0f, 0.0f, 0.0f, 0.0f); // z row: only light 0
+    set_float4(g_data[12], kLightR, 0.0f, 0.0f, 0.0f); // per-light R
+    set_float4(g_data[13], kLightG, 0.0f, 0.0f, 0.0f); // per-light G
+    set_float4(g_data[14], kLightB, 0.0f, 0.0f, 0.0f); // per-light B
+    set_float4(g_data[15], kAmbR, kAmbG, kAmbB, 0.0f);
+    set_float4(g_data[16], 255.0f, 255.0f, 255.0f, 128.0f); // clamp ceiling
 
     // Three quads side by side, each with a different normal.
     const float nz[kQuadCount] = {1.0f, 0.5f, -1.0f}; // N.L = 1, 0.5, clamped to 0
@@ -125,9 +128,9 @@ int main(void)
         const float px[6] = {xa, xb, xb, xa, xb, xa};
         const float py[6] = {ya, ya, yb, ya, yb, yb};
         for (uint32_t k = 0; k < 6; ++k, ++v) {
-            set_float4(g_data[16 + v * 3], px[k], py[k], 0.0f, 1.0f);
-            set_float4(g_data[17 + v * 3], 0.0f, 0.0f, nz[q], 0.0f);
-            set_float4(g_data[18 + v * 3], kVertexGrey, kVertexGrey, kVertexGrey, 1.0f);
+            set_float4(g_data[18 + v * 3], px[k], py[k], 0.0f, 1.0f);
+            set_float4(g_data[19 + v * 3], 0.0f, 0.0f, nz[q], 0.0f);
+            set_float4(g_data[20 + v * 3], kVertexGrey, kVertexGrey, kVertexGrey, 1.0f);
         }
     }
 

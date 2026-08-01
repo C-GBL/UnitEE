@@ -47,8 +47,8 @@ constexpr int32_t kExpectY0 = 112; //  0.5 * -224 + 224
 constexpr int32_t kExpectY1 = 336; // -0.5 * -224 + 224
 
 // VU1 data memory image, assembled on the EE then unpacked in one go.
-// 8 header qwords + 2 per vertex.
-alignas(16) gfx::Qword g_vu_data[8 + kVertexCount * 2];
+// 10 header qwords (layout v2, with clip constants at 6) + 2 per vertex.
+alignas(16) gfx::Qword g_vu_data[10 + kVertexCount * 2];
 alignas(16) uint8_t g_pixels[kScreenW * 128 * 4];
 
 void set_float4(gfx::Qword& q, float x, float y, float z, float w)
@@ -108,6 +108,10 @@ int main(void)
     // XYOFFSET, so it must be added here or everything lands off-screen.
     set_float4(g_vu_data[5], half_w + 2048.0f, half_h + 2048.0f, z_scale, 0.0f);
 
+    // Clip constants: guard band 0..4095 GS pixels, near plane at w = 1/16.
+    // The test vertices all have w = 1, comfortably in front of it.
+    set_float4(g_vu_data[6], 4095.0f, 4095.0f, 0.0f, 0.0625f);
+
     // GIF tag: PACKED, one loop per vertex, RGBAQ then XYZ2 -- the order the
     // microprogram stores them in.
     gfx::Qword tag_holder[1];
@@ -118,19 +122,19 @@ int main(void)
     tag_builder.begin_packed(kVertexCount, 2,
                              gfx::gs_reglist(gfx::GsReg::RGBAQ, gfx::GsReg::XYZ2),
                              /*eop=*/true, /*set_prim=*/true, prim);
-    g_vu_data[6] = tag_holder[0];
+    g_vu_data[7] = tag_holder[0];
 
-    g_vu_data[7].lo = kVertexCount; // read with ilw.x
-    g_vu_data[7].hi = 0;
+    g_vu_data[8].lo = kVertexCount; // read with ilw.x
+    g_vu_data[8].hi = 0;
 
     // --- Vertices -----------------------------------------------------------
     const float xs[kVertexCount] = {kNdcMin, kNdcMax, kNdcMax, kNdcMin, kNdcMax, kNdcMin};
     const float ys[kVertexCount] = {kNdcMin, kNdcMin, kNdcMax, kNdcMin, kNdcMax, kNdcMax};
     for (uint32_t i = 0; i < kVertexCount; ++i) {
-        set_float4(g_vu_data[8 + i * 2], xs[i], ys[i], 0.0f, 1.0f);
+        set_float4(g_vu_data[10 + i * 2], xs[i], ys[i], 0.0f, 1.0f);
         // Colour is converted with FTOI0, so these are plain 0..255 floats.
         // 0x80 alpha is opaque on this hardware.
-        set_float4(g_vu_data[9 + i * 2], static_cast<float>(kR), static_cast<float>(kG),
+        set_float4(g_vu_data[11 + i * 2], static_cast<float>(kR), static_cast<float>(kG),
                    static_cast<float>(kB), 128.0f);
     }
 
@@ -139,7 +143,7 @@ int main(void)
         device.clear(kClearR, kClearG, kClearB);
         device.end_frame();
 
-        if (!program.unpack_data(g_vu_data, 8 + kVertexCount * 2, 0)) {
+        if (!program.unpack_data(g_vu_data, 10 + kVertexCount * 2, 0)) {
             printf("PS2UR_TOKEN_VUXF_FAIL unpack\n");
             SleepThread();
             return 1;

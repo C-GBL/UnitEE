@@ -40,8 +40,8 @@ constexpr uint32_t kTargetTriangles = 15000;
 constexpr uint32_t kBatchesPerFrame = kTargetTriangles / (kVertsPerBatch / 3);
 constexpr uint32_t kFrames = 60;
 
-// 8 header qwords + 2 per vertex.
-constexpr uint32_t kBatchQwords = 8 + kVertsPerBatch * 2;
+// 10 header qwords (layout v2, clip constants at 6) + 2 per vertex.
+constexpr uint32_t kBatchQwords = 10 + kVertsPerBatch * 2;
 alignas(16) gfx::Qword g_batch[kBatchQwords];
 
 void set_float4(gfx::Qword& q, float x, float y, float z, float w)
@@ -91,6 +91,7 @@ int main(void)
     const float z_scale = 8388607.5f / 16.0f; // FTOI4 scales Z too; see vu_unlit.vsm
     set_float4(g_batch[4], half_w, -half_h, z_scale, 0.0f);
     set_float4(g_batch[5], half_w + 2048.0f, half_h + 2048.0f, z_scale, 0.0f);
+    set_float4(g_batch[6], 4095.0f, 4095.0f, 0.0f, 0.0625f); // guard band + near
 
     gfx::Qword tag_holder[1];
     gfx::GsPacket tag_builder;
@@ -100,10 +101,10 @@ int main(void)
     tag_builder.begin_packed(kVertsPerBatch, 2,
                              gfx::gs_reglist(gfx::GsReg::RGBAQ, gfx::GsReg::XYZ2),
                              true, true, prim);
-    g_batch[6] = tag_holder[0];
+    g_batch[7] = tag_holder[0];
 
-    g_batch[7].lo = kVertsPerBatch;
-    g_batch[7].hi = 0;
+    g_batch[8].lo = kVertsPerBatch;
+    g_batch[8].hi = 0;
 
     // Small triangles scattered across the screen. Deliberately small: the
     // question is vertex throughput, and huge triangles would measure GS fill
@@ -116,8 +117,8 @@ int main(void)
         const float px[3] = {cx, cx + s, cx};
         const float py[3] = {cy, cy, cy + s};
         for (uint32_t k = 0; k < 3; ++k) {
-            set_float4(g_batch[8 + (v + k) * 2], px[k], py[k], 0.0f, 1.0f);
-            set_float4(g_batch[9 + (v + k) * 2], 60.0f + static_cast<float>(v % 190u),
+            set_float4(g_batch[10 + (v + k) * 2], px[k], py[k], 0.0f, 1.0f);
+            set_float4(g_batch[11 + (v + k) * 2], 60.0f + static_cast<float>(v % 190u),
                        200.0f, 120.0f, 128.0f);
         }
     }
