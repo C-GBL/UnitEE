@@ -1,0 +1,27 @@
+; runtime/src/vu/vu_smoke.vsm
+;
+; The smallest valid VU1 microprogram: it exists to prove the dvp-as build rule
+; in tools/cmake/vu.cmake produces a linkable object with the expected symbols,
+; and to give the microprogram manager something to upload before the real
+; programs land at M4 (vu_unlit / vu_lit / vu_skin, plan section 7.3).
+;
+; It does nothing except terminate. `nop[e]` sets the E bit, which tells the VU
+; to stop after the following instruction pair -- every microprogram must end
+; that way or the VU runs off into whatever is in micro memory next.
+;
+; Syntax note: this is dvp-as (DVP) assembly, NOT MIPS. Each line is an
+; UPPER instruction and a LOWER instruction issued together, and the `.vu`
+; directive below is what puts the assembler into VU mode -- without it every
+; line is rejected as a bad instruction.
+
+		.vu
+		.align 4
+		.global	VuSmoke_CodeStart
+		.global	VuSmoke_CodeEnd
+
+VuSmoke_CodeStart:
+		NOP							NOP
+		NOP[E]						NOP
+		NOP							NOP
+		.align 4
+VuSmoke_CodeEnd:

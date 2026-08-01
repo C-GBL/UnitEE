@@ -1,0 +1,72 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}"
+    },
+    {
+      "name": "ps2-base",
+      "hidden": true,
+      "inherits": "base",
+      "toolchainFile": "${sourceDir}/tools/cmake/ps2-toolchain.cmake",
+      "cacheVariables": {
+        "PS2UR_PLATFORM": "ps2",
+        "PS2UR_BUILD_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "ps2-release",
+      "displayName": "PS2 (EE) release",
+      "inherits": "ps2-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "ps2-debug",
+      "displayName": "PS2 (EE) debug",
+      "inherits": "ps2-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "host-debug",
+      "displayName": "Host x86-64 debug (unit tests)",
+      "inherits": "base",
+      "cacheVariables": {
+        "PS2UR_PLATFORM": "host",
+        "PS2UR_BUILD_TESTS": "ON",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "host-release",
+      "displayName": "Host x86-64 release",
+      "inherits": "base",
+      "cacheVariables": {
+        "PS2UR_PLATFORM": "host",
+        "PS2UR_BUILD_TESTS": "ON",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "ps2-release", "configurePreset": "ps2-release" },
+    { "name": "ps2-debug", "configurePreset": "ps2-debug" },
+    { "name": "host-debug", "configurePreset": "host-debug" },
+    { "name": "host-release", "configurePreset": "host-release" }
+  ],
+  "testPresets": [
+    {
+      "name": "host-debug",
+      "configurePreset": "host-debug",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "host-release",
+      "configurePreset": "host-release",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

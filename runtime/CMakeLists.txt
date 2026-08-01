@@ -43,6 +43,11 @@ target_include_directories(ps2ur PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 if(PS2UR_PLATFORM STREQUAL "ps2")
     target_compile_definitions(ps2ur PUBLIC PS2UR_PLATFORM_PS2=1)
+
+    # VU microprograms are EE-target-only: dvp-as output is VU machine code and
+    # has no meaning in the host build.
+    include(vu)
+    add_vu_program(ps2ur SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/vu/vu_smoke.vsm)
     # The ps2 configuration must be driven through the ps2dev cross toolchain
     # file (planned at tools/cmake/ps2-toolchain.cmake, plan section 8), with
     # the toolchain rooted at $ENV{PS2DEV} (default C:/Users/Ash/ps2dev,

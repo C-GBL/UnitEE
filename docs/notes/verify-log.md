@@ -48,12 +48,25 @@ Installed to `C:/Users/Ash/ps2dev` (`PS2DEV`), from
 | 2026-07-31 | End-to-end: CMake toolchain -> bootable ELF | RESOLVED: `ps2ur` cross-compiles to `libps2ur.a` (16 objects, EE), an executable links against it through `tools/cmake/ps2-toolchain.cmake`, and it **boots in PCSX2** printing both a plain `printf` and output routed through `ps2ur::log` -> PS2 `platform::log_sink`. The ADR-002 bridge symbol `ps2ur_debug_log` was reached from `main()` on target. |
 | 2026-07-31 | ELF exit behaviour | OBSERVED: returning from `main()` hands control to the BIOS, which shows the **memory-card/disc browser**. Correct for a bare ELF, but a shipped title must never fall off the end of `main()` -- it parks in `SleepThread()` or returns to the loader deliberately. Recorded in `runtime/src/platform/ps2/platform_ps2.cpp`. |
 | 2026-07-31 | Log sink contract (bug found on target) | `ps2ur::log_va` already formats `"[ps2ur:<level>] "` into the string before calling `platform::log_sink`. A sink that adds its own tag double-prefixes (`[ps2ur:DEBUG] [ps2ur:info ] ...`, with mismatched levels since the enum is `Debug=0, Info=1, Warn=2, Error=3`). **Sinks emit `message` verbatim; the `level` argument is for routing only.** |
+| 2026-07-31 | **PCSX2 rejects ELF paths containing a space** | `-elf "C:/.../Unity 2 PS2/.../x.elf"` fails with "Requested boot ELF ... does not exist" even though the file is there. Since this repo lives under `Unity 2 PS2`, that is the normal case. `tools/ci/run-emu-test.sh` stages the ELF into a space-free directory before booting. Consistent with plan 4.1's space-free `PS2DEV` requirement. |
+| 2026-07-31 | **A relative ELF path makes PCSX2 execute garbage** | PCSX2 resolves a relative `-elf` argument against the `host:` root it derives from the ELF's own directory, fails to read it, and then runs from `pc=0x0`, flooding the log with TLB misses. It looks exactly like a guest crash. Always pass an absolute path. |
+| 2026-07-31 | M0 acceptance (boot test) | PASS: `samples/00-hello-triangle` boots in PCSX2 and `PS2UR_TOKEN_HELLO_TRIANGLE_OK` appears in the log within 2 s, asserted by `tools/ci/run-emu-test.sh`. |
+| 2026-07-31 | M0 task 4: ps2sdk samples link | PASS: `draw/cube`, `draw/teapot`, `graph`, `hello` all link against the installed SDK (`-ldraw -lgraph -lmath3d -lpacket -ldma`). Note this ps2sdk has no standalone `pad` sample; `graph`/`draw` cover the GS path the plan cares about. `make` is NOT installed on this machine, so the samples were linked with direct compiler invocations rather than their Makefiles. |
+
+## VU toolchain (`dvp-as`)
+
+| Date | Item (plan ref) | Result |
+|---|---|---|
+| 2026-07-31 | `.vsm` dialect | RESOLVED: dvp-as needs the **`.vu` directive** to enter VU mode; without it every `NOP NOP` line is rejected as "bad instruction". Comments use `;`. Each line is an UPPER and a LOWER instruction issued together. Reference source: `$PS2SDK/samples/draw/vu1/draw_3D.vsm`. |
+| 2026-07-31 | dvp-as output embedding (was OPEN; plan 9 M1 task 3) | RESOLVED, and the plan's assumption was wrong. dvp-as emits a **directly linkable EE object** with `.vutext`/`.vudata`/`.vubss` sections and global symbols taken from the source. Assembling `draw_3D.vsm` gives `VU1Draw3D_CodeStart` at 0 and `VU1Draw3D_CodeEnd` at 0x180 (24 pairs x 8 bytes, aligned to 16). **No `ld -r -b binary` or `.incbin` step is needed** -- `tools/cmake/vu.cmake` assembles and links the object directly, and `.vsm` sources declare their own `<Name>_CodeStart`/`_CodeEnd`. This matches what `packet2_vif_add_micro_program(pkt, 0, &Start, &End)` expects. Verified end to end: `vu_smoke.vsm` -> `VuSmoke_CodeStart/_CodeEnd` present in `libps2ur.a`. |
 
 ## Still open
 
 | Item (plan ref) | Status |
 |---|---|
-| `dvp-as` output embedding strategy (`tools/cmake/vu.cmake`) | OPEN: whether assembled VU microprograms need `objcopy`/`bin2c` post-processing to become symbol-addressable blobs. Blocked on the first real `.vsm` (plan section 9). |
-| bdwgc `gcconfig.h` PS2 constants (`il2cpp-port/bdwgc/`) | OPEN: `ALIGNMENT` (8 vs 16 for `lq`/`sq`), `DATASTART`/`DATAEND` linker symbols, and `STACKBOTTOM` must be read off `$PS2SDK/ee/startup/linkfile` and the driver's startup. Draft only; not yet a patch. |
+| bdwgc `gcconfig.h` PS2 constants (`il2cpp-port/bdwgc/`) | OPEN: plan 11.4 now specifies `ALIGNMENT 4`, `CPP_WORDSZ 32`, `DATASTART`/`DATAEND` from `_fdata`/`_end`, `STACKBOTTOM` captured in `main()`, `GC_NO_THREADS`. The draft header still says `ALIGNMENT 8` and must be reconciled against 11.4 at M6. |
 | Offline builds | OPEN: `runtime/tests` fetches GoogleTest v1.14.0 over the network at configure time, and `install.ps1` fetches MSYS2 packages. Neither has a vendored/mirrored fallback. |
-| Missing plan sections | OPEN: sections **7.2 and 9-18** are absent from `ps2port.txt`. See `docs/architecture.md` for the table of what each blocks. |
+| `mkps2iso` | OPEN: not part of the ps2dev distribution and not installed. Needed from M12 (ISO packaging). `doctor.sh` reports it as an optional absence. |
+| Docker image + CI (M0 tasks 1, 7) | OPEN: Docker is not available on this machine and there is no CI runner. `tools/ci/README.md` tracks it. The plan's note that emulator tests need an out-of-band BIOS still stands -- never download one. |
+| Host SDL2 rasteriser stand-in (M1 task 4) | OPEN: deferred until M2 defines the `gfx::Device` interface it must stand in for. The rest of the host build (platform layer, allocators, math, tests) is done. |
+| Section 7.2 | OPEN: section 7 jumps from 7.1 to 7.3 in `ps2port.txt`; the "not supported" list appears to be missing. Sections 9-18 are now present. |

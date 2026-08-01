@@ -82,7 +82,16 @@ set(CMAKE_EXECUTABLE_SUFFIX_CXX ".elf")
 # ---------------------------------------------------------------------------
 # Flags (plan section 3.1)
 # ---------------------------------------------------------------------------
-set(PS2_BASE_FLAGS "-D_EE -G0 -O2 -Wall -fno-common")
+# -ffast-math is deliberate, not a shortcut (plan section 9, M1 task 2): the
+# R5900 FPU is already not IEEE 754 -- no NaN, no infinities, overflow
+# saturates, denormals flush to zero (section 3.1). Asking the compiler to
+# preserve IEEE semantics it cannot deliver only costs code size and speed.
+# The deviation is a documented conformance item (section 7.4) and is pinned by
+# the conformance suite rather than hidden.
+#
+# Exceptions/RTTI are off for runtime code. Note that the IL2CPP objects need
+# exceptions re-enabled at M6; that is a per-target override, not a change here.
+set(PS2_BASE_FLAGS "-D_EE -G0 -O2 -Wall -fno-common -ffast-math")
 
 set(CMAKE_C_FLAGS_INIT   "${PS2_BASE_FLAGS}")
 set(CMAKE_CXX_FLAGS_INIT "${PS2_BASE_FLAGS} -fno-exceptions -fno-rtti")
@@ -112,6 +121,17 @@ set(PS2_CRT0     "${PS2SDK}/ee/startup/crt0.o")
 
 set(CMAKE_EXE_LINKER_FLAGS_INIT
     "-L${PS2SDK}/ee/lib -T${PS2_LINKFILE} -Wl,-zmax-page-size=128")
+
+# ps2sdk libraries available to every EE executable (plan section 9, M1 task 2).
+# Targets still name what they use via target_link_libraries -- CMake resolves a
+# bare name like `draw` to -ldraw through the -L above. These are the ones the
+# linker should always be able to satisfy; libc comes from the compiler's own
+# newlib sysroot ($PS2DEV/ee/mips64r5900el-ps2-elf/lib), NOT from ps2sdk/ee/lib.
+#
+# NOTE: ps2sdk ships both libpacket.a (the original API, used by the SDK's own
+# draw samples) and libpacket2.a (the newer one the plan names). Both are
+# present; pick per target rather than forcing one here.
+set(PS2_SDK_LIBRARIES kernel dma packet packet2 graph draw math3d)
 
 if(NOT DEFINED PS2_LINK_EXPLICIT_CRT0)
   set(PS2_LINK_EXPLICIT_CRT0 OFF)

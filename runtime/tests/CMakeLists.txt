@@ -16,6 +16,8 @@ FetchContent_MakeAvailable(googletest)
 add_executable(ps2ur_tests
     test_math.cpp
     test_alloc.cpp
+    test_alloc_stack_pool.cpp
+    test_time.cpp
 )
 target_link_libraries(ps2ur_tests PRIVATE ps2ur GTest::gtest_main)
 

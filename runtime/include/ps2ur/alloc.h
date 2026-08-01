@@ -41,9 +41,88 @@ private:
     ArenaStats m_stats;
 };
 
+// LIFO allocator over caller-owned memory. Same bump-pointer cost as Arena,
+// but a marker can release everything allocated after it -- the natural fit
+// for per-frame and per-pass scratch, where the lifetime really is a stack.
+class StackAllocator {
+public:
+    using Marker = size_t;
+
+    void init(void* memory, size_t size);
+
+    // Returns nullptr on exhaustion. 'align' must be a power of two.
+    void* alloc(size_t size, size_t align = 16);
+
+    // Current top of stack; pass to rewind() to free everything after it.
+    Marker marker() const { return m_offset; }
+
+    // Releases everything allocated since 'm'. Rewinding to a marker taken
+    // before an earlier rewind is allowed (it just frees more).
+    void rewind(Marker m);
+
+    void reset();
+    size_t remaining() const;
+    const ArenaStats& stats() const { return m_stats; }
+
+private:
+    unsigned char* m_base = nullptr;
+    size_t m_size = 0;
+    size_t m_offset = 0;
+    ArenaStats m_stats;
+};
+
+// Fixed-size block allocator. O(1) alloc and free, no fragmentation, which is
+// what a 32 MB machine with no virtual memory needs for anything churning
+// (particles, packets, component records). The free list is threaded through
+// the free blocks themselves, so there is no side table.
+class PoolAllocator {
+public:
+    // Carves 'memory' into blocks of 'block_size' (rounded up to 'align').
+    // block_size must be >= sizeof(void*) after rounding.
+    void init(void* memory, size_t size, size_t block_size, size_t align = 16);
+
+    void* alloc();          // nullptr when exhausted
+    void free(void* block); // nullptr is a no-op
+
+    size_t block_size() const { return m_block_size; }
+    size_t capacity() const { return m_block_count; }   // total blocks
+    size_t used() const { return m_used; }              // blocks handed out
+    const ArenaStats& stats() const { return m_stats; }
+
+private:
+    unsigned char* m_base = nullptr;
+    void* m_free_list = nullptr;
+    size_t m_block_size = 0;
+    size_t m_block_count = 0;
+    size_t m_used = 0;
+    ArenaStats m_stats;
+};
+
+// Scratchpad RAM (plan section 3.1: 16 KB at 0x70000000, single-cycle,
+// DMA-addressable -- "the single most valuable resource on the machine").
+// Used for DMA chain assembly and hot working sets.
+//
+// On the host build this is an ordinary heap block of the same size, so code
+// that budgets against it can be tested off-target. Anything that depends on
+// the real address (DMA) must go through the platform layer, not here.
+//
+// IMPORTANT (plan section 11.4): the scratchpad must be excluded from
+// conservative GC scanning, and a GC-visible pointer must never live only
+// here.
+namespace scratchpad {
+
+size_t size();      // 16384
+void* base();       // nullptr before init()
+Arena& arena();     // arena covering the whole scratchpad
+
+void init();
+void shutdown();
+
+} // namespace scratchpad
+
 // Heap facade. Host: malloc-backed. PS2: will carve from a fixed budget so D4
 // (peak RAM <= 30 MB, plan section 2) is enforceable.
-// TODO(spec missing: section 9): per-milestone memory budgets and heap layout.
+// TODO(spec missing: section 15 wiring): per-allocator budgets from section 15.1.
 void* heap_alloc(size_t size, size_t align = 16);
 void heap_free(void* ptr);
 
