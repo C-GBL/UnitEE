@@ -218,13 +218,14 @@ void GsDevice::clear(uint8_t r, uint8_t g, uint8_t b, uint32_t depth)
 
     const uint64_t prim = gs_prim(GsPrim::Sprite, false, false, false, false,
                                   false, false, 0, false);
+    // PACKED-mode data: gs_packed_*, never the native gs_rgbaq/gs_xyz forms.
     m_packet.begin_packed(1, 3, gs_reglist(GsReg::RGBAQ, GsReg::XYZ2, GsReg::XYZ2),
                           false, true, prim);
-    m_packet.add_qword(gs_rgbaq(r, g, b, 0x80, 0x3F800000u), 0);
-    m_packet.add_qword(gs_xyz(gs_coord(0), gs_coord(0), depth), 0);
-    m_packet.add_qword(gs_xyz(gs_coord(static_cast<int32_t>(m_config.width)),
-                              gs_coord(static_cast<int32_t>(m_config.height)), depth),
-                       0);
+    m_packet.add_qword(gs_packed_rgbaq(r, g, b, 0x80));
+    m_packet.add_qword(gs_packed_xyz(gs_coord(0), gs_coord(0), depth));
+    m_packet.add_qword(gs_packed_xyz(gs_coord(static_cast<int32_t>(m_config.width)),
+                                     gs_coord(static_cast<int32_t>(m_config.height)),
+                                     depth));
 
     // Restore the normal depth test for subsequent geometry.
     m_packet.begin_packed_ad(1);
@@ -251,8 +252,8 @@ void GsDevice::draw_triangles_immediate(const Vertex* vertices, uint32_t count)
                           false, true, prim);
     for (uint32_t i = 0; i < triangles * 3u; ++i) {
         const Vertex& v = vertices[i];
-        m_packet.add_qword(gs_rgbaq(v.r, v.g, v.b, v.a, 0x3F800000u), 0);
-        m_packet.add_qword(gs_xyz(gs_coord(v.x), gs_coord(v.y), v.z), 0);
+        m_packet.add_qword(gs_packed_rgbaq(v.r, v.g, v.b, v.a));
+        m_packet.add_qword(gs_packed_xyz(gs_coord(v.x), gs_coord(v.y), v.z));
     }
 }
 

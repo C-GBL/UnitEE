@@ -210,6 +210,60 @@ constexpr uint64_t gs_trxreg(uint32_t width, uint32_t height)
     return static_cast<uint64_t>(width) | (static_cast<uint64_t>(height) << 32);
 }
 
+// ---- PACKED-mode vertex data ----------------------------------------------
+//
+// CRITICAL DISTINCTION. A GIF qword can carry a register value in two entirely
+// different layouts, and they are not interchangeable:
+//
+//   A+D mode (begin_packed_ad / add_ad): the low 64 bits hold the register's
+//   NATIVE value, exactly as the register is documented. The gs_frame /
+//   gs_zbuf / gs_test / ... builders above produce these.
+//
+//   PACKED mode with an explicit register list (begin_packed): each field is
+//   placed in its own 32-bit lane of the 128-bit qword, at fixed offsets that
+//   have nothing to do with the register's native bit positions.
+//
+// Feeding a native value into a PACKED slot is silently accepted by the GS and
+// rasterised as nonsense. It cost a bring-up session here: XYZ2's Y ended up
+// reading the low half of the native Z field, so vertices landed at wild
+// coordinates (huge distorted triangles) and RGBAQ's G read part of Q (colours
+// came out dark). The full-screen clear sprite degenerated and drew nothing,
+// which looked like "the clear is broken" rather than "the vertex layout is
+// wrong".
+//
+// So: state registers go through add_ad(), vertex data goes through these.
+
+// PACKED XYZ2/XYZ3: X in [15:0], Y in [47:32], Z in [95:64].
+constexpr Qword gs_packed_xyz(uint32_t x, uint32_t y, uint32_t z)
+{
+    return Qword{static_cast<uint64_t>(x & 0xFFFFu) |
+                     (static_cast<uint64_t>(y & 0xFFFFu) << 32),
+                 static_cast<uint64_t>(z)};
+}
+
+// PACKED RGBAQ: R in [7:0], G in [39:32], B in [71:64], A in [103:96].
+// Q is NOT carried here -- it comes from the ST register.
+constexpr Qword gs_packed_rgbaq(uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+{
+    return Qword{static_cast<uint64_t>(r) | (static_cast<uint64_t>(g) << 32),
+                 static_cast<uint64_t>(b) | (static_cast<uint64_t>(a) << 32)};
+}
+
+// PACKED ST: S in [31:0], T in [63:32], Q in [95:64] (all IEEE float bits).
+constexpr Qword gs_packed_st(uint32_t s_bits, uint32_t t_bits, uint32_t q_bits)
+{
+    return Qword{static_cast<uint64_t>(s_bits) | (static_cast<uint64_t>(t_bits) << 32),
+                 static_cast<uint64_t>(q_bits)};
+}
+
+// PACKED UV: U in [13:0], V in [45:32], both 12.4 fixed point.
+constexpr Qword gs_packed_uv(uint32_t u, uint32_t v)
+{
+    return Qword{static_cast<uint64_t>(u & 0x3FFFu) |
+                     (static_cast<uint64_t>(v & 0x3FFFu) << 32),
+                 0};
+}
+
 // ---- Packet builder --------------------------------------------------------
 
 class GsPacket {
@@ -250,6 +304,7 @@ public:
 
     // Raw qword, for vertex payloads and image data.
     void add_qword(uint64_t lo, uint64_t hi);
+    void add_qword(const Qword& q) { add_qword(q.lo, q.hi); }
 
     // Appends a NOP-padded FINISH so the EE can wait for the GS to drain.
     void add_finish();

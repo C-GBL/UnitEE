@@ -353,6 +353,80 @@ TEST(GsRegisters, RgbaqUsesPs2AlphaRange)
     EXPECT_EQ((c >> 32) & 0xFFFFFFFFu, 0x3F800000u) << "Q = 1.0f";
 }
 
+// ---- PACKED-mode vertex layouts --------------------------------------------
+//
+// These pin the layouts that cost a bring-up session. In PACKED mode each
+// field lives in its own 32-bit lane, NOT at the register's native bit
+// positions. Writing a native value into a PACKED slot is silently accepted by
+// the GS and rasterised as garbage.
+
+TEST(GsPacked, XyzPutsFieldsInSeparateLanes)
+{
+    const Qword q = gs_packed_xyz(0x1234u, 0x5678u, 0x00ABCDEFu);
+    EXPECT_EQ(q.lo & 0xFFFFu, 0x1234u) << "X in [15:0]";
+    EXPECT_EQ((q.lo >> 32) & 0xFFFFu, 0x5678u) << "Y in [47:32]";
+    EXPECT_EQ(q.hi & 0xFFFFFFFFu, 0x00ABCDEFu) << "Z in [95:64]";
+
+    // Y must NOT land at bit 16 -- that is the native XYZ2 layout, and using it
+    // in PACKED mode is exactly the bug this test exists to prevent.
+    EXPECT_NE((q.lo >> 16) & 0xFFFFu, 0x5678u);
+}
+
+TEST(GsPacked, RgbaqPutsComponentsInSeparateLanes)
+{
+    const Qword q = gs_packed_rgbaq(0x11, 0x22, 0x33, 0x80);
+    EXPECT_EQ(q.lo & 0xFFu, 0x11u) << "R in [7:0]";
+    EXPECT_EQ((q.lo >> 32) & 0xFFu, 0x22u) << "G in [39:32]";
+    EXPECT_EQ(q.hi & 0xFFu, 0x33u) << "B in [71:64]";
+    EXPECT_EQ((q.hi >> 32) & 0xFFu, 0x80u) << "A in [103:96]";
+
+    // Native RGBAQ packs G at bit 8; PACKED must not.
+    EXPECT_NE((q.lo >> 8) & 0xFFu, 0x22u);
+}
+
+TEST(GsPacked, DiffersFromNativeEncoding)
+{
+    // The whole point: the two encodings of the same logical vertex are
+    // different bit patterns. If these ever compare equal, one of the encoders
+    // has drifted into the other's layout.
+    const Qword packed = gs_packed_xyz(100, 200, 300);
+    const uint64_t native = gs_xyz(100, 200, 300);
+    EXPECT_NE(packed.lo, native);
+}
+
+TEST(GsPacked, UvAndStLayouts)
+{
+    const Qword uv = gs_packed_uv(0x0123u, 0x0456u);
+    EXPECT_EQ(uv.lo & 0x3FFFu, 0x0123u) << "U in [13:0]";
+    EXPECT_EQ((uv.lo >> 32) & 0x3FFFu, 0x0456u) << "V in [45:32]";
+
+    const Qword st = gs_packed_st(0x3F800000u, 0x40000000u, 0x3F800000u);
+    EXPECT_EQ(st.lo & 0xFFFFFFFFu, 0x3F800000u) << "S in [31:0]";
+    EXPECT_EQ((st.lo >> 32) & 0xFFFFFFFFu, 0x40000000u) << "T in [63:32]";
+    EXPECT_EQ(st.hi & 0xFFFFFFFFu, 0x3F800000u) << "Q in [95:64]";
+}
+
+TEST(GsPacked, FullScreenClearSpriteIsNotDegenerate)
+{
+    // The clear that rendered nothing: with the native layout its second
+    // vertex had Y = 0, collapsing the sprite. Both corners must survive
+    // encoding with distinct, correct screen coordinates.
+    const Qword v0 = gs_packed_xyz(gs_coord(0), gs_coord(0), 0);
+    const Qword v1 = gs_packed_xyz(gs_coord(512), gs_coord(448), 0);
+
+    const uint32_t x0 = static_cast<uint32_t>(v0.lo & 0xFFFFu);
+    const uint32_t y0 = static_cast<uint32_t>((v0.lo >> 32) & 0xFFFFu);
+    const uint32_t x1 = static_cast<uint32_t>(v1.lo & 0xFFFFu);
+    const uint32_t y1 = static_cast<uint32_t>((v1.lo >> 32) & 0xFFFFu);
+
+    EXPECT_EQ(x0, 2048u << 4);
+    EXPECT_EQ(y0, 2048u << 4);
+    EXPECT_EQ(x1, (2048u + 512u) << 4);
+    EXPECT_EQ(y1, (2048u + 448u) << 4);
+    EXPECT_GT(x1, x0) << "sprite must have positive width";
+    EXPECT_GT(y1, y0) << "sprite must have positive height";
+}
+
 TEST(GsRegisters, TestRegisterEnablesDepth)
 {
     // z_enable with ZTST=2 (gequal) is the standard opaque depth test.

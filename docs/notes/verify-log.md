@@ -53,6 +53,19 @@ Installed to `C:/Users/Ash/ps2dev` (`PS2DEV`), from
 | 2026-07-31 | M0 acceptance (boot test) | PASS: `samples/00-hello-triangle` boots in PCSX2 and `PS2UR_TOKEN_HELLO_TRIANGLE_OK` appears in the log within 2 s, asserted by `tools/ci/run-emu-test.sh`. |
 | 2026-07-31 | M0 task 4: ps2sdk samples link | PASS: `draw/cube`, `draw/teapot`, `graph`, `hello` all link against the installed SDK (`-ldraw -lgraph -lmath3d -lpacket -ldma`). Note this ps2sdk has no standalone `pad` sample; `graph`/`draw` cover the GS path the plan cares about. `make` is NOT installed on this machine, so the samples were linked with direct compiler invocations rather than their Makefiles. |
 
+## GS bring-up (M2)
+
+Two bugs cost most of a bring-up session. Both are silent: the GS accepts the
+bad data and rasterises it, so neither produces an error you can grep for.
+
+| Date | Finding | Detail |
+|---|---|---|
+| 2026-07-31 | **PACKED-mode data uses a different layout from the register's native one** | A GIF qword carries a register value in one of two incompatible layouts. In **A+D** mode (`add_ad`) the low 64 bits hold the register's documented native value. In **PACKED** mode with an explicit register list, each field sits in its own 32-bit lane: `XYZ2` is X`[15:0]`, Y`[47:32]`, Z`[95:64]`; `RGBAQ` is R`[7:0]`, G`[39:32]`, B`[71:64]`, A`[103:96]`. Feeding a native value into a PACKED slot made XYZ2's Y read the low half of the native Z field and RGBAQ's G read part of Q. Symptoms: huge distorted triangles, dark/wrong colours, and a full-screen clear sprite that degenerated to nothing (a black screen). Fixed by `gs_packed_xyz` / `gs_packed_rgbaq` / `gs_packed_st` / `gs_packed_uv`, pinned by tests in `runtime/tests/test_gfx.cpp`. **State registers go through `add_ad`; vertex data goes through the packed encoders.** |
+| 2026-07-31 | **`dma_wait_fast()` hangs on a channel that has never transferred** | It waits on channel status that only becomes meaningful once a transfer has been issued. `submit_and_wait()` called it before its first send, so the drawing environment never reached the GS and XYOFFSET/SCISSOR kept power-on values -- everything was scissored away. Presents as a **black screen**, not as a locatable hang, because the stall happens before the GS sees a byte. ps2sdk's samples only ever use it to wait on a *previous* send. Correct order: `FlushCache(0)` -> `dma_channel_send_normal` -> `dma_wait_fast()`. |
+| 2026-07-31 | Cache writeback before DMA is mandatory | The EE writes packets through its data cache; the DMAC reads physical RAM. Without `FlushCache(0)` the GIF consumes stale bytes and rasterises them as primitives. The alternative is an uncached (UCAB) packet buffer, which trades every EE write for the flush; revisit when M4 moves chain assembly into the scratchpad, which is not cached. |
+| 2026-07-31 | Drawing environment must be submitted, not just built | Obvious in hindsight, but the same black screen: `FRAME`/`ZBUF`/`XYOFFSET`/`SCISSOR` sat in a packet that was reset before it was ever sent. |
+| 2026-07-31 | `GsDevice::set_trace()` | The bring-up aid that actually located the DMA stall: it logs each submit step so a wedged GS path can be placed before/during/after the DMA instead of guessed at. Reach for it before re-reading the code. |
+
 ## VU toolchain (`dvp-as`)
 
 | Date | Item (plan ref) | Result |
