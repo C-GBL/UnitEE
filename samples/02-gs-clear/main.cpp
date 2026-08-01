@@ -34,6 +34,7 @@ int main(void)
     config.standard = gfx::VideoStandard::NTSC;
 
     gfx::GsDevice device;
+    device.set_trace(true); // first frames only; disabled below
     if (!device.init(config)) {
         printf("PS2UR_TOKEN_GS_CLEAR_FAIL\n");
         SleepThread();
@@ -42,6 +43,7 @@ int main(void)
 
     // 180 frames ~= 3 seconds at 60 Hz: three full colour changes.
     for (uint32_t frame = 0; frame < 180; ++frame) {
+        device.set_trace(frame < 2); // trace the first two frames only
         const bool second_colour = ((frame / 60u) & 1u) != 0u;
         device.begin_frame();
         if (second_colour) {

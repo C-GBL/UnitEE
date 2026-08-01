@@ -79,10 +79,13 @@ bool GsDevice::init(const VideoConfig& config)
 
 #if defined(PS2UR_PLATFORM_PS2)
     dma_channel_initialize(DMA_CHANNEL_GIF, nullptr, 0);
-    // Deliberately NOT dma_channel_fast_waits(): that arms the channel for
-    // dma_wait_fast(), and mixing it with dma_channel_wait() means the EE can
-    // start overwriting packet memory while the DMAC is still reading it. The
-    // GIF then sees half-rewritten qwords and rasterises them as primitives.
+    // Arm the channel for dma_wait_fast(). This pairing -- fast_waits at init,
+    // dma_wait_fast() around every send -- is the combination ps2sdk's own
+    // samples use and is known to work. dma_channel_wait(ch, -1) was tried
+    // first and is NOT a substitute: its timeout semantics are undocumented
+    // and a negative value appears not to wait at all, which let the EE
+    // overwrite packet memory while the DMAC was still reading it.
+    dma_channel_fast_waits(DMA_CHANNEL_GIF);
 
     // libgraph owns the CRTC. graph_initialize() picks the region-appropriate
     // timings and ties the read circuit to our first colour buffer; FBP is a
@@ -113,11 +116,20 @@ void GsDevice::submit_and_wait()
     if (m_packet.size() == 0) {
         return;
     }
-    // Wait for the previous transfer before reusing the packet memory, then
-    // send and wait again. This is the simple synchronous form; M4 replaces it
+    // Synchronous submit: issue the transfer, then wait for it to drain before
+    // returning, so the caller can freely rebuild the packet. M4 replaces this
     // with double-buffered DMA chains so the EE builds frame N+1 while the
     // DMAC walks frame N (plan section 3.4).
-    dma_channel_wait(DMA_CHANNEL_GIF, -1);
+    //
+    // There is deliberately NO wait before the send. dma_wait_fast() waits on
+    // channel status that only becomes meaningful once a transfer has actually
+    // been issued; calling it on a never-used channel hangs forever. That cost
+    // a bring-up session -- the first submit stalled before the GS had ever
+    // seen a byte, which presents as a black screen rather than as a hang you
+    // can locate.
+    if (m_trace) {
+        log(LogLevel::Debug, "gfx.trace: submit %u qwords", u(m_packet.size()));
+    }
 
     // MANDATORY: the EE wrote this packet through its data cache, but the DMAC
     // reads physical memory and knows nothing about that cache. Without a
@@ -131,9 +143,19 @@ void GsDevice::submit_and_wait()
     // chain assembly into the scratchpad this goes away, since the SPR is not
     // cached.
     FlushCache(0);
+    if (m_trace) {
+        log(LogLevel::Debug, "gfx.trace: flushed, sending");
+    }
     dma_channel_send_normal(DMA_CHANNEL_GIF, m_packet.data(),
                             static_cast<int>(m_packet.size()), 0, 0);
-    dma_channel_wait(DMA_CHANNEL_GIF, -1);
+    if (m_trace) {
+        log(LogLevel::Debug, "gfx.trace: sent, post-wait");
+    }
+    // Wait for the transfer to drain before the caller reuses the packet.
+    dma_wait_fast();
+    if (m_trace) {
+        log(LogLevel::Debug, "gfx.trace: post-wait done");
+    }
 #endif
 }
 

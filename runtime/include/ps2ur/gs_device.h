@@ -74,6 +74,12 @@ public:
 
     uint32_t frame_index() const { return m_frame_index; }
 
+    // Logs each step of packet submission. Bring-up aid: when the GS path
+    // wedges, this is what tells you whether it stalled before the DMA, in the
+    // DMA, or after. Costs a printf per step, so enable it for a frame or two,
+    // never for a whole run.
+    void set_trace(bool enabled) { m_trace = enabled; }
+
 private:
     void build_drawing_environment();
     void submit_and_wait();
@@ -90,6 +96,7 @@ private:
 
     uint32_t m_frame_index = 0;
     bool m_initialized = false;
+    bool m_trace = false;
 };
 
 } // namespace gfx
