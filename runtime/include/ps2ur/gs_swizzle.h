@@ -41,6 +41,21 @@ namespace gfx {
 // own inverse. A 16-entry PSMT4 palette is stored linearly and passes through.
 void clut_csm1_reorder(const uint32_t* src, uint32_t* dest, uint32_t entries = 256);
 
+// Box-filters one PSMCT32 mip level into the next (half width, half height).
+// 'dest' must hold (w/2)*(h/2) pixels; both dimensions must be even and >= 2.
+//
+// Mipmaps are opt-in per texture on this machine and generated offline (plan
+// section 9, M3 task 3): each GS mip level needs its OWN VRAM allocation, so a
+// full chain costs about a third more VRAM than the base level. On a 1.2 MB
+// texture budget that is a real decision, not a default.
+//
+// Alpha is averaged in PS2 range (0-128) like any other channel; it must
+// already have been converted with alpha_to_ps2.
+void mip_downsample_psmct32(const uint32_t* src, uint32_t* dest, uint32_t w, uint32_t h);
+
+// Number of mip levels from 'w'x'h' down to 1x1 inclusive.
+uint32_t mip_level_count(uint32_t w, uint32_t h);
+
 // PS2 alpha is 0-128, where 0x80 means fully opaque -- NOT 0-255. Every alpha
 // channel coming from a PC image format must be rescaled or everything renders
 // at half transparency. Plan section 9 M3: "This trips up everyone once."

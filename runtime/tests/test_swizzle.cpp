@@ -10,6 +10,7 @@
 
 #include <cstring>
 #include <set>
+#include <vector>
 
 using namespace ps2ur;
 using namespace ps2ur::gfx;
@@ -123,4 +124,68 @@ TEST(Ps2Alpha, NeverExceedsHardwareMaximum)
     for (uint32_t a = 0; a <= 255; ++a) {
         EXPECT_LE(alpha_to_ps2(static_cast<uint8_t>(a)), 128);
     }
+}
+
+// ---- Mip generation --------------------------------------------------------
+
+TEST(Mipmap, LevelCountReachesOneByOne)
+{
+    EXPECT_EQ(mip_level_count(1, 1), 1u);
+    EXPECT_EQ(mip_level_count(2, 2), 2u);
+    EXPECT_EQ(mip_level_count(256, 256), 9u); // 256,128,64,32,16,8,4,2,1
+    EXPECT_EQ(mip_level_count(256, 64), 9u);  // driven by the larger side
+}
+
+TEST(Mipmap, UniformImageSurvivesUnchanged)
+{
+    // A flat colour must average to itself; any rounding drift shows here
+    // first and would dim every level of a chain.
+    std::vector<uint32_t> src(8 * 8, 0x80406080u);
+    std::vector<uint32_t> dst(4 * 4, 0);
+    mip_downsample_psmct32(src.data(), dst.data(), 8, 8);
+    for (uint32_t v : dst) {
+        EXPECT_EQ(v, 0x80406080u);
+    }
+}
+
+TEST(Mipmap, AveragesTheFourContributingTexels)
+{
+    // 2x2 of 0, 100, 200, 255 in every channel -> (0+100+200+255+2)/4 = 139.
+    std::vector<uint32_t> src = {
+        0x00000000u, 0x64646464u,
+        0xC8C8C8C8u, 0xFFFFFFFFu,
+    };
+    uint32_t dst = 0;
+    mip_downsample_psmct32(src.data(), &dst, 2, 2);
+    EXPECT_EQ(dst & 0xFFu, 139u);
+    EXPECT_EQ((dst >> 24) & 0xFFu, 139u);
+}
+
+TEST(Mipmap, ChannelsDoNotBleedIntoEachOther)
+{
+    // Pure red in, pure red out -- a shift bug would leak into green or blue.
+    std::vector<uint32_t> src(4 * 4, 0x000000FFu);
+    std::vector<uint32_t> dst(2 * 2, 0xDEADBEEFu);
+    mip_downsample_psmct32(src.data(), dst.data(), 4, 4);
+    for (uint32_t v : dst) {
+        EXPECT_EQ(v, 0x000000FFu);
+    }
+}
+
+TEST(Mipmap, FullChainHalvesEachStep)
+{
+    std::vector<uint32_t> level(16 * 16, 0x80112233u);
+    uint32_t w = 16, h = 16;
+    uint32_t levels = 1;
+    while (w > 1u && h > 1u) {
+        std::vector<uint32_t> next((w / 2) * (h / 2));
+        mip_downsample_psmct32(level.data(), next.data(), w, h);
+        w /= 2;
+        h /= 2;
+        level = next;
+        levels++;
+        EXPECT_EQ(level.size(), static_cast<size_t>(w) * h);
+    }
+    EXPECT_EQ(levels, 5u); // 16,8,4,2,1
+    EXPECT_EQ(level[0], 0x80112233u) << "uniform colour must survive the chain";
 }

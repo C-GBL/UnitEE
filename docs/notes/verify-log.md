@@ -84,6 +84,10 @@ bad data and rasterises it, so neither produces an error you can grep for.
 | 2026-08-01 | Diagnostic that made this quick | `samples/07-swizzle` distinguishes the two failure modes automatically: wrong colours that still appear **in** the palette mean indices are misplaced (swizzle), colours **absent** from the palette mean the CLUT order is wrong. It printed "indices misplaced: suspect the SWIZZLE order" on the first run, which is what pointed at the upload path rather than the palette. |
 | 2026-08-01 | PS2 alpha is 0-128, not 0-255 | `0x80` is fully opaque. Any alpha channel from a PC image format must be rescaled or everything renders half-transparent. `alpha_to_ps2` / `alpha_from_ps2` in `gs_swizzle.h`, round-trip tested. |
 
+| 2026-08-01 | M3 acceptance (cache under thrash) | PASS on target: 24 textures (48 pages) cycled through a 16-page budget for 30 frames, 24/24 cells still the correct colour, 0 failed binds, residency never over budget. |
+| 2026-08-01 | **LRU is pessimal for a cyclic scan larger than the cache** | That run recorded **hits=0, misses=720**: drawing textures 0..23 in order through a budget that holds 8 means each one has been evicted by the time it comes round again. This is the textbook LRU worst case, not a bug -- but it means the cache alone cannot fix a working set that does not fit. The renderer must sort draws by texture so each one is bound once per frame, which is exactly what plan section 9 M8 task 4 specifies ("sort by pass, material kind, texture, depth"). Until that lands, expect miss counts to look alarming in multi-texture scenes. |
+| 2026-08-01 | Uploads consume frame-packet space | Every cache miss appends its image payload to the frame packet: 512 qwords for a 128x64 PSMT8, 16384 for a 256x256 PSMCT32. A thrashing cache overflows `VideoConfig::packet_qwords`, surfacing as `bind()` returning false rather than a dropped upload. Documented on `TextureCache`. |
+
 ## VU toolchain (`dvp-as`)
 
 | Date | Item (plan ref) | Result |
