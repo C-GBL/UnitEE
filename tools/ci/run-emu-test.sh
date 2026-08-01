@@ -50,6 +50,21 @@ case $ELF_ABS in
         ;;
 esac
 
+# Support files (a .p2b scene, test data) named in EMU_EXTRA_FILES are staged
+# next to the ELF: PCSX2 maps 'host:' to the ELF's own directory, so fopen
+# ("host:name") in the guest finds exactly these copies.
+if [ -n "$EMU_EXTRA_FILES" ]; then
+    for extra in $EMU_EXTRA_FILES; do
+        if [ -f "$extra" ]; then
+            cp -f "$extra" "$(dirname "$ELF_ABS")/" || {
+                echo "run-emu-test: failed to stage $extra" >&2; exit 2; }
+        else
+            echo "run-emu-test: extra file missing: $extra" >&2
+            exit 2
+        fi
+    done
+fi
+
 if command -v cygpath >/dev/null 2>&1; then
     # Git Bash: PCSX2 is a Windows binary and cannot read /c/... paths.
     ELF_ABS=$(cygpath -w "$ELF_ABS")

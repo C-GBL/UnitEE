@@ -9,16 +9,49 @@
 
 #if defined(PS2UR_PLATFORM_PS2)
 
+#include <loadfile.h>
+#include <sifrpc.h>
 #include <stdio.h>
+
+// Embedded IOP modules (irx_blobs.S).
+extern "C" unsigned char iomanx_irx_start[];
+extern "C" unsigned char iomanx_irx_end[];
+extern "C" unsigned char filexio_irx_start[];
+extern "C" unsigned char filexio_irx_end[];
 
 namespace ps2ur {
 namespace platform {
 
 bool init()
 {
-    // TODO(ps2dev): EE bring-up -- install exception handlers, reset DMAC,
-    // reserve the 16 KB scratchpad at 0x70000000 (section 3.1), SIF init for
-    // IOP RPC (section 3.5).
+    // SIF RPC first: file I/O (host:, cdrom0:, mc0:) and every other IOP
+    // service rides on it. Discovered the hard way -- fopen("host:...")
+    // fails with no useful error when this is missing, because the fio RPC
+    // endpoint was never brought up (plan section 3.5).
+    SifInitRpc(0);
+
+    // ps2sdk's newlib does file I/O exclusively through fileXio, which is NOT
+    // a ROM module: without iomanX + fileXio on the IOP every open() fails
+    // instantly with no useful error (found the hard way -- the compile guard
+    // in io_common.h forbidding direct fio use is the hint). Load our embedded
+    // copies once.
+    SifLoadFileInit();
+    int mod_ret = 0;
+    const int iomanx_id = SifExecModuleBuffer(
+        iomanx_irx_start,
+        static_cast<u32>(iomanx_irx_end - iomanx_irx_start), 0, nullptr,
+        &mod_ret);
+    const int filexio_id = SifExecModuleBuffer(
+        filexio_irx_start,
+        static_cast<u32>(filexio_irx_end - filexio_irx_start), 0, nullptr,
+        &mod_ret);
+    if (iomanx_id < 0 || filexio_id < 0) {
+        printf("[ps2ur] WARNING: IOP module load failed (iomanX=%d fileXio=%d); "
+               "file I/O will not work\n", iomanx_id, filexio_id);
+    }
+
+    // TODO(spec: section 9 later milestones): exception handlers, DMAC reset,
+    // scratchpad reservation.
     return true;
 }
 

@@ -1,0 +1,169 @@
+; runtime/src/vu/vu_unlit_tex.vsm
+;
+; Textured unlit transform (plan section 7.3 `Unlit`: texture x vertex colour).
+; vu_unlit with a texture coordinate path added; same clip discipline.
+;
+; Perspective-correct texturing on the GS works through STQ: supply
+; S = s*q, T = t*q, Q = q (= 1/w) per vertex; the GS interpolates all three
+; linearly and divides per pixel. In PACKED mode the ST register qword carries
+; S,T,Q in its x,y,z lanes, and the Q it carries is picked up by the FOLLOWING
+; RGBAQ write -- so the output order per vertex must be ST, RGBAQ, XYZ2.
+;
+; The input UV qword is authored as (u, v, 1, 0): the 1 in z becomes Q after
+; the MULq, for free.
+;
+; ---------------------------------------------------------------------------
+; VU1 DATA MEMORY LAYOUT (quadwords)
+; ---------------------------------------------------------------------------
+;   0..3    MVP matrix, column-major
+;   4       viewport scale   : (sx, sy, sz, 0)
+;   5       viewport offset  : (ox, oy, oz, 0)
+;   6       clip constants   : (4095, 4095, 0, w_near)
+;   7       GIF tag template (NREG=3: ST, RGBAQ, XYZ2)
+;   8       vertex count
+;   9       reserved
+;   10..    vertices, 3 qwords each: position (x,y,z,1), texcoord (u,v,1,0),
+;           colour (r,g,b,a)
+;
+; Output from qword 300: tag, then ST + RGBAQ + XYZ2 per vertex.
+; Capacity: (300-10)/3 = 96 in -> builder caps at 78 (VIF NUM), out 1+3*78=235.
+
+		.vu
+		.align 4
+		.global	VuUnlitTex_CodeStart
+		.global	VuUnlitTex_CodeEnd
+
+VuUnlitTex_CodeStart:
+
+		NOP							lq		VF01, 0(VI00)
+		NOP							lq		VF02, 1(VI00)
+		NOP							lq		VF03, 2(VI00)
+		NOP							lq		VF04, 3(VI00)
+		NOP							lq		VF05, 4(VI00)
+		NOP							lq		VF06, 5(VI00)
+		NOP							lq		VF26, 6(VI00)
+		NOP							lq		VF07, 7(VI00)
+		NOP							ilw.x	VI05, 8(VI00)
+
+		FTOI4	VF31, VF00			iaddiu	VI08, VI00, 300
+
+		NOP							sq		VF07, 0(VI08)
+		NOP							iaddiu	VI08, VI08, 1
+		NOP							iaddiu	VI06, VI00, 10
+		NOP							iaddiu	VI07, VI00, 0
+
+tri_loop:
+		NOP							iadd	VI11, VI00, VI00
+		NOP							iadd	VI12, VI08, VI00
+
+; ============================ vertex 0 =======================================
+		NOP							lq		VF10, 0(VI06)		; position
+		NOP							lq		VF16, 1(VI06)		; (u, v, 1, 0)
+		NOP							lq		VF11, 2(VI06)		; colour
+		MULAx	ACC, VF01, VF10x	NOP
+		MADDAy	ACC, VF02, VF10y	NOP
+		MADDAz	ACC, VF03, VF10z	NOP
+		MADDw	VF12, VF04, VF10w	NOP
+		NOP							div		Q, VF00w, VF12w
+		NOP							waitq
+		MULq	VF13, VF12, Q		NOP
+		MULq	VF17, VF16, Q		NOP							; (uq, vq, q, 0)
+		MUL		VF13, VF13, VF05	NOP
+		ADD		VF13, VF13, VF06	NOP
+		FTOI4	VF14, VF13			NOP
+		FTOI0	VF15, VF11			NOP
+		NOP							fsset	0x000
+		SUB.w	VF29, VF12, VF26	NOP
+		SUB.xy	VF29, VF13, VF00	NOP
+		SUB.xy	VF29, VF26, VF13	NOP
+		NOP							NOP
+		NOP							NOP
+		NOP							NOP
+		NOP							fsand	VI10, 0x080
+		NOP							ior		VI11, VI11, VI10
+		NOP							sq		VF17, 0(VI08)		; ST(Q)
+		NOP							sq		VF15, 1(VI08)		; RGBAQ
+		NOP							sq		VF14, 2(VI08)		; XYZ2
+		NOP							iaddiu	VI08, VI08, 3
+		NOP							iaddiu	VI06, VI06, 3
+
+; ============================ vertex 1 =======================================
+		NOP							lq		VF10, 0(VI06)
+		NOP							lq		VF16, 1(VI06)
+		NOP							lq		VF11, 2(VI06)
+		MULAx	ACC, VF01, VF10x	NOP
+		MADDAy	ACC, VF02, VF10y	NOP
+		MADDAz	ACC, VF03, VF10z	NOP
+		MADDw	VF12, VF04, VF10w	NOP
+		NOP							div		Q, VF00w, VF12w
+		NOP							waitq
+		MULq	VF13, VF12, Q		NOP
+		MULq	VF17, VF16, Q		NOP
+		MUL		VF13, VF13, VF05	NOP
+		ADD		VF13, VF13, VF06	NOP
+		FTOI4	VF14, VF13			NOP
+		FTOI0	VF15, VF11			NOP
+		NOP							fsset	0x000
+		SUB.w	VF29, VF12, VF26	NOP
+		SUB.xy	VF29, VF13, VF00	NOP
+		SUB.xy	VF29, VF26, VF13	NOP
+		NOP							NOP
+		NOP							NOP
+		NOP							NOP
+		NOP							fsand	VI10, 0x080
+		NOP							ior		VI11, VI11, VI10
+		NOP							sq		VF17, 0(VI08)
+		NOP							sq		VF15, 1(VI08)
+		NOP							sq		VF14, 2(VI08)
+		NOP							iaddiu	VI08, VI08, 3
+		NOP							iaddiu	VI06, VI06, 3
+
+; ============================ vertex 2 =======================================
+		NOP							lq		VF10, 0(VI06)
+		NOP							lq		VF16, 1(VI06)
+		NOP							lq		VF11, 2(VI06)
+		MULAx	ACC, VF01, VF10x	NOP
+		MADDAy	ACC, VF02, VF10y	NOP
+		MADDAz	ACC, VF03, VF10z	NOP
+		MADDw	VF12, VF04, VF10w	NOP
+		NOP							div		Q, VF00w, VF12w
+		NOP							waitq
+		MULq	VF13, VF12, Q		NOP
+		MULq	VF17, VF16, Q		NOP
+		MUL		VF13, VF13, VF05	NOP
+		ADD		VF13, VF13, VF06	NOP
+		FTOI4	VF14, VF13			NOP
+		FTOI0	VF15, VF11			NOP
+		NOP							fsset	0x000
+		SUB.w	VF29, VF12, VF26	NOP
+		SUB.xy	VF29, VF13, VF00	NOP
+		SUB.xy	VF29, VF26, VF13	NOP
+		NOP							NOP
+		NOP							NOP
+		NOP							NOP
+		NOP							fsand	VI10, 0x080
+		NOP							ior		VI11, VI11, VI10
+		NOP							sq		VF17, 0(VI08)
+		NOP							sq		VF15, 1(VI08)
+		NOP							sq		VF14, 2(VI08)
+		NOP							iaddiu	VI08, VI08, 3
+		NOP							iaddiu	VI06, VI06, 3
+		NOP							iaddiu	VI07, VI07, 3
+
+; --- Reject patch: XYZ2 qwords sit at +2, +5, +8 from the tri base ----------
+		NOP							ibeq	VI11, VI00, tri_ok
+		NOP							NOP
+		NOP							sq		VF31, 2(VI12)
+		NOP							sq		VF31, 5(VI12)
+		NOP							sq		VF31, 8(VI12)
+tri_ok:
+		NOP							ibne	VI07, VI05, tri_loop
+		NOP							NOP
+
+		NOP							iaddiu	VI09, VI00, 300
+		NOP							xgkick	VI09
+
+		NOP[E]						NOP
+		NOP							NOP
+		.align 4
+VuUnlitTex_CodeEnd:

@@ -55,6 +55,18 @@ target_include_directories(ps2ur PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 if(PS2UR_PLATFORM STREQUAL "ps2")
     target_compile_definitions(ps2ur PUBLIC PS2UR_PLATFORM_PS2=1)
 
+    # Embedded IOP modules for fileXio (see irx_blobs.S). The assembler needs
+    # the ps2sdk irx directory on its include path for the .incbin.
+    enable_language(ASM)
+    target_sources(ps2ur PRIVATE src/platform/ps2/irx_blobs.S)
+    if(DEFINED ENV{PS2SDK})
+        set(PS2UR_IRX_DIR "$ENV{PS2SDK}/iop/irx")
+    else()
+        set(PS2UR_IRX_DIR "C:/Users/Ash/ps2dev/ps2sdk/iop/irx")
+    endif()
+    set_source_files_properties(src/platform/ps2/irx_blobs.S PROPERTIES
+        COMPILE_OPTIONS "-Wa,-I${PS2UR_IRX_DIR}")
+
     # VU microprograms are EE-target-only: dvp-as output is VU machine code and
     # has no meaning in the host build.
     include(vu)
@@ -62,7 +74,8 @@ if(PS2UR_PLATFORM STREQUAL "ps2")
         ${CMAKE_CURRENT_SOURCE_DIR}/src/vu/vu_smoke.vsm
         ${CMAKE_CURRENT_SOURCE_DIR}/src/vu/vu_passthrough.vsm
         ${CMAKE_CURRENT_SOURCE_DIR}/src/vu/vu_unlit.vsm
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/vu/vu_lit.vsm)
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/vu/vu_lit.vsm
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/vu/vu_unlit_tex.vsm)
     # The ps2 configuration must be driven through the ps2dev cross toolchain
     # file (planned at tools/cmake/ps2-toolchain.cmake, plan section 8), with
     # the toolchain rooted at $ENV{PS2DEV} (default C:/Users/Ash/ps2dev,

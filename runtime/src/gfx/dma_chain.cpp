@@ -73,7 +73,7 @@ bool DmaChain::add_constants(const void* qwords, uint32_t count, uint32_t dest)
     return true;
 }
 
-bool DmaChain::add_batch(const BatchBlock& block)
+bool DmaChain::add_batch(const BatchBlock& block, uint32_t mscal_addr)
 {
     if (!m_open || block.header == nullptr || block.verts == nullptr) {
         return false;
@@ -87,7 +87,7 @@ bool DmaChain::add_batch(const BatchBlock& block)
     packet2_utils_vu_add_unpack_data(p, block.vert_dest,
                                      const_cast<Qword*>(block.verts),
                                      block.vert_qwords, 0);
-    packet2_utils_vu_add_start_program(p, 0);
+    packet2_utils_vu_add_start_program(p, mscal_addr);
     m_stats.batches++;
     m_stats.qwords += 2u + block.vert_qwords;
     m_stats.build_ticks += platform::now_ticks() - t0;
@@ -167,8 +167,9 @@ bool DmaChain::add_constants(const void* qwords, uint32_t count, uint32_t dest)
     return m_stats.qwords <= m_capacity;
 }
 
-bool DmaChain::add_batch(const BatchBlock& block)
+bool DmaChain::add_batch(const BatchBlock& block, uint32_t mscal_addr)
 {
+    (void)mscal_addr;
     if (!m_open || block.header == nullptr || block.verts == nullptr) {
         return false;
     }

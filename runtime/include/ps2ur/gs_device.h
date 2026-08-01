@@ -72,6 +72,12 @@ public:
     // GIF data (texture uploads, the debug overlay).
     GsPacket& packet() { return m_packet; }
 
+    // Sends whatever is currently in the packet over PATH3 and waits, then
+    // resets it. For state that must reach the GS OUTSIDE the frame flow --
+    // e.g. binding a texture before a VU1 chain kicks, since PATH3 traffic
+    // racing PATH1 drawing is the stall the plan warns about (3.4).
+    void flush_packet();
+
     // Uploads pixel data into VRAM via GIF IMAGE mode (plan section 9, M2
     // task 6). 'dest' must have been reserved from vram(); 'data' is w*h
     // pixels already in the target format, and for indexed formats already

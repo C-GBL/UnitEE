@@ -111,6 +111,17 @@ bad data and rasterises it, so neither produces an error you can grep for.
 | 2026-08-01 | DmaChain assembles in main RAM, not scratchpad | Deviation from M4 task 5 recorded in dma_chain.h: chain build is 2us/frame and throughput is vsync-locked, so scratchpad assembly is not currently the bottleneck; its profiling counters are how that decision gets revisited. |
 | 2026-08-01 | `.vsm` blob size in instructions | dvp-as emits 64-bit instruction pairs, so `(CodeEnd - CodeStart) / 8` is the instruction count. `vu_passthrough` is 4 instructions (0x20 bytes). |
 
+
+## Asset pipeline (M5)
+
+| Date | Finding | Detail |
+|---|---|---|
+| 2026-08-01 | **M5 acceptance PASS** | A scene built and exported by Unity 6000.0.47f1 in batchmode (22 entities, 20 mesh instances over 15 deduplicated meshes, 11 materials, 10 quantised PSMT8 textures, camera, directional light; 208,896 bytes of .p2b) loads and renders on target through all three VU1 microprograms resident simultaneously (unlit @0, textured @300, lit @700). 31,395/65,536 verification-window pixels drawn; 64-tile golden captured and **bit-identical across independent runs**. Deviation recorded in the sample: the reference is a checked-in golden of this renderer, not an Editor-side constrained render (which does not exist yet). |
+| 2026-08-01 | **PCSX2 `HostFs = false` is the default, and the failure is misleading** | With host filesystem access disabled, PCSX2 still logs "HLE Host: Set 'host:' root path" at boot -- but every open fails with fio error **-5**. Nothing suggests a config switch. `HostFs = true` in PCSX2.ini is required for `host:` file loading. (-19 = no such device, for comparison.) |
+| 2026-08-01 | **ps2sdk newlib file I/O does not reach PCSX2's host:** | Modern ps2sdk routes `open()` exclusively through fileXio (`io_common.h` has a compile-time guard against direct fio use). Loading iomanX.irx + fileXio.irx (now embedded in the runtime via `.incbin` and loaded at `platform::init`) still does not make `host:` visible to that route under PCSX2's HLE. The runtime's `io::load_file` therefore uses LEGACY fio on the PS2 build, with its own extern declarations and its own fds (never mixed with newlib's, which is what the guard is about). Revisit on real hardware with ps2link. |
+| 2026-08-01 | `SifInitRpc(0)` belongs in platform init | Everything IOP-side (file I/O, later audio/pads) rides the SIF; forgetting it makes fio fail with no useful error. The M0 sample called it explicitly, which is why printf worked before the runtime did. |
+| 2026-08-01 | GS V axis vs Unity | Unity UV origin is bottom-left, GS texture space top-left: the exporter writes `1 - v`. Same for `GetPixels32` row order (bottom-up), which the texture exporter flips. |
+
 ## VU toolchain (`dvp-as`)
 
 | Date | Item (plan ref) | Result |

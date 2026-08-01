@@ -51,7 +51,7 @@ public:
     // and vertices (-> block.vert_dest), then FLUSH + MSCAL 0. Three chain
     // tags per batch, all pointing at data that never moves -- the pattern
     // the SDK ships and its own samples prove.
-    bool add_batch(const BatchBlock& block);
+    bool add_batch(const BatchBlock& block, uint32_t mscal_addr = 0);
 
     // Ends the chain and starts the DMA. Returns immediately; the EE can go
     // build the next frame.

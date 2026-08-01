@@ -54,6 +54,11 @@ struct LitVertex {
     float nx, ny, nz;
     uint8_t r, g, b, a;
 };
+struct TexUnlitVertex {
+    float x, y, z;
+    float u, v; // texture-normalised 0..1
+    uint8_t r, g, b, a;
+};
 
 // One built block. header = tag+count (2 qwords), verts = payload.
 struct BatchBlock {
@@ -68,6 +73,7 @@ struct BatchBlock {
 // 8-bit VIF NUM field under 256.
 inline constexpr uint32_t kMaxUnlitVertsPerBatch = 93; // 2 qw/vert, dest 10
 inline constexpr uint32_t kMaxLitVertsPerBatch = 78;   // 3 qw/vert, dest 18
+inline constexpr uint32_t kMaxTexVertsPerBatch = 78;   // 3 qw/vert, dest 10
 
 class BatchBuilder {
 public:
@@ -79,6 +85,9 @@ public:
     static uint32_t build_lit(const LitVertex* verts, uint32_t count,
                               Arena& arena, BatchBlock* out_blocks,
                               uint32_t max_blocks);
+    static uint32_t build_unlit_tex(const TexUnlitVertex* verts, uint32_t count,
+                                    Arena& arena, BatchBlock* out_blocks,
+                                    uint32_t max_blocks);
 
     // Per-mesh constant qwords for the unlit program (VU 0..6): MVP columns,
     // viewport scale/offset, clip constants. 'out' must hold 7 qwords.

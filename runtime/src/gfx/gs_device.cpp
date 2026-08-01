@@ -159,6 +159,17 @@ void GsDevice::submit_and_wait()
 #endif
 }
 
+void GsDevice::flush_packet()
+{
+    if (!m_initialized || m_packet.size() == 0) {
+        m_packet.reset();
+        return;
+    }
+    m_packet.set_last_tag_eop();
+    submit_and_wait();
+    m_packet.reset();
+}
+
 void GsDevice::build_drawing_environment()
 {
     m_packet.reset();
