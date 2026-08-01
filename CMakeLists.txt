@@ -26,4 +26,6 @@ add_subdirectory(runtime)
 # Samples are PS2 executables; there is nothing to build for them on the host.
 if(PS2UR_PLATFORM STREQUAL "ps2")
     add_subdirectory(samples/00-hello-triangle)
+    add_subdirectory(samples/01-spinning-cube)
+    add_subdirectory(samples/02-gs-clear)
 endif()

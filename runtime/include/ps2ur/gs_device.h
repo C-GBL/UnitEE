@@ -1,0 +1,96 @@
+// GS device: video mode, double buffering, drawing environment, frame loop
+// (plan section 9, M2 tasks 1 and 4).
+//
+// Split of responsibilities: ps2sdk's libgraph owns the CRTC side (SMODE /
+// PMODE / DISPLAY and the region-dependent timing tables), because that is
+// tedious, well-solved, and changes only at init. Everything the renderer
+// touches per frame -- FRAME_1, ZBUF_1, XYOFFSET_1, SCISSOR_1, TEST_1, and
+// every primitive -- is built here as GIF packets through GsPacket, because
+// that is the path M4 replaces with VU1/PATH1 and it must be ours.
+//
+// ADR-003: this is the EE-side PATH3 bootstrap. It is deliberately the slow
+// path; its job is to unblock M3/M5 and to be the golden-image reference that
+// the VU1 renderer is later diffed against.
+#pragma once
+
+#include "ps2ur/gs_format.h"
+#include "ps2ur/gs_packet.h"
+#include "ps2ur/gs_vram.h"
+
+#include <cstdint>
+
+namespace ps2ur {
+namespace gfx {
+
+enum class VideoStandard : uint8_t { NTSC, PAL };
+
+struct VideoConfig {
+    uint32_t width = 512;
+    uint32_t height = 448;
+    VideoStandard standard = VideoStandard::NTSC;
+    bool interlaced = true;
+    PixelFormat colour_format = PixelFormat::PSMCT32;
+    PixelFormat depth_format = PixelFormat::PSMZ24;
+    bool depth_enabled = true;
+
+    // Qwords reserved for the per-frame packet. 512x448 clear + a few hundred
+    // primitives fits comfortably; overflow is reported, never silent.
+    uint32_t packet_qwords = 8192;
+};
+
+class GsDevice {
+public:
+    bool init(const VideoConfig& config);
+    void shutdown();
+    bool initialized() const { return m_initialized; }
+
+    const VideoConfig& config() const { return m_config; }
+    VramAllocator& vram() { return m_vram; }
+
+    // Frame loop. Draw calls go between begin_frame() and end_frame(); the
+    // packet is submitted and the buffers flipped by end_frame().
+    void begin_frame();
+    void end_frame();
+
+    // Full-screen clear, implemented as a sprite primitive with the depth test
+    // forced to ALWAYS and Z-write on, so it also resets the Z buffer
+    // (plan M2 task 4).
+    void clear(uint8_t r, uint8_t g, uint8_t b, uint32_t depth = 0);
+
+    // Immediate-mode triangles: vertices are already in screen space and
+    // 12.4 fixed point is applied here. EE-side transform, PATH3 upload --
+    // slow and temporary (ADR-003), but it unblocks everything downstream.
+    struct Vertex {
+        int32_t x; // screen pixels
+        int32_t y;
+        uint32_t z;
+        uint8_t r, g, b, a; // a: 0x80 is fully opaque on this hardware
+    };
+    void draw_triangles_immediate(const Vertex* vertices, uint32_t count);
+
+    // The packet being built this frame, for code that wants to append raw
+    // GIF data (texture uploads, the debug overlay).
+    GsPacket& packet() { return m_packet; }
+
+    uint32_t frame_index() const { return m_frame_index; }
+
+private:
+    void build_drawing_environment();
+    void submit_and_wait();
+    uint32_t draw_buffer_page() const;
+    uint32_t display_buffer_page() const;
+
+    VideoConfig m_config;
+    VramAllocator m_vram;
+    VramAlloc m_colour[2];
+    VramAlloc m_depth;
+
+    GsPacket m_packet;
+    Qword* m_packet_memory = nullptr;
+
+    uint32_t m_frame_index = 0;
+    bool m_initialized = false;
+};
+
+} // namespace gfx
+} // namespace ps2ur

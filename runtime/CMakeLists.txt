@@ -20,6 +20,9 @@ set(PS2UR_SOURCES
     src/core/time.cpp
     src/math/math.cpp
     src/gfx/gfx.cpp
+    src/gfx/gs_vram.cpp
+    src/gfx/gs_packet.cpp
+    src/gfx/gs_device.cpp
     src/vu/vu.cpp
     src/scene/scene.cpp
     src/anim/anim.cpp

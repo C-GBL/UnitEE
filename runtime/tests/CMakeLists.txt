@@ -18,6 +18,7 @@ add_executable(ps2ur_tests
     test_alloc.cpp
     test_alloc_stack_pool.cpp
     test_time.cpp
+    test_gfx.cpp
 )
 target_link_libraries(ps2ur_tests PRIVATE ps2ur GTest::gtest_main)
 
