@@ -89,6 +89,20 @@ public:
     // match what was uploaded. Dimensions are powers of two.
     void set_texture(const VramAlloc& tex, uint32_t w, uint32_t h, PixelFormat fmt);
 
+    // Uploads a colour lookup table. 'palette' is 'entries' PSMCT32 colours
+    // ALREADY in CSM1 storage order (see gfx::clut_csm1_reorder) -- the GS
+    // reads them positionally and will happily render a correctly-shaped
+    // texture in scrambled colours if they are not.
+    //
+    // 256 entries occupy 1 KB, stored as a 16x16 PSMCT32 block; 16 entries
+    // occupy 64 bytes as 8x2.
+    bool upload_clut(const uint32_t* palette, const VramAlloc& dest, uint32_t entries);
+
+    // Binds an indexed texture plus its CLUT. Use for PSMT8 / PSMT4.
+    void set_texture_indexed(const VramAlloc& tex, uint32_t w, uint32_t h,
+                             PixelFormat fmt, const VramAlloc& clut,
+                             uint32_t clut_entries);
+
     // Textured triangles. UVs are in 12.4 fixed point (see gs_packed_uv), so
     // texel (1,1) is u=16, v=16.
     struct TexVertex {

@@ -340,6 +340,45 @@ void GsDevice::set_texture(const VramAlloc& tex, uint32_t w, uint32_t h, PixelFo
     m_packet.add_ad(GsReg::TEXA, gs_texa(0x80, false, 0x80));
 }
 
+bool GsDevice::upload_clut(const uint32_t* palette, const VramAlloc& dest,
+                           uint32_t entries)
+{
+    if (palette == nullptr || !dest.valid()) {
+        return false;
+    }
+    // The CLUT is uploaded as an ordinary PSMCT32 image; only its shape is
+    // fixed by the entry count.
+    uint32_t w = 16u, h = 16u; // 256 entries
+    if (entries == 16u) {
+        w = 8u;
+        h = 2u;
+    } else if (entries != 256u) {
+        log(LogLevel::Error, "gfx: CLUT must have 16 or 256 entries, got %u", u(entries));
+        return false;
+    }
+    return upload_texture(palette, dest, w, h, PixelFormat::PSMCT32);
+}
+
+void GsDevice::set_texture_indexed(const VramAlloc& tex, uint32_t w, uint32_t h,
+                                   PixelFormat fmt, const VramAlloc& clut,
+                                   uint32_t clut_entries)
+{
+    PS2UR_ASSERT(m_initialized);
+    (void)clut_entries;
+
+    m_packet.begin_packed_ad(3);
+    // CLD=1 loads the CLUT from CBP into the GS's palette cache on this draw.
+    // CSM=0 is CSM1 (the mode whose 32-entry block shuffle the exporter must
+    // pre-apply); CPSM=PSMCT32; CSA=0 (no entry offset).
+    m_packet.add_ad(GsReg::TEX0_1,
+                    gs_tex0(tex.block(), buffer_width_units(w), fmt, log2_pot(w),
+                            log2_pot(h), false, /*MODULATE*/ 0,
+                            clut.block(), static_cast<uint32_t>(PixelFormat::PSMCT32) & 0xFu,
+                            /*CSM1*/ 0, /*CSA*/ 0, /*CLD=load*/ 1));
+    m_packet.add_ad(GsReg::TEX1_1, gs_tex1_nearest());
+    m_packet.add_ad(GsReg::TEXA, gs_texa(0x80, false, 0x80));
+}
+
 void GsDevice::draw_textured_triangles(const TexVertex* vertices, uint32_t count)
 {
     PS2UR_ASSERT(m_initialized);
