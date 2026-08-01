@@ -26,6 +26,8 @@ set(PS2UR_SOURCES
     src/gfx/gs_overlay.cpp
     src/gfx/gs_swizzle.cpp
     src/gfx/gs_texcache.cpp
+    src/gfx/gs_batch.cpp
+    src/gfx/dma_chain.cpp
     src/vu/vu.cpp
     src/vu/vu_program.cpp
     src/scene/scene.cpp

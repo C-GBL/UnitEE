@@ -21,6 +21,7 @@ add_executable(ps2ur_tests
     test_gfx.cpp
     test_swizzle.cpp
     test_texcache.cpp
+    test_batch.cpp
 )
 target_link_libraries(ps2ur_tests PRIVATE ps2ur GTest::gtest_main)
 
