@@ -66,4 +66,12 @@ Vec4 mat4_mul_vec4(const Mat4& a, Vec4 v);
 // swap this to a [0, 1] or fixed-point Z mapping at the VU1 stage.
 Mat4 mat4_perspective(float fovy_radians, float aspect, float znear, float zfar);
 
+// Rotation matrix from a unit quaternion (x,y,z,w).
+Mat4 mat4_from_quat(Quat q);
+// Compose translate * rotate * scale -- the standard local transform.
+Mat4 mat4_trs(Vec3 t, Quat r, Vec3 s);
+// Inverse of a RIGID transform (rotation + translation, unit scale): the
+// camera view matrix from a camera world matrix. Cheap: transpose + dot.
+Mat4 mat4_rigid_inverse(const Mat4& m);
+
 } // namespace ps2ur

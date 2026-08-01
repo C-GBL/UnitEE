@@ -31,10 +31,12 @@ set(PS2UR_SOURCES
     src/vu/vu.cpp
     src/vu/vu_program.cpp
     src/scene/scene.cpp
+    src/scene/p2b_scene.cpp
     src/anim/anim.cpp
     src/phys/phys.cpp
     src/audio/audio.cpp
     src/io/io.cpp
+    src/io/p2b.cpp
     src/input/input.cpp
     src/bridge/bridge.cpp
 )

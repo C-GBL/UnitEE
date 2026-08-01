@@ -1,23 +1,152 @@
-# p2b container format
+# The `.p2b` container (v1)
 
-**STUB.** TODO(spec missing: section 10): the binary container specification
-is defined by plan section 10, which is not present in `ps2port.txt` (the file
-ends at section 8). Do not invent the format; author/recover section 10 first.
+Implements plan section 10. Written BEFORE the writer and reader, per M5
+task 1; both sides are written against this document and the fuzz test
+targets the reader.
 
-What sections 1-8 establish about `.p2b`:
+Design constraints (10.1): zero-copy (sections are loaded whole and used in
+place), 2048-byte alignment for section payloads, little-endian everywhere,
+versioned with a loud reject on mismatch.
 
-- It is the PS2-native container the exporter emits: `scene.p2b` (entities,
-  transforms, component data from SceneExporter) and `assets/*.p2b` (mesh /
-  texture / animation / audio output from the converters).
-- It is loaded on target by the runtime's `io/` container loader after
-  `ps2ur::Init`, before `il2cpp_init` and managed behaviour instantiation.
-- Asset payloads are pre-baked for the hardware offline: tri-stripped, VU1-
-  batched geometry; palettised + swizzled textures; quantised animation;
-  ADPCM (VAG) audio.
-- Files are placed on disc in a build-ordered layout (mkps2iso controls LBA
-  order) to serve the Addressables-like async load API.
+All offsets are from the start of the file. All structures are packed,
+little-endian, and sized as written -- no implicit padding.
 
-Open questions for section 10: header/chunk layout, endianness/alignment
-rules (target is little-endian; DMA wants qword/128-bit alignment),
-versioning, string/ID tables, compression, and the scene<->asset reference
-scheme.
+## File layout (10.2)
+
+```
+offset  size    field
+0       4       magic 'P2BC' (bytes 50 32 42 43)
+4       2       version_major   (this spec: 1)
+6       2       version_minor   (this spec: 0)
+8       4       total_size      (bytes, whole file)
+12      4       section_count
+16      4       flags           (bit0 = compressed sections present; v1: 0)
+20      12      reserved (zero)
+32      n*32    section table
+...             payloads, each starting at a 2048-aligned offset
+```
+
+Section table entry (32 bytes):
+
+```
+u32 type          fourcc, see below
+u32 offset        payload start (2048-aligned)
+u32 size_on_disc  payload bytes
+u32 size_in_ram   == size_on_disc in v1 (no compression)
+u32 checksum      CRC-32 (reflected, poly 0xEDB88320) of the payload
+u32 flags         0 in v1
+u64 name_hash     FNV-1a 64 of the source asset name; 0 if unnamed
+```
+
+Section types present in v1: `MESH`, `TEX ` (trailing space), `SCEN`,
+`MATL`. Multiple sections of the same type are ordered; indices in other
+sections refer to that order (e.g. "texture 2" = the third `TEX ` section).
+Types reserved by the plan for later milestones: `CLUT`, `ANIM`, `SKEL`,
+`AUDI`, `FONT`, `STRT`, `SCPT`, `PHYS`.
+
+## MESH section
+
+Serves plan 10.3's requirement -- "stored already batched for VU1; the
+runtime never reorganises geometry" -- in the SDK-chain form the runtime
+draws with (see `runtime/include/ps2ur/gs_batch.h`): each batch is a
+`BatchBlock` the chain references zero-copy.
+
+```
+MeshHeader {
+    u32 batch_count
+    u32 material_index      // into the MATL array
+    f32 bounds_center[3]
+    f32 bounds_radius       // object-space bounding sphere; per-batch
+                            // spheres arrive with culling at M8
+}
+BatchDesc[batch_count] {
+    u32 offset_qwords       // from the start of this section
+    u32 vert_qwords
+    u32 vertex_count
+    u32 vert_dest           // VU address vertices unpack to (10 / 18)
+}
+...16-byte-aligned batch blobs, each: [GIF tag qw][count qw][vertex qws]
+```
+
+Vertex layouts by material kind (see MATL): unlit 2 qw (pos, colour),
+unlit-textured 3 qw (pos, stq with q pre-set to 1, colour), lit 3 qw (pos,
+normal, colour). Positions are `V4-32` floats with w = 1.
+
+**Recorded deviation from plan 10.3:** v1 stores raw qword payloads consumed
+through ref-tag unpacks, not a pre-built VIF-code stream, and positions are
+V4-32 float, not V4-16 quantised, with triangle lists rather than strips.
+The pre-built-VIF/quantised/stripped form is the optimisation path once M8's
+render queue exists; the section format holds either (the descs say where
+data is, not how it was encoded).
+
+## TEX section
+
+Self-contained indexed texture:
+
+```
+TexHeader {
+    u32 width, height       // powers of two
+    u32 format              // GS PSM code; v1 emits PSMT8 (0x13)
+    u32 clut_entries        // 256 for PSMT8
+}
+u32 clut[clut_entries]      // PSMCT32 entries, alpha already 0..128,
+                            // ALREADY in CSM1 storage order
+u8  indices[width*height]   // RASTER order -- the GS transfer engine
+                            // swizzles in hardware (verify-log 2026-08-01)
+```
+
+## MATL section
+
+```
+Material[count] {
+    u32 kind                // 0 unlit, 1 unlit-textured, 2 vertex-lit
+    u32 texture_index       // into TEX order; 0xFFFFFFFF if none
+    f32 tint[4]             // reserved, (1,1,1,1) in v1
+}
+```
+
+## SCEN section (10.4)
+
+```
+SceneHeader {
+    u32 entity_count
+    u32 component_count
+    u32 name_table_offset   // 0 in v1 (no STRT yet)
+}
+Entity[entity_count] {
+    i32 parent              // < own index, or -1 (parent-before-child order)
+    f32 pos[3]
+    f32 rot[4]              // quaternion x,y,z,w
+    f32 scale[3]
+    u32 name_hash
+    u16 layer
+    u16 tag
+    u32 flags
+    u32 component_first     // into ComponentRef[]
+    u16 component_count
+    u16 pad                 // zero; keeps the struct 4-byte aligned (the
+                            // plan's struct leaves this implicit)
+}
+ComponentRef[component_count] {
+    u16 type_id             // 1 MeshRenderer, 2 Camera, 3 DirectionalLight
+    u16 pad
+    u32 data_offset         // from the start of this section
+}
+```
+
+Component payloads:
+
+```
+MeshRenderer     { u32 mesh_index; u32 material_index }
+Camera           { f32 fov_radians; f32 znear; f32 zfar }
+DirectionalLight { f32 dir[3]; f32 colour[3] }   // dir points FROM the light
+```
+
+## Reader obligations
+
+The reader must treat every field as hostile (M5 task 1: fuzzed): validate
+magic/version, that the table fits in the file, that every payload
+[offset, offset+size) lies inside the file, that payload alignment is 2048,
+and verify checksums. Component/batch offsets are validated against their
+section's bounds before use. A malformed file produces a clean failure,
+never a wild pointer.
