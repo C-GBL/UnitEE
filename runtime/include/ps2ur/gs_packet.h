@@ -210,6 +210,54 @@ constexpr uint64_t gs_trxreg(uint32_t width, uint32_t height)
     return static_cast<uint64_t>(width) | (static_cast<uint64_t>(height) << 32);
 }
 
+// TEX0: texture base, buffer width, format, dimensions as log2, and how the
+// texel combines with the vertex colour.
+// tex_function: 0 MODULATE, 1 DECAL, 2 HIGHLIGHT, 3 HIGHLIGHT2.
+constexpr uint64_t gs_tex0(uint32_t base_block, uint32_t width_units, PixelFormat fmt,
+                           uint32_t log2_width, uint32_t log2_height, bool has_alpha,
+                           uint32_t tex_function, uint32_t clut_block,
+                           uint32_t clut_fmt, uint32_t clut_mode,
+                           uint32_t clut_offset, uint32_t clut_load)
+{
+    return static_cast<uint64_t>(base_block & 0x3FFFu) |
+           (static_cast<uint64_t>(width_units & 0x3Fu) << 14) |
+           ((static_cast<uint64_t>(fmt) & 0x3Fu) << 20) |
+           (static_cast<uint64_t>(log2_width & 0xFu) << 26) |
+           (static_cast<uint64_t>(log2_height & 0xFu) << 30) |
+           (static_cast<uint64_t>(has_alpha ? 1u : 0u) << 34) |
+           (static_cast<uint64_t>(tex_function & 0x3u) << 35) |
+           (static_cast<uint64_t>(clut_block & 0x3FFFu) << 37) |
+           (static_cast<uint64_t>(clut_fmt & 0xFu) << 51) |
+           (static_cast<uint64_t>(clut_mode & 0x1u) << 55) |
+           (static_cast<uint64_t>(clut_offset & 0x1Fu) << 56) |
+           (static_cast<uint64_t>(clut_load & 0x7u) << 61);
+}
+
+// TEX1: filtering. Nearest is the honest default on this hardware -- bilinear
+// costs GS fill rate that a 30 fps budget cannot spare for most surfaces.
+constexpr uint64_t gs_tex1_nearest()
+{
+    return 0; // LCM=0, MXL=0, MMAG=0 (NEAREST), MMIN=0 (NEAREST)
+}
+
+// TEXA: how alpha is expanded for formats that do not carry a full 8 bits.
+constexpr uint64_t gs_texa(uint8_t alpha0, bool use_alpha_bit, uint8_t alpha1)
+{
+    return static_cast<uint64_t>(alpha0) |
+           (static_cast<uint64_t>(use_alpha_bit ? 1u : 0u) << 15) |
+           (static_cast<uint64_t>(alpha1) << 32);
+}
+
+// log2 for the power-of-two texture dimensions TEX0 requires.
+constexpr uint32_t log2_pot(uint32_t v)
+{
+    uint32_t r = 0;
+    while ((1u << r) < v) {
+        ++r;
+    }
+    return r;
+}
+
 // ---- PACKED-mode vertex data ----------------------------------------------
 //
 // CRITICAL DISTINCTION. A GIF qword can carry a register value in two entirely

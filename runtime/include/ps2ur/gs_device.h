@@ -72,6 +72,35 @@ public:
     // GIF data (texture uploads, the debug overlay).
     GsPacket& packet() { return m_packet; }
 
+    // Uploads pixel data into VRAM via GIF IMAGE mode (plan section 9, M2
+    // task 6). 'dest' must have been reserved from vram(); 'data' is w*h
+    // pixels already in the target format, and for indexed formats already
+    // swizzled by the exporter (plan section 3.3 -- swizzling at runtime wastes
+    // EE cycles).
+    //
+    // Uploads are appended to the current frame packet, so call this between
+    // begin_frame() and end_frame(). Plan section 3.4 warns that a PATH3
+    // upload while VU1 is drawing over PATH1 will stall; once M4 lands, keep
+    // uploads at frame boundaries.
+    bool upload_texture(const void* data, const VramAlloc& dest, uint32_t w,
+                        uint32_t h, PixelFormat fmt);
+
+    // Binds a texture for subsequent draws. 'fmt' and the dimensions must
+    // match what was uploaded. Dimensions are powers of two.
+    void set_texture(const VramAlloc& tex, uint32_t w, uint32_t h, PixelFormat fmt);
+
+    // Textured triangles. UVs are in 12.4 fixed point (see gs_packed_uv), so
+    // texel (1,1) is u=16, v=16.
+    struct TexVertex {
+        int32_t x;
+        int32_t y;
+        uint32_t z;
+        uint32_t u;
+        uint32_t v;
+        uint8_t r, g, b, a; // modulated with the texel
+    };
+    void draw_textured_triangles(const TexVertex* vertices, uint32_t count);
+
     // Reads a rectangle of the buffer that was most recently drawn into, back
     // out of VRAM into main memory (plan section 14.3, M2 acceptance).
     //

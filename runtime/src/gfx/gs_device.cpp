@@ -288,6 +288,85 @@ void GsDevice::end_frame()
     m_frame_index++;
 }
 
+bool GsDevice::upload_texture(const void* data, const VramAlloc& dest, uint32_t w,
+                              uint32_t h, PixelFormat fmt)
+{
+    PS2UR_ASSERT(m_initialized);
+    if (data == nullptr || !dest.valid() || w == 0 || h == 0) {
+        return false;
+    }
+
+    const uint32_t bytes = (w * h * bits_per_pixel(fmt)) / 8u;
+    if ((bytes & 15u) != 0) {
+        log(LogLevel::Error, "gfx: texture payload must be a whole number of qwords");
+        return false;
+    }
+    const uint32_t qwords = bytes / 16u;
+
+    // Describe the destination, then hand the GIF the raw pixels in IMAGE
+    // mode. TRXDIR is written last because it arms the transfer.
+    m_packet.begin_packed_ad(4);
+    m_packet.add_ad(GsReg::BITBLTBUF,
+                    gs_bitbltbuf(0, 0, PixelFormat::PSMCT32,
+                                 dest.block(), buffer_width_units(w), fmt));
+    m_packet.add_ad(GsReg::TRXPOS, gs_trxpos(0, 0, 0, 0, 0));
+    m_packet.add_ad(GsReg::TRXREG, gs_trxreg(w, h));
+    m_packet.add_ad(GsReg::TRXDIR, 0); // 0 = host -> local
+
+    m_packet.begin_image(qwords);
+    const Qword* src = static_cast<const Qword*>(data);
+    for (uint32_t i = 0; i < qwords; ++i) {
+        m_packet.add_qword(src[i].lo, src[i].hi);
+    }
+
+    // The GS caches texels; without a flush a re-upload to the same address
+    // can be drawn with the previous contents.
+    m_packet.begin_packed_ad(1);
+    m_packet.add_ad(GsReg::TEXFLUSH, 0);
+
+    return !m_packet.overflowed();
+}
+
+void GsDevice::set_texture(const VramAlloc& tex, uint32_t w, uint32_t h, PixelFormat fmt)
+{
+    PS2UR_ASSERT(m_initialized);
+    m_packet.begin_packed_ad(3);
+    // MODULATE so vertex colour still lights the texel, which is what the
+    // fixed material model in plan section 7.3 expects of Unlit/VertexLit.
+    m_packet.add_ad(GsReg::TEX0_1,
+                    gs_tex0(tex.block(), buffer_width_units(w), fmt, log2_pot(w),
+                            log2_pot(h), false, /*MODULATE*/ 0, 0, 0, 0, 0, 0));
+    m_packet.add_ad(GsReg::TEX1_1, gs_tex1_nearest());
+    m_packet.add_ad(GsReg::TEXA, gs_texa(0x80, false, 0x80));
+}
+
+void GsDevice::draw_textured_triangles(const TexVertex* vertices, uint32_t count)
+{
+    PS2UR_ASSERT(m_initialized);
+    if (vertices == nullptr || count < 3) {
+        return;
+    }
+    const uint32_t triangles = count / 3u;
+
+    m_packet.begin_packed_ad(1);
+    m_packet.add_ad(GsReg::PRMODECONT, 1);
+
+    // TME on, and FST=1 so UV carries texel coordinates directly rather than
+    // perspective-correct ST/Q. For screen-space geometry that is exactly what
+    // we want; ST arrives with the VU1 pipeline at M4.
+    const uint64_t prim = gs_prim(GsPrim::Triangle, true, /*textured=*/true, false,
+                                  false, false, /*uv_is_st(FST)=*/true, 0, false);
+    m_packet.begin_packed(triangles * 3u, 3,
+                          gs_reglist(GsReg::RGBAQ, GsReg::UV, GsReg::XYZ2),
+                          false, true, prim);
+    for (uint32_t i = 0; i < triangles * 3u; ++i) {
+        const TexVertex& v = vertices[i];
+        m_packet.add_qword(gs_packed_rgbaq(v.r, v.g, v.b, v.a));
+        m_packet.add_qword(gs_packed_uv(v.u, v.v));
+        m_packet.add_qword(gs_packed_xyz(gs_coord(v.x), gs_coord(v.y), v.z));
+    }
+}
+
 #if defined(PS2UR_PLATFORM_PS2)
 namespace {
 
