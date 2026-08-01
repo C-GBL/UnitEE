@@ -1,0 +1,39 @@
+; runtime/src/vu/vu_passthrough.vsm
+;
+; The smallest useful VU1 microprogram (plan section 9, M4 task 1).
+;
+; It performs NO transform. The EE hands it a complete GIF packet -- tag plus
+; PACKED primitive data -- already unpacked into VU1 data memory at address 0,
+; and this program simply XGKICKs it to the GS over PATH1.
+;
+; Its whole job is to prove the route works end to end:
+;
+;     EE -> DMA -> VIF1 -> (MPG upload, UNPACK data, MSCAL) -> VU1 -> XGKICK -> GS
+;
+; That is five pieces of plumbing that all have to be right before a single
+; transformed vertex is worth attempting. Plan section 18.5 is explicit about
+; this: "Write the microprograms in small, individually testable pieces; a VU
+; program that 'almost works' is nearly impossible to debug by inspection."
+;
+; vu_unlit.vsm replaces this with a real transform once the route is proven.
+;
+; Instruction format is UPPER<tab>LOWER, issued as a pair. `nop[e]` sets the E
+; bit, which stops the VU after the FOLLOWING pair -- so the trailing nop pair
+; is required, not padding. Leaving it out runs the VU off into whatever else
+; is in micro memory.
+
+		.vu
+		.align 4
+		.global	VuPassthrough_CodeStart
+		.global	VuPassthrough_CodeEnd
+
+VuPassthrough_CodeStart:
+; VI01 = 0: the GIF packet starts at VU data address 0.
+		NOP							iaddiu	VI01, VI00, 0
+; Hand it to the GS. XGKICK reads the tag at VI01 and streams the primitive.
+		NOP							xgkick	VI01
+; Terminate: E bit here, then one more pair before the VU actually stops.
+		NOP[E]						NOP
+		NOP							NOP
+		.align 4
+VuPassthrough_CodeEnd:

@@ -27,6 +27,7 @@ set(PS2UR_SOURCES
     src/gfx/gs_swizzle.cpp
     src/gfx/gs_texcache.cpp
     src/vu/vu.cpp
+    src/vu/vu_program.cpp
     src/scene/scene.cpp
     src/anim/anim.cpp
     src/phys/phys.cpp
@@ -53,7 +54,9 @@ if(PS2UR_PLATFORM STREQUAL "ps2")
     # VU microprograms are EE-target-only: dvp-as output is VU machine code and
     # has no meaning in the host build.
     include(vu)
-    add_vu_program(ps2ur SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/vu/vu_smoke.vsm)
+    add_vu_program(ps2ur SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/vu/vu_smoke.vsm
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/vu/vu_passthrough.vsm)
     # The ps2 configuration must be driven through the ps2dev cross toolchain
     # file (planned at tools/cmake/ps2-toolchain.cmake, plan section 8), with
     # the toolchain rooted at $ENV{PS2DEV} (default C:/Users/Ash/ps2dev,

@@ -88,6 +88,16 @@ bad data and rasterises it, so neither produces an error you can grep for.
 | 2026-08-01 | **LRU is pessimal for a cyclic scan larger than the cache** | That run recorded **hits=0, misses=720**: drawing textures 0..23 in order through a budget that holds 8 means each one has been evicted by the time it comes round again. This is the textbook LRU worst case, not a bug -- but it means the cache alone cannot fix a working set that does not fit. The renderer must sort draws by texture so each one is bound once per frame, which is exactly what plan section 9 M8 task 4 specifies ("sort by pass, material kind, texture, depth"). Until that lands, expect miss counts to look alarming in multi-texture scenes. |
 | 2026-08-01 | Uploads consume frame-packet space | Every cache miss appends its image payload to the frame packet: 512 qwords for a 128x64 PSMT8, 16384 for a 256x256 PSMCT32. A thrashing cache overflows `VideoConfig::packet_qwords`, surfacing as `bind()` returning false rather than a dropped upload. Documented on `TextureCache`. |
 
+
+## VU1 pipeline (M4)
+
+| Date | Finding | Detail |
+|---|---|---|
+| 2026-08-01 | **PATH1 route proven end to end** | `samples/09-vu1-path1` draws a quad through VU1 rather than PATH3: MPG upload -> VIF UNPACK -> MSCAL -> VU1 -> XGKICK -> GS. **12288/12288 pixels correct on the first run.** That retires the plumbing risk on the plan's highest-risk milestone (section 16, R4); what remains is microprogram maths, which is where the risk should sit. |
+| 2026-08-01 | VIF/DMA plumbing uses ps2sdk `packet2` | `packet2_vif_add_micro_program` / `packet2_utils_vu_*` handle MPG, UNPACK and MSCAL. Deliberate division of labour: our own GIF packet builder stays ours because the renderer manipulates it every frame, but re-deriving a VIF command encoder that ps2sdk already ships working would add risk to M4 for no benefit. `packet2_add_data(packet, ptr, qword_count)` appends a block; `packet2_add_u128` takes a single `u128` value, not two halves. |
+| 2026-08-01 | A microprogram must end with `nop[E]` **plus one more pair** | The E bit stops the VU after the FOLLOWING instruction pair, so the trailing pair is required rather than padding. Omitting it runs VU1 into whatever else is in micro memory. `vu::wait_idle()` bounds its spin on VIF1_STAT bit 2 and reports the likely cause, because a VU that never terminates otherwise hangs the run with no clue. |
+| 2026-08-01 | `.vsm` blob size in instructions | dvp-as emits 64-bit instruction pairs, so `(CodeEnd - CodeStart) / 8` is the instruction count. `vu_passthrough` is 4 instructions (0x20 bytes). |
+
 ## VU toolchain (`dvp-as`)
 
 | Date | Item (plan ref) | Result |
