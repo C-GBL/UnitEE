@@ -1,0 +1,112 @@
+; runtime/src/vu/vu_unlit.vsm
+;
+; VU1 transform microprogram (plan section 9, M4 task 2), the `vu_unlit`
+; material kind from section 7.3: texture x vertex colour, no lighting.
+;
+; Per vertex it does what the EE used to do in draw_triangles_immediate:
+; transform to clip space, perspective divide, scale to screen coordinates,
+; convert to GS 12.4 fixed point, and pack the result into a GIF packet built
+; in VU data memory. Then one XGKICK sends the whole batch.
+;
+; ---------------------------------------------------------------------------
+; VU1 DATA MEMORY LAYOUT (quadwords), written by the EE via VIF UNPACK
+; ---------------------------------------------------------------------------
+;   0..3    MVP matrix, column-major (VF01..VF04 after load)
+;   4       viewport scale   : (sx, sy, sz, 0)
+;   5       viewport offset  : (ox, oy, oz, 0)
+;   6       GIF tag template : the tag this batch kicks
+;   7       vertex count     : (n, 0, 0, 0) as an integer in x
+;   8..     vertices, 2 qwords each: position (x,y,z,1) then colour (r,g,b,a)
+;
+; Output is built from qword 200 onwards: the GIF tag, then per vertex an
+; RGBAQ qword and an XYZ2 qword in PACKED layout.
+;
+; ---------------------------------------------------------------------------
+; WHY THE OUTPUT IS BUILT AT A FIXED OFFSET
+; ---------------------------------------------------------------------------
+; XGKICK takes a VU-memory address and streams from there until it sees the
+; end of the GIF packet. Building output away from the input avoids any overlap
+; while the program is still reading vertices.
+;
+; Double buffering (VIF STCYCL into alternating halves, plan M4 task 2) is NOT
+; here yet: this version processes one batch at a time so the maths can be
+; verified in isolation. Overlapping unpack with execution is M4 task 5's job,
+; and doing both at once would make a failure ambiguous.
+
+		.vu
+		.align 4
+		.global	VuUnlit_CodeStart
+		.global	VuUnlit_CodeEnd
+
+VuUnlit_CodeStart:
+
+; --- Load the per-batch constants -------------------------------------------
+		NOP							lq		VF01, 0(VI00)		; MVP column 0
+		NOP							lq		VF02, 1(VI00)		; MVP column 1
+		NOP							lq		VF03, 2(VI00)		; MVP column 2
+		NOP							lq		VF04, 3(VI00)		; MVP column 3
+		NOP							lq		VF05, 4(VI00)		; viewport scale
+		NOP							lq		VF06, 5(VI00)		; viewport offset
+		NOP							lq		VF07, 6(VI00)		; GIF tag template
+		NOP							ilw.x	VI05, 7(VI00)		; vertex count
+
+; --- Emit the GIF tag at the output base ------------------------------------
+		NOP							iaddiu	VI08, VI00, 200		; VI08 = output cursor
+		NOP							sq		VF07, 0(VI08)		; store the tag
+		NOP							iaddiu	VI08, VI08, 1		; past the tag
+
+; --- Vertex loop ------------------------------------------------------------
+		NOP							iaddiu	VI06, VI00, 8		; VI06 = input cursor
+		NOP							iaddiu	VI07, VI00, 0		; VI07 = loop counter
+
+vertex_loop:
+		NOP							lq		VF10, 0(VI06)		; position (x,y,z,1)
+		NOP							lq		VF11, 1(VI06)		; colour   (r,g,b,a)
+
+; Transform: VF12 = MVP * VF10, built as a sum of scaled columns.
+		MULAx	ACC, VF01, VF10x	NOP
+		MADDAy	ACC, VF02, VF10y	NOP
+		MADDAz	ACC, VF03, VF10z	NOP
+		MADDw	VF12, VF04, VF10w	NOP
+
+; Perspective divide: q = 1/w, then xyz *= q.
+		NOP							DIV		Q, VF00w, VF12w
+		NOP							WAITQ
+		MULq	VF12, VF12, Q		NOP
+
+; Screen mapping: xyz = xyz * scale + offset.
+;
+; Done as an explicit MUL then ADD rather than MULA/MADD. The tempting
+; `MULA ACC, VF12, VF05 / MADD VF13, VF00, VF06` is WRONG: MADD computes
+; ACC + (VF00 * VF06), and VF00 is the hardwired constant (0,0,0,1), so it
+; multiplies the offset by zero in x, y and z and silently drops it. That
+; loses the +2048 GS origin bias, which sends every vertex far off-screen and
+; renders as a full-screen smear rather than as nothing.
+		MUL		VF13, VF12, VF05	NOP
+		ADD		VF13, VF13, VF06	NOP
+
+; The GS wants integers: FTOI4 puts x and y in 12.4 fixed point, which is
+; exactly the format XYZ2 expects. Z is handled by the same conversion because
+; the viewport scale above already mapped it into the 24-bit range.
+		FTOI4	VF14, VF13			NOP
+
+; Colour is 0..255 float in, integer out. FTOI0 = no fractional bits.
+		FTOI0	VF15, VF11			NOP
+
+; Store this vertex: RGBAQ then XYZ2, matching the register list in the tag.
+		NOP							sq		VF15, 0(VI08)
+		NOP							sq		VF14, 1(VI08)
+
+		NOP							iaddiu	VI08, VI08, 2		; advance output
+		NOP							iaddiu	VI06, VI06, 2		; advance input
+		NOP							iaddiu	VI07, VI07, 1		; ++i
+		NOP							ibne	VI07, VI05, vertex_loop
+
+; --- Kick the finished packet ------------------------------------------------
+		NOP							iaddiu	VI09, VI00, 200
+		NOP							xgkick	VI09
+
+		NOP[E]						NOP
+		NOP							NOP
+		.align 4
+VuUnlit_CodeEnd:
