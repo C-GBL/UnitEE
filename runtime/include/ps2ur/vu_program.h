@@ -44,6 +44,25 @@ public:
     // with a pre-built DMA chain.
     bool unpack_data(const void* qwords, uint32_t count, uint32_t dest_qword);
 
+    // Preallocates a reusable packet for draw_batch(). Without this, every
+    // batch would allocate and free a packet, and at a few hundred batches a
+    // frame that allocation cost dominates the measurement it is supposed to
+    // be taking.
+    bool init_batching(uint32_t max_data_qwords);
+    void shutdown_batching();
+
+    // Unpacks a batch into VU data memory and runs the program, in ONE DMA
+    // transfer. This is the per-batch draw call: at M4 task 5 it becomes a
+    // reference into a pre-built chain rather than a fresh unpack, but the
+    // shape of the call does not change.
+    bool draw_batch(const void* qwords, uint32_t count, uint32_t dest_qword = 0,
+                    uint32_t entry_offset = 0);
+
+    // Blocks until the last draw_batch has been consumed. Call once per frame,
+    // not once per batch -- waiting per batch serialises the EE against VU1
+    // and throws away most of the point of the VU.
+    void wait_batches();
+
     // Instruction slots the blob occupies.
     uint32_t size_instructions() const { return m_size_instructions; }
     uint32_t vu_address() const { return m_vu_address; }
@@ -55,6 +74,8 @@ private:
     uint32_t m_vu_address = 0;
     uint32_t m_size_instructions = 0;
     bool m_uploaded = false;
+    void* m_batch_packet = nullptr; // packet2_t*, opaque here
+    uint32_t m_batch_capacity = 0;
 };
 
 // Waits for VU1 to finish the program it is running. Blocking; the shipping

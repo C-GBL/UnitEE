@@ -119,6 +119,66 @@ bool MicroProgram::start(uint32_t entry_offset)
     return true;
 }
 
+
+bool MicroProgram::init_batching(uint32_t max_data_qwords)
+{
+    shutdown_batching();
+    // Header room for the VIF codes around the payload: an UNPACK open/close
+    // pair and the MSCAL, plus the chain end tag.
+    const uint32_t qwords = max_data_qwords + 16u;
+    packet2_t* p = packet2_create(static_cast<u16>(qwords), P2_TYPE_NORMAL,
+                                  P2_MODE_CHAIN, 1);
+    if (p == nullptr) {
+        log(LogLevel::Error, "vu: could not allocate a %u-qword batch packet", u(qwords));
+        return false;
+    }
+    m_batch_packet = p;
+    m_batch_capacity = max_data_qwords;
+    return true;
+}
+
+void MicroProgram::shutdown_batching()
+{
+    if (m_batch_packet != nullptr) {
+        packet2_free(static_cast<packet2_t*>(m_batch_packet));
+        m_batch_packet = nullptr;
+        m_batch_capacity = 0;
+    }
+}
+
+bool MicroProgram::draw_batch(const void* qwords, uint32_t count, uint32_t dest_qword,
+                              uint32_t entry_offset)
+{
+    if (!m_uploaded || m_batch_packet == nullptr || qwords == nullptr || count == 0) {
+        return false;
+    }
+    if (count > m_batch_capacity || dest_qword + count > kDataMemQwords) {
+        log(LogLevel::Error, "vu: batch of %u qwords exceeds capacity", u(count));
+        return false;
+    }
+
+    packet2_t* p = static_cast<packet2_t*>(m_batch_packet);
+    packet2_reset(p, 0);
+
+    packet2_utils_vu_open_unpack(p, dest_qword, 0);
+    packet2_add_data(p, const_cast<void*>(qwords), count);
+    packet2_utils_vu_close_unpack(p);
+    packet2_utils_vu_add_start_program(p, m_vu_address + entry_offset);
+    packet2_utils_vu_add_end_tag(p);
+
+    // Wait for the PREVIOUS transfer before overwriting the packet, not after
+    // this one: that keeps the EE building batch N+1 while the DMAC walks N.
+    dma_channel_wait(DMA_CHANNEL_VIF1, 0);
+    dma_channel_send_packet2(p, DMA_CHANNEL_VIF1, 1);
+    return true;
+}
+
+void MicroProgram::wait_batches()
+{
+    dma_channel_wait(DMA_CHANNEL_VIF1, 0);
+    wait_idle();
+}
+
 void wait_idle()
 {
     // VU1 busy is VIF1_STAT bit 2 (VEW: waiting on the VU). Bounded so a
@@ -158,6 +218,29 @@ bool MicroProgram::start(uint32_t entry_offset)
     (void)entry_offset;
     return m_uploaded;
 }
+
+bool MicroProgram::init_batching(uint32_t max_data_qwords)
+{
+    m_batch_capacity = max_data_qwords;
+    return true;
+}
+
+void MicroProgram::shutdown_batching()
+{
+    m_batch_capacity = 0;
+}
+
+bool MicroProgram::draw_batch(const void* qwords, uint32_t count, uint32_t dest_qword,
+                              uint32_t entry_offset)
+{
+    (void)entry_offset;
+    if (qwords == nullptr || count == 0) {
+        return false;
+    }
+    return count <= m_batch_capacity && dest_qword + count <= kDataMemQwords;
+}
+
+void MicroProgram::wait_batches() {}
 
 void wait_idle() {}
 
