@@ -72,6 +72,26 @@ public:
     // GIF data (texture uploads, the debug overlay).
     GsPacket& packet() { return m_packet; }
 
+    // Reads a rectangle of the buffer that was most recently drawn into, back
+    // out of VRAM into main memory (plan section 14.3, M2 acceptance).
+    //
+    // This is the GS local->host path: the transfer is set up over GIF, then
+    // VIF1 is reversed and the pixels are DMA'd back. It is slow and stalls
+    // the whole pipeline -- it exists for golden-image tests and debugging,
+    // never for per-frame work.
+    //
+    // 'dest' must be 16-byte aligned with room for w*h*4 bytes (PSMCT32 only
+    // for now). Must be called after end_frame(). Returns false if the request
+    // is malformed or the transfer times out.
+    bool read_framebuffer(void* dest, uint32_t x, uint32_t y, uint32_t w, uint32_t h);
+
+    // CRC32 of a 32x32 tile grid over a PSMCT32 image, per plan section 14.3.
+    // Tile granularity makes a golden-image failure localisable ("the
+    // bottom-right changed") instead of a single opaque mismatch.
+    static uint32_t tile_crc32(const void* pixels, uint32_t w, uint32_t h,
+                               uint32_t tile_x, uint32_t tile_y,
+                               uint32_t tile_size = 32);
+
     uint32_t frame_index() const { return m_frame_index; }
 
     // Logs each step of packet submission. Bring-up aid: when the GS path

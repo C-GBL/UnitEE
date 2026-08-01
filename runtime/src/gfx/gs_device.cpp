@@ -288,6 +288,132 @@ void GsDevice::end_frame()
     m_frame_index++;
 }
 
+#if defined(PS2UR_PLATFORM_PS2)
+namespace {
+
+// EE hardware registers used for the reverse (GS -> host) transfer. ps2sdk
+// provides no helper for this direction, so we drive VIF1 and DMA channel 1
+// directly.
+volatile uint32_t* const kVif1Stat = reinterpret_cast<volatile uint32_t*>(0x10003C00);
+volatile uint32_t* const kD1Chcr = reinterpret_cast<volatile uint32_t*>(0x10009000);
+volatile uint32_t* const kD1Madr = reinterpret_cast<volatile uint32_t*>(0x10009010);
+volatile uint32_t* const kD1Qwc = reinterpret_cast<volatile uint32_t*>(0x10009020);
+
+constexpr uint32_t kVif1StatFdr = 1u << 23; // VIF1 direction: 1 = GS -> memory
+constexpr uint32_t kChcrStr = 1u << 8;      // channel start/busy
+
+} // namespace
+#endif
+
+bool GsDevice::read_framebuffer(void* dest, uint32_t x, uint32_t y,
+                                uint32_t w, uint32_t h)
+{
+    if (!m_initialized || dest == nullptr || w == 0 || h == 0) {
+        return false;
+    }
+    if (m_config.colour_format != PixelFormat::PSMCT32) {
+        log(LogLevel::Error, "gfx: read_framebuffer only supports PSMCT32");
+        return false;
+    }
+    if ((reinterpret_cast<uintptr_t>(dest) & 15u) != 0) {
+        log(LogLevel::Error, "gfx: read_framebuffer destination must be qword aligned");
+        return false;
+    }
+
+#if defined(PS2UR_PLATFORM_PS2)
+    // end_frame() has already advanced the frame index, so the buffer we just
+    // finished drawing is the one *behind* the current draw target.
+    const uint32_t source_page = display_buffer_page();
+
+    // 1. Describe the transfer over GIF. TRXDIR is written last: it is what
+    //    actually arms the transfer, so every other register must be valid
+    //    before it lands.
+    m_packet.reset();
+    m_packet.begin_packed_ad(4);
+    m_packet.add_ad(GsReg::BITBLTBUF,
+                    gs_bitbltbuf(source_page * kBlocksPerPage,
+                                 buffer_width_units(m_config.width),
+                                 m_config.colour_format, 0, 0, PixelFormat::PSMCT32));
+    m_packet.add_ad(GsReg::TRXPOS, gs_trxpos(x, y, 0, 0, 0));
+    m_packet.add_ad(GsReg::TRXREG, gs_trxreg(w, h));
+    m_packet.add_ad(GsReg::TRXDIR, 1); // 1 = local -> host
+    m_packet.set_last_tag_eop();
+    submit_and_wait();
+    m_packet.reset();
+
+    // 2. Reverse VIF1 so the FIFO drains from the GS into memory.
+    *kVif1Stat = kVif1StatFdr;
+
+    const uint32_t qwords = (w * h * 4u) / 16u;
+    FlushCache(0); // ensure no dirty lines overlap the destination
+
+    *kD1Qwc = qwords;
+    *kD1Madr = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(dest));
+    *kD1Chcr = kChcrStr; // STR=1, DIR=0 (to memory), MOD=0 (normal)
+
+    // 3. Wait for the channel to go idle. Bounded so a wedged GS cannot hang
+    //    the whole test run -- an unbounded spin here is how a golden-image
+    //    job turns into a stuck CI machine.
+    uint32_t spins = 0;
+    const uint32_t kMaxSpins = 100000000u;
+    while ((*kD1Chcr & kChcrStr) != 0) {
+        if (++spins > kMaxSpins) {
+            *kVif1Stat = 0;
+            log(LogLevel::Error, "gfx: read_framebuffer timed out (%u qwords)", u(qwords));
+            return false;
+        }
+    }
+
+    // 4. Restore forward direction, and invalidate so the EE sees what the
+    //    DMAC wrote rather than stale cached lines.
+    *kVif1Stat = 0;
+    FlushCache(0);
+    return true;
+#else
+    (void)x;
+    (void)y;
+    (void)w;
+    (void)h;
+    return false; // host build has no GS to read from
+#endif
+}
+
+uint32_t GsDevice::tile_crc32(const void* pixels, uint32_t w, uint32_t h,
+                              uint32_t tile_x, uint32_t tile_y, uint32_t tile_size)
+{
+    // Standard CRC-32 (reflected, polynomial 0xEDB88320), computed on the fly
+    // so there is no 1 KB table sitting in a 32 MB budget.
+    if (pixels == nullptr) {
+        return 0;
+    }
+    const uint8_t* base = static_cast<const uint8_t*>(pixels);
+    uint32_t crc = 0xFFFFFFFFu;
+
+    const uint32_t x0 = tile_x * tile_size;
+    const uint32_t y0 = tile_y * tile_size;
+    if (x0 >= w || y0 >= h) {
+        return 0;
+    }
+    const uint32_t x1 = (x0 + tile_size < w) ? x0 + tile_size : w;
+    const uint32_t y1 = (y0 + tile_size < h) ? y0 + tile_size : h;
+
+    for (uint32_t py = y0; py < y1; ++py) {
+        for (uint32_t px = x0; px < x1; ++px) {
+            const uint8_t* p = base + (py * w + px) * 4u;
+            // Only RGB participates: the GS leaves alpha in the framebuffer
+            // dependent on blend state, which would make goldens brittle.
+            for (uint32_t c = 0; c < 3u; ++c) {
+                crc ^= p[c];
+                for (int bit = 0; bit < 8; ++bit) {
+                    const uint32_t mask = static_cast<uint32_t>(-(static_cast<int32_t>(crc) & 1));
+                    crc = (crc >> 1) ^ (0xEDB88320u & mask);
+                }
+            }
+        }
+    }
+    return ~crc;
+}
+
 void GsDevice::shutdown()
 {
     if (!m_initialized) {
