@@ -20,7 +20,9 @@
 // of main(): returning hands control back to the BIOS, which shows the
 // memory-card browser (verify-log M0).
 #include <ps2ur/alloc.h>
+#include <ps2ur/audio.h>
 #include <ps2ur/bridge.h>
+#include <ps2ur/input.h>
 #include <ps2ur/dma_chain.h>
 #include <ps2ur/gs_batch.h>
 #include <ps2ur/gs_device.h>
@@ -197,6 +199,18 @@ int main(void)
     }
     bridge::bind_world(&world);
     phys::init();
+
+    // Platform services. input::init() brings up sio2man/padman and opens
+    // both ports; without it every button reads false forever and
+    // Input.GetButtonDown never fires -- the managed side polls happily and
+    // gets nothing, which looks like a mapping bug rather than a missing
+    // init. Audio is optional: a game with no sound should still boot.
+    if (!input::init()) {
+        printf("[game] pads failed to initialise; input will not work.\n");
+    }
+    if (!audio::init()) {
+        printf("[game] audio failed to initialise; the game will run silent.\n");
+    }
 
     // --- Managed runtime ----------------------------------------------------
     il2cpp_set_data_dir("host:");

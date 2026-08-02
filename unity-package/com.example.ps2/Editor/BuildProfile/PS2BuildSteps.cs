@@ -820,6 +820,28 @@ namespace Ps2.Editor
                 File.Copy(content, Path.Combine(ctx.OutputDirectory, name), true);
             }
 
+            // IOP modules. The runtime tries host:, mass: and cdrom0: before
+            // falling back to a blob embedded in the ELF, and the fallback
+            // does not reliably START every module (verify-log M10:
+            // SifExecModuleBuffer silently fails for some). Shipping the real
+            // files means the first, reliable path is the one taken -- the
+            // symptom otherwise is a boot that stops dead after
+            // "loadmodule: id -203" with no error.
+            string irxDir = Path.Combine(ctx.Toolchain.Ps2SdkDir, "iop/irx");
+            string[] modules =
+            {
+                "freesio2.irx", "freepad.irx", "freemcserv.irx", "freemcman.irx",
+                "audsrv.irx", "libsd.irx", "iomanX.irx", "fileXio.irx",
+            };
+            foreach (string module in modules)
+            {
+                string source = Path.Combine(irxDir, module);
+                if (!File.Exists(source))
+                    continue;
+                File.Copy(source, Path.Combine(stage, module), true);
+                File.Copy(source, Path.Combine(ctx.OutputDirectory, module), true);
+            }
+
             // il2cpp's global-metadata.dat, which the managed runtime opens
             // through the same host: root. Without it il2cpp_init fails after
             // the scene has already loaded, which is a confusing place to
