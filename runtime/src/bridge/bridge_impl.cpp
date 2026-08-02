@@ -100,7 +100,7 @@ extern "C" void ps2ur_tf_set_local_position(int32_t handle, float x, float y, fl
 {
     const int32_t index = resolve(handle);
     if (index >= 0) {
-        g_world->entity_mut(static_cast<uint32_t>(index)).pos = ps2ur::Vec3{x, y, z};
+        g_world->set_local_position(index, ps2ur::Vec3{x, y, z});
     }
 }
 
@@ -119,7 +119,7 @@ extern "C" void ps2ur_tf_set_local_rotation(int32_t handle, float x, float y, fl
 {
     const int32_t index = resolve(handle);
     if (index >= 0) {
-        g_world->entity_mut(static_cast<uint32_t>(index)).rot = ps2ur::Quat{x, y, z, w};
+        g_world->set_local_rotation(index, ps2ur::Quat{x, y, z, w});
     }
 }
 
@@ -138,7 +138,7 @@ extern "C" void ps2ur_tf_set_local_scale(int32_t handle, float x, float y, float
 {
     const int32_t index = resolve(handle);
     if (index >= 0) {
-        g_world->entity_mut(static_cast<uint32_t>(index)).scale = ps2ur::Vec3{x, y, z};
+        g_world->set_local_scale(index, ps2ur::Vec3{x, y, z});
     }
 }
 
@@ -164,7 +164,7 @@ extern "C" void ps2ur_tf_set_parent(int32_t handle, int32_t parentHandle)
     if (parent == index) {
         return; // self-parenting would cycle; managed side never asks for it
     }
-    g_world->entity_mut(static_cast<uint32_t>(index)).parent = parent;
+    g_world->set_parent(index, parent);
 }
 
 extern "C" int32_t ps2ur_tf_child_count(int32_t handle)

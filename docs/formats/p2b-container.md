@@ -95,15 +95,28 @@ u8  indices[width*height]   // RASTER order -- the GS transfer engine
                             // swizzles in hardware (verify-log 2026-08-01)
 ```
 
-## MATL section
+## MATL section (v2 records, M8 -- BREAKING vs the 24-byte v1 record)
 
 ```
-Material[count] {
-    u32 kind                // 0 unlit, 1 unlit-textured, 2 vertex-lit
+Material[count] {           // 48 bytes each; reader rejects other strides
+    u32 kind                // 0 unlit, 1 unlit-textured, 2 vertex-lit,
+                            // 3 lit-alpha, 4 cutout, 5 additive,
+                            // 6 vertex-lit-fog (section 7.3 kinds)
     u32 texture_index       // into TEX order; 0xFFFFFFFF if none
-    f32 tint[4]             // reserved, (1,1,1,1) in v1
+    f32 tint[4]             // reserved, (1,1,1,1)
+    u64 gs_test             // TEST_1 register value; 0 = device default
+    u64 gs_alpha            // ALPHA_1 register value; used when blend set
+    u32 flags               // bit0 zwrite, bit1 blend, bit2 transparent-pass
+    u32 pad
 }
 ```
+
+The GS state is DATA (M8 task 5): the runtime memcpys TEST/ALPHA into the
+command stream between chain kicks. Recorded deviation from the plan's
+"register blocks precomputed at export": ZBUF carries a VRAM base pointer
+only the runtime knows, so Z-write travels as the flag bit and the runtime
+composes ZBUF itself. PRIM bits that belong to the material (ABE for blend
+kinds, FGE for fog kinds) are baked into each batch's GIF tag in MESH.
 
 ## SCEN section (10.4)
 
@@ -128,7 +141,8 @@ Entity[entity_count] {
                             // plan's struct leaves this implicit)
 }
 ComponentRef[component_count] {
-    u16 type_id             // 1 MeshRenderer, 2 Camera, 3 DirectionalLight
+    u16 type_id             // 1 MeshRenderer, 2 Camera, 3 DirectionalLight,
+                            // 4 Script (M7)
     u16 pad
     u32 data_offset         // from the start of this section
 }
@@ -138,9 +152,26 @@ Component payloads:
 
 ```
 MeshRenderer     { u32 mesh_index; u32 material_index }
-Camera           { f32 fov_radians; f32 znear; f32 zfar }
+Camera           { f32 fov_radians; f32 znear; f32 zfar }        // 12-byte v1
+Camera (M8, 64B) { ...v1...; u32 orthographic; f32 ortho_size;
+                   f32 viewport[4];          // x,y,w,h in [0,1]
+                   u32 clear_flags;          // 1 colour+depth, 2 depth only
+                   u32 clear_rgb;            // r | g<<8 | b<<16
+                   u32 layer_mask;
+                   u32 fog_enabled; u32 fog_rgb; f32 fog_near; f32 fog_far }
 DirectionalLight { f32 dir[3]; f32 colour[3] }   // dir points FROM the light
+Script (M7)      { u32 scrp_offset }             // into the SCRP section
 ```
+
+Readers accept the 12-byte camera and default the M8 tail (old runtimes
+tolerate new exporters and vice versa).
+
+## SCRP section (M7)
+
+Packed NUL-terminated managed type names, ASCII, in the form
+`"Full.Type.Name, AssemblyName"`. Script component payloads reference byte
+offsets into this section; the reader must prove the NUL lies inside the
+section before keeping a pointer.
 
 ## Reader obligations
 

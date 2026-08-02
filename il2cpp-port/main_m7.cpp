@@ -305,10 +305,12 @@ int main(void)
                 set_float4(g_constants[9], obj.x, 0, 0, 0);
                 set_float4(g_constants[10], obj.y, 0, 0, 0);
                 set_float4(g_constants[11], obj.z, 0, 0, 0);
-                set_float4(g_constants[12], lc.x * 255.0f, 0, 0, 0);
-                set_float4(g_constants[13], lc.y * 255.0f, 0, 0, 0);
-                set_float4(g_constants[14], lc.z * 255.0f, 0, 0, 0);
-                set_float4(g_constants[15], 40.0f, 40.0f, 40.0f, 0);
+                // Scale discipline (fixed at M8, verify-log): vertex colours
+                // are 0..255, the light factor must be ~0..1.
+                set_float4(g_constants[12], lc.x, 0, 0, 0);
+                set_float4(g_constants[13], lc.y, 0, 0, 0);
+                set_float4(g_constants[14], lc.z, 0, 0, 0);
+                set_float4(g_constants[15], 0.157f, 0.157f, 0.157f, 0);
                 set_float4(g_constants[16], 255.0f, 255.0f, 255.0f, 128.0f);
                 ok = chain.add_constants(g_constants, 17, 0);
             } else {

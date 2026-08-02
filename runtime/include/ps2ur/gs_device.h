@@ -109,6 +109,17 @@ public:
                              PixelFormat fmt, const VramAlloc& clut,
                              uint32_t clut_entries);
 
+    // Material state block (M8 task 5): appends TEST_1 (the precomputed
+    // value from the .p2b material, or the device default when 0), ZBUF_1
+    // with the requested Z-write mask (the base pointer is device-owned,
+    // which is why it cannot be precomputed at export), and ALPHA_1 when
+    // blending. Append to the frame packet or flush between chain kicks.
+    void set_material_state(uint64_t test, uint64_t alpha, bool blend, bool zwrite);
+
+    // Fog colour (M8 task 7). Per-vertex F selects between vertex colour
+    // (F=255) and this colour (F=0); PRIM.FGE gates it per batch.
+    void set_fog_colour(uint8_t r, uint8_t g, uint8_t b);
+
     // Textured triangles. UVs are in 12.4 fixed point (see gs_packed_uv), so
     // texel (1,1) is u=16, v=16.
     struct TexVertex {

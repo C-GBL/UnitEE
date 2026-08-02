@@ -15,10 +15,22 @@ namespace Ps2.Editor
         public const int MaxTexVertsPerBatch = 78;
         public const int MaxLitVertsPerBatch = 78;
 
-        // Material kinds, matching the runtime's p2b_scene.h.
+        // Material kinds, matching the runtime's p2b_scene.h (plan 7.3).
         public const uint KindUnlit = 0;
         public const uint KindUnlitTextured = 1;
         public const uint KindVertexLit = 2;
+        public const uint KindLitAlpha = 3; // lit layout + blend, no Z write
+        public const uint KindCutout = 4;   // lit layout + alpha test
+        public const uint KindAdditive = 5; // unlit layout + additive blend
+        public const uint KindVertexLitFog = 6; // lit layout + per-vertex F (M8)
+
+        // Vertex layout selectors: the new kinds reuse the M4/M5 layouts.
+        public static bool UsesLitLayout(uint kind) =>
+            kind == KindVertexLit || kind == KindLitAlpha || kind == KindCutout ||
+            kind == KindVertexLitFog;
+        public static bool UsesTexLayout(uint kind) => kind == KindUnlitTextured;
+        public static bool UsesBlend(uint kind) =>
+            kind == KindLitAlpha || kind == KindAdditive;
 
         public static byte[] Export(Mesh mesh, uint kind, uint materialIndex,
                                     Color32 fallbackColour)
@@ -30,11 +42,11 @@ namespace Ps2.Editor
             int[] indices = mesh.triangles; // all submeshes, deindexed below
 
             int triVerts = indices.Length;
-            int maxPerBatch = kind == KindUnlit ? MaxUnlitVertsPerBatch
-                                                : kind == KindUnlitTextured
-                                                    ? MaxTexVertsPerBatch
-                                                    : MaxLitVertsPerBatch;
-            int qwordsPerVert = kind == KindUnlit ? 2 : 3;
+            int maxPerBatch = UsesLitLayout(kind) ? MaxLitVertsPerBatch
+                                                  : UsesTexLayout(kind)
+                                                      ? MaxTexVertsPerBatch
+                                                      : MaxUnlitVertsPerBatch;
+            int qwordsPerVert = UsesLitLayout(kind) || UsesTexLayout(kind) ? 3 : 2;
             int batchCount = (triVerts + maxPerBatch - 1) / maxPerBatch;
 
             // Object-space bounding sphere from Unity's own bounds.
@@ -68,7 +80,7 @@ namespace Ps2.Editor
                 descs.U32((uint)blobCursorQw);
                 descs.U32((uint)vertQw);
                 descs.U32((uint)n);
-                descs.U32(kind == KindVertexLit ? 18u : 10u);
+                descs.U32(UsesLitLayout(kind) ? 18u : 10u);
 
                 // Blob: tag, count, vertices.
                 WriteGifTag(blobs, (uint)n, kind);
@@ -85,7 +97,7 @@ namespace Ps2.Editor
                     blobs.F32(p.z);
                     blobs.F32(1.0f);
 
-                    if (kind == KindUnlitTextured)
+                    if (UsesTexLayout(kind))
                     {
                         Vector2 uv = uvs.Length > src ? uvs[src] : Vector2.zero;
                         blobs.F32(uv.x);
@@ -94,7 +106,7 @@ namespace Ps2.Editor
                         blobs.F32(1.0f); // becomes Q after the 1/w multiply
                         blobs.F32(0.0f);
                     }
-                    else if (kind == KindVertexLit)
+                    else if (UsesLitLayout(kind))
                     {
                         Vector3 nrm = normals.Length > src ? normals[src]
                                                            : Vector3.up;
@@ -108,7 +120,9 @@ namespace Ps2.Editor
                     blobs.F32(c.r);
                     blobs.F32(c.g);
                     blobs.F32(c.b);
-                    blobs.F32(128.0f); // opaque in PS2 alpha range
+                    // PS2 alpha range: 0x80 is opaque. Blend kinds carry the
+                    // material/vertex alpha; opaque kinds pin fully opaque.
+                    blobs.F32(UsesBlend(kind) ? c.a * 128.0f / 255.0f : 128.0f);
                 }
 
                 blobCursorQw += 2 + vertQw;
@@ -125,10 +139,12 @@ namespace Ps2.Editor
         // GIF tag identical to the runtime's GsPacket.begin_packed output.
         private static void WriteGifTag(ByteBuffer b, uint nloop, uint kind)
         {
-            uint nreg = kind == KindUnlitTextured ? 3u : 2u;
-            ulong regs = kind == KindUnlitTextured
-                             ? 0x512UL  // ST, RGBAQ, XYZ2
-                             : 0x51UL;  // RGBAQ, XYZ2
+            uint nreg = UsesTexLayout(kind) || kind == KindVertexLitFog ? 3u : 2u;
+            ulong regs = kind == KindVertexLitFog
+                             ? 0x5A1UL  // RGBAQ, FOG, XYZ2
+                             : UsesTexLayout(kind)
+                                 ? 0x512UL  // ST, RGBAQ, XYZ2
+                                 : 0x51UL;  // RGBAQ, XYZ2
             ulong prim = GsPrim(kind);
             ulong lo = (nloop & 0x7FFFUL)
                        | (1UL << 15)                 // EOP
@@ -143,11 +159,21 @@ namespace Ps2.Editor
         private static ulong GsPrim(uint kind)
         {
             // prim=3 triangle | IIP gouraud | TME for textured; FST stays 0
-            // (STQ perspective-correct texturing).
+            // (STQ perspective-correct texturing). ABE rides in the PRIM for
+            // blend kinds (M8 task 5): the blend equation itself is the
+            // material's ALPHA_1 register, set between chain kicks.
             ulong prim = 3UL | (1UL << 3);
-            if (kind == KindUnlitTextured)
+            if (UsesTexLayout(kind))
             {
                 prim |= 1UL << 4;
+            }
+            if (UsesBlend(kind))
+            {
+                prim |= 1UL << 6; // ABE
+            }
+            if (kind == KindVertexLitFog)
+            {
+                prim |= 1UL << 5; // FGE: blend toward FOGCOL by per-vertex F
             }
             return prim;
         }

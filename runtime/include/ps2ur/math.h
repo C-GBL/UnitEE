@@ -20,7 +20,10 @@ struct Quat { float x, y, z, w; }; // w is the scalar part
 
 // Column-major 4x4: element (row r, column c) lives at m[c * 4 + r].
 // Transforms apply to column vectors: p' = M * p.
-struct Mat4 { float m[16]; };
+// 16-byte aligned since M8: the VU0 macro-mode multiply loads columns with
+// lqc2, which faults on unaligned addresses.
+struct alignas(16) Mat4 { float m[16]; };
+static_assert(sizeof(Mat4) == 64, "Mat4 must stay 16 floats");
 
 // ---- Vec2 ------------------------------------------------------------------
 inline Vec2 add(Vec2 a, Vec2 b)      { return Vec2{a.x + b.x, a.y + b.y}; }
@@ -65,6 +68,25 @@ Vec4 mat4_mul_vec4(const Mat4& a, Vec4 v);
 // TODO(spec missing: section 9): final GS depth-range/viewport convention may
 // swap this to a [0, 1] or fixed-point Z mapping at the VU1 stage.
 Mat4 mat4_perspective(float fovy_radians, float aspect, float znear, float zfar);
+
+// Right-handed orthographic, clip-space z in [-1, 1], symmetric about the
+// view axis: half_h is Unity's orthographicSize, half_w = half_h * aspect.
+Mat4 mat4_ortho(float half_w, float half_h, float znear, float zfar);
+
+// ---- Frustum culling (M8 task 3) -------------------------------------------
+//
+// Six planes extracted from a view-projection matrix (Gribb/Hartmann),
+// normalized, pointing INWARD: a point p is inside when dot(n, p) + d >= 0
+// for all six.
+struct FrustumPlanes {
+    Vec4 plane[6]; // xyz = normal, w = d
+};
+
+FrustumPlanes frustum_from_viewproj(const Mat4& viewproj);
+
+// True if the sphere is fully outside any plane (cull it). Conservative:
+// spheres straddling planes are kept.
+bool frustum_culls_sphere(const FrustumPlanes& f, Vec3 center, float radius);
 
 // Rotation matrix from a unit quaternion (x,y,z,w).
 Mat4 mat4_from_quat(Quat q);

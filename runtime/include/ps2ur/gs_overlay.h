@@ -47,6 +47,13 @@ public:
     // Draws text at a screen position, in pixels. Newlines advance a line.
     void draw_text(GsDevice& device, int32_t x, int32_t y, const char* text);
 
+    // Flat screen-space rectangle (M8 task 8: the uGUI Image primitive).
+    // PS2 alpha: a < 0x80 blends, 0x80 is opaque. Depth test is off, like
+    // all overlay drawing.
+    void fill_rect(GsDevice& device, int32_t x, int32_t y, int32_t w,
+                   int32_t h, uint8_t r, uint8_t g, uint8_t b,
+                   uint8_t a = 0x80);
+
     // printf-style. Output is truncated at 256 characters -- an overlay line
     // that long is already unreadable, and a fixed buffer keeps this off the
     // heap on a machine with 32 MB.

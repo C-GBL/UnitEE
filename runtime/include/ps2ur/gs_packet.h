@@ -189,6 +189,25 @@ constexpr uint64_t gs_test(bool alpha_enable, uint32_t alpha_method, uint8_t alp
            (static_cast<uint64_t>(z_enable) << 16) | (static_cast<uint64_t>(ztest) << 17);
 }
 
+// ALPHA register: blend equation Cv = ((A - B) * C >> 7) + D, where the
+// selectors are 0 = source, 1 = destination (frame), 2 = zero for A/B/D and
+// 0 = source alpha, 1 = dest alpha, 2 = FIX for C.
+// Standard alpha:  A=0 B=1 C=0 D=1  (Cs-Cd)*As + Cd
+// Additive:        A=0 B=2 C=0 D=1  Cs*As + Cd
+constexpr uint64_t gs_alpha(uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint8_t fix = 0)
+{
+    return static_cast<uint64_t>(a) | (static_cast<uint64_t>(b) << 2) |
+           (static_cast<uint64_t>(c) << 4) | (static_cast<uint64_t>(d) << 6) |
+           (static_cast<uint64_t>(fix) << 32);
+}
+
+// FOGCOL register: the colour per-vertex F blends toward (F=255 no fog).
+constexpr uint64_t gs_fogcol(uint8_t r, uint8_t g, uint8_t b)
+{
+    return static_cast<uint64_t>(r) | (static_cast<uint64_t>(g) << 8) |
+           (static_cast<uint64_t>(b) << 16);
+}
+
 constexpr uint64_t gs_bitbltbuf(uint32_t src_block, uint32_t src_width_units, PixelFormat src_fmt,
                                 uint32_t dst_block, uint32_t dst_width_units, PixelFormat dst_fmt)
 {

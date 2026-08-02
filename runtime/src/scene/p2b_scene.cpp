@@ -59,10 +59,19 @@ bool World::load(const io::P2bFile& file)
     }
 
     // --- Materials ----------------------------------------------------------
+    // MATL v2 (M8 task 5): 48-byte records -- kind u32, texture u32,
+    // colour 4xf32 (reserved), TEST_1 u64, ALPHA_1 u64, flags u32
+    // (bit0 zwrite, bit1 blend, bit2 transparent), pad u32. Breaking change
+    // from the 24-byte v1 record; the container minor version was bumped and
+    // the reader refuses ambiguity instead of guessing.
     const io::P2bSection* matl = file.find(io::kSectionMaterial);
     if (matl != nullptr) {
         const View v{matl->data, matl->size};
-        const uint32_t stride = 4u + 4u + 16u;
+        const uint32_t stride = 48u;
+        if (matl->size % stride != 0u) {
+            m_error = "MATL not v2 (48-byte records)";
+            return false;
+        }
         const uint32_t count = matl->size / stride;
         if (count > kMaxMaterials) {
             m_error = "too many materials";
@@ -70,8 +79,17 @@ bool World::load(const io::P2bFile& file)
         }
         for (uint32_t i = 0; i < count; ++i) {
             const uint32_t at = i * stride;
-            m_materials[i].kind = v.u32(at + 0);
-            m_materials[i].texture_index = v.u32(at + 4);
+            LoadedMaterial& m = m_materials[i];
+            m.kind = v.u32(at + 0);
+            m.texture_index = v.u32(at + 4);
+            m.gs_test = static_cast<uint64_t>(v.u32(at + 24)) |
+                        (static_cast<uint64_t>(v.u32(at + 28)) << 32);
+            m.gs_alpha = static_cast<uint64_t>(v.u32(at + 32)) |
+                         (static_cast<uint64_t>(v.u32(at + 36)) << 32);
+            const uint32_t flags = v.u32(at + 40);
+            m.zwrite = (flags & 1u) != 0u;
+            m.blend = (flags & 2u) != 0u;
+            m.transparent = (flags & 4u) != 0u;
         }
         m_material_count = count;
     }
@@ -184,8 +202,10 @@ bool World::load(const io::P2bFile& file)
         // Entity byte layout: parent 0, pos 4, rot 16, scale 32, name_hash 44,
         // layer 48, tag 50, flags 52, component_first 56, component_count 60.
         e.name_hash = v.u32(at + 44);
+        e.layer = v.u16(at + 48);
         e.alive = true;
         e.active = true;
+        e.dirty = true;
         const uint32_t comp_first = v.u32(at + 56);
         const uint32_t comp_n = v.u16(at + 60);
 
@@ -218,6 +238,10 @@ bool World::load(const io::P2bFile& file)
                 e.material =
                     mat_idx == 0xFFFFFFFFu ? -1 : static_cast<int32_t>(mat_idx);
             } else if (type == kComponentCamera) {
+                // 12-byte v1 payload (fov/znear/zfar) or the 64-byte M8
+                // payload; anything in between falls back to defaults for
+                // the missing tail (old runtimes tolerate new exporters and
+                // vice versa).
                 if (!v.ok(data_off, 12u)) {
                     m_error = "camera payload truncated";
                     return false;
@@ -226,6 +250,27 @@ bool World::load(const io::P2bFile& file)
                 m_camera.fov = v.f32(data_off + 0);
                 m_camera.znear = v.f32(data_off + 4);
                 m_camera.zfar = v.f32(data_off + 8);
+                if (v.ok(data_off, 64u)) {
+                    m_camera.orthographic = v.u32(data_off + 12) != 0u;
+                    m_camera.ortho_size = v.f32(data_off + 16);
+                    m_camera.viewport[0] = v.f32(data_off + 20);
+                    m_camera.viewport[1] = v.f32(data_off + 24);
+                    m_camera.viewport[2] = v.f32(data_off + 28);
+                    m_camera.viewport[3] = v.f32(data_off + 32);
+                    m_camera.clear_flags = v.u32(data_off + 36);
+                    const uint32_t cc = v.u32(data_off + 40);
+                    m_camera.clear_r = static_cast<uint8_t>(cc & 0xFFu);
+                    m_camera.clear_g = static_cast<uint8_t>((cc >> 8) & 0xFFu);
+                    m_camera.clear_b = static_cast<uint8_t>((cc >> 16) & 0xFFu);
+                    m_camera.layer_mask = v.u32(data_off + 44);
+                    m_camera.fog_enabled = v.u32(data_off + 48) != 0u;
+                    const uint32_t fc = v.u32(data_off + 52);
+                    m_camera.fog_r = static_cast<uint8_t>(fc & 0xFFu);
+                    m_camera.fog_g = static_cast<uint8_t>((fc >> 8) & 0xFFu);
+                    m_camera.fog_b = static_cast<uint8_t>((fc >> 16) & 0xFFu);
+                    m_camera.fog_near = v.f32(data_off + 56);
+                    m_camera.fog_far = v.f32(data_off + 60);
+                }
             } else if (type == kComponentDirectionalLight) {
                 if (!v.ok(data_off, 24u)) {
                     m_error = "light payload truncated";
@@ -286,15 +331,18 @@ bool World::load(const io::P2bFile& file)
 
 void World::update_world_matrices()
 {
-    // File-ordered scenes resolve in the first pass (parents precede
-    // children). Runtime reparenting can create forward references, so keep
-    // passing until nothing is pending; the pass count is bounded by the
-    // deepest out-of-order chain, and a cycle (impossible via the public
-    // API) would leave 'pending' stuck rather than loop forever.
+    // Dirty tracking (M8 task 1): an entity recomputes only when its own
+    // local TRS changed or an ancestor's did. File-ordered scenes resolve in
+    // the first pass (parents precede children); runtime reparenting can
+    // create forward references, so keep passing until nothing is pending.
+    // A cycle (impossible via the public API) leaves 'pending' stuck rather
+    // than looping forever.
     bool done[kMaxEntities];
+    bool refreshed[kMaxEntities];
     uint32_t pending = 0;
     for (uint32_t i = 0; i < m_entity_count; ++i) {
         done[i] = !m_entities[i].alive;
+        refreshed[i] = false;
         if (!done[i]) {
             ++pending;
         }
@@ -305,13 +353,18 @@ void World::update_world_matrices()
             if (done[i]) {
                 continue;
             }
-            const Entity& e = m_entities[i];
+            Entity& e = m_entities[i];
             const int32_t p = e.parent;
             if (p >= 0 && !done[p]) {
                 continue;
             }
-            const Mat4 local = mat4_trs(e.pos, e.rot, e.scale);
-            m_world[i] = p < 0 ? local : mat4_mul(m_world[p], local);
+            const bool need = e.dirty || (p >= 0 && refreshed[p]);
+            if (need) {
+                const Mat4 local = mat4_trs(e.pos, e.rot, e.scale);
+                m_world[i] = p < 0 ? local : mat4_mul(m_world[p], local);
+                e.dirty = false;
+            }
+            refreshed[i] = need;
             done[i] = true;
             ++resolved_this_pass;
         }
@@ -319,6 +372,38 @@ void World::update_world_matrices()
             break; // cycle or dead parent; leave the rest stale, never hang
         }
         pending -= resolved_this_pass;
+    }
+}
+
+void World::set_local_position(int32_t index, Vec3 p)
+{
+    if (index >= 0 && index < static_cast<int32_t>(kMaxEntities)) {
+        m_entities[index].pos = p;
+        m_entities[index].dirty = true;
+    }
+}
+
+void World::set_local_rotation(int32_t index, Quat q)
+{
+    if (index >= 0 && index < static_cast<int32_t>(kMaxEntities)) {
+        m_entities[index].rot = q;
+        m_entities[index].dirty = true;
+    }
+}
+
+void World::set_local_scale(int32_t index, Vec3 s)
+{
+    if (index >= 0 && index < static_cast<int32_t>(kMaxEntities)) {
+        m_entities[index].scale = s;
+        m_entities[index].dirty = true;
+    }
+}
+
+void World::set_parent(int32_t index, int32_t parent_index)
+{
+    if (index >= 0 && index < static_cast<int32_t>(kMaxEntities)) {
+        m_entities[index].parent = parent_index;
+        m_entities[index].dirty = true;
     }
 }
 

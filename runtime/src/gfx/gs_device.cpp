@@ -390,6 +390,31 @@ void GsDevice::set_texture_indexed(const VramAlloc& tex, uint32_t w, uint32_t h,
     m_packet.add_ad(GsReg::TEXA, gs_texa(0x80, false, 0x80));
 }
 
+void GsDevice::set_material_state(uint64_t test, uint64_t alpha, bool blend, bool zwrite)
+{
+    PS2UR_ASSERT(m_initialized);
+    m_packet.begin_packed_ad(blend ? 3u : 2u);
+    if (test == 0) {
+        test = gs_test(false, 0, 0, 0, false, 0, m_config.depth_enabled,
+                       m_config.depth_enabled ? kZTestGEqual : kZTestAlways);
+    }
+    m_packet.add_ad(GsReg::TEST_1, test);
+    m_packet.add_ad(GsReg::ZBUF_1,
+                    gs_zbuf(m_config.depth_enabled ? m_depth.page : 0,
+                            m_config.depth_format,
+                            !m_config.depth_enabled || !zwrite));
+    if (blend) {
+        m_packet.add_ad(GsReg::ALPHA_1, alpha);
+    }
+}
+
+void GsDevice::set_fog_colour(uint8_t r, uint8_t g, uint8_t b)
+{
+    PS2UR_ASSERT(m_initialized);
+    m_packet.begin_packed_ad(1);
+    m_packet.add_ad(GsReg::FOGCOL, gs_fogcol(r, g, b));
+}
+
 void GsDevice::draw_textured_triangles(const TexVertex* vertices, uint32_t count)
 {
     PS2UR_ASSERT(m_initialized);

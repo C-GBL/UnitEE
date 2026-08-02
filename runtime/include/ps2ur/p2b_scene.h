@@ -1,9 +1,9 @@
 // Scene/mesh/material views over a parsed .p2b (plan section 10.4 + M5
-// task 5: "SceneLoader that instantiates the entity table"), extended at M7
-// with the runtime object model (plan section 9 M7 task 3): generation-
-// checked entity handles, runtime create/destroy/reparent, active flags and
-// script component references. This is the native truth the managed shim's
-// GameObject/Transform handles point at (ADR-002).
+// task 5), extended at M7 with the runtime object model (generation-checked
+// handles, create/destroy/reparent, script components) and at M8 with the
+// scene-graph machinery (dirty-tracked world matrices, layers, extended
+// cameras, materials-as-data). This is the native truth the managed shim's
+// GameObject/Transform handles point at (ADR-002) and the renderer's input.
 //
 // Still zero-copy where the data allows it: batch payloads are referenced in
 // place as BatchBlocks; entity records are unpacked into SoA-ish fixed arrays
@@ -21,8 +21,8 @@
 namespace ps2ur {
 namespace scene {
 
-inline constexpr uint32_t kMaxEntities = 256;
-inline constexpr uint32_t kMaxMeshes = 64;
+inline constexpr uint32_t kMaxEntities = 640;
+inline constexpr uint32_t kMaxMeshes = 96;
 inline constexpr uint32_t kMaxMaterials = 32;
 inline constexpr uint32_t kMaxBatchesPerMesh = 32;
 inline constexpr uint32_t kMaxScripts = 64;
@@ -32,9 +32,14 @@ inline constexpr uint16_t kComponentCamera = 2;
 inline constexpr uint16_t kComponentDirectionalLight = 3;
 inline constexpr uint16_t kComponentScript = 4;
 
+// Material kinds (plan section 7.3). The VALUE is the sort-key field too.
 inline constexpr uint32_t kMaterialUnlit = 0;
 inline constexpr uint32_t kMaterialUnlitTextured = 1;
 inline constexpr uint32_t kMaterialVertexLit = 2;
+inline constexpr uint32_t kMaterialLitAlpha = 3;  // transparent pass
+inline constexpr uint32_t kMaterialCutout = 4;    // alpha test, Z write on
+inline constexpr uint32_t kMaterialAdditive = 5;  // transparent pass
+inline constexpr uint32_t kMaterialVertexLitFog = 6; // lit + per-vertex F (M8 task 7)
 
 struct LoadedMesh {
     uint32_t material_index = 0;
@@ -44,9 +49,19 @@ struct LoadedMesh {
     float bounds_radius = 0;
 };
 
+// M8 task 5: the GS state for a material is DATA precomputed at export --
+// TEST and ALPHA register values are copied into the command stream, not
+// derived from branching logic. ZBUF carries a VRAM pointer only the runtime
+// knows, so only the Z-write MASK travels as a flag (recorded deviation in
+// docs/formats/p2b-container.md).
 struct LoadedMaterial {
     uint32_t kind = kMaterialUnlit;
     uint32_t texture_index = 0xFFFFFFFFu;
+    uint64_t gs_test = 0;  // TEST_1 value
+    uint64_t gs_alpha = 0; // ALPHA_1 value; meaningful when blend is set
+    bool blend = false;    // write ALPHA_1 + PRIM carries ABE (set at export)
+    bool zwrite = true;
+    bool transparent = false; // render pass selection (back-to-front, no Z)
 };
 
 struct Entity {
@@ -57,15 +72,27 @@ struct Entity {
     int32_t mesh = -1;     // LoadedMesh index, or -1
     int32_t material = -1; // override; -1 = mesh's own
     uint32_t name_hash = 0;
+    uint16_t layer = 0;    // Unity layer index 0..31 (camera culling mask)
     bool alive = false;
     bool active = true;    // activeSelf; activeInHierarchy = entity_visible()
+    bool dirty = true;     // local TRS or ancestry changed since last pass
 };
 
 struct Camera {
     int32_t entity = -1;
-    float fov = 1.0472f;
+    float fov = 1.0472f;   // vertical, radians (perspective)
     float znear = 0.5f;
     float zfar = 100.0f;
+    bool orthographic = false;
+    float ortho_size = 5.0f;      // half height, world units (Unity semantics)
+    float viewport[4] = {0, 0, 1, 1}; // x, y, w, h in [0,1]
+    uint32_t clear_flags = 1;     // 1 = solid colour + depth, 2 = depth only
+    uint8_t clear_r = 24, clear_g = 28, clear_b = 44;
+    uint32_t layer_mask = 0xFFFFFFFFu;
+    bool fog_enabled = false;
+    uint8_t fog_r = 128, fog_g = 128, fog_b = 128;
+    float fog_near = 10.0f;
+    float fog_far = 80.0f;
 };
 
 struct DirectionalLight {
@@ -90,15 +117,23 @@ public:
     bool load(const io::P2bFile& file);
     const char* error() const { return m_error; }
 
-    // Resolves parent-before-child in one pass for file-ordered scenes and
-    // iterates until fixed point after runtime reparenting. Dead entities
-    // are skipped.
+    // Recomputes world matrices for entities whose local TRS or ancestry
+    // changed (dirty tracking, M8 task 1); resolves parent-before-child in
+    // one pass for file-ordered scenes and iterates to fixed point after
+    // runtime reparenting. Dead entities are skipped. Clears dirty flags.
     void update_world_matrices();
 
     uint32_t entity_count() const { return m_entity_count; }
     const Entity& entity(uint32_t i) const { return m_entities[i]; }
     Entity& entity_mut(uint32_t i) { return m_entities[i]; }
     const Mat4& world_matrix(uint32_t i) const { return m_world[i]; }
+
+    // Mutators used by the bridge: mark the dirty flag so the matrix pass
+    // touches only what moved. (entity_mut bypasses tracking; tests only.)
+    void set_local_position(int32_t index, Vec3 p);
+    void set_local_rotation(int32_t index, Quat q);
+    void set_local_scale(int32_t index, Vec3 s);
+    void set_parent(int32_t index, int32_t parent_index);
 
     // ---- M7 object model: handles + lifetime (ADR-002) -------------------
     //
@@ -128,6 +163,7 @@ public:
 
     bool has_camera() const { return m_camera.entity >= 0; }
     const Camera& camera() const { return m_camera; }
+    Camera& camera_mut() { return m_camera; }
     bool has_light() const { return m_light.entity >= 0; }
     const DirectionalLight& light() const { return m_light; }
 

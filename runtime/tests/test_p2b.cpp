@@ -96,7 +96,8 @@ Builder minimal_scene()
 {
     Builder b;
 
-    // MATL: one unlit material.
+    // MATL v2 (48-byte record, M8): kind, texture, colour, TEST u64,
+    // ALPHA u64, flags (zwrite), pad.
     {
         std::vector<uint8_t> p;
         Builder::put_u32(p, scene::kMaterialUnlit);
@@ -104,6 +105,12 @@ Builder minimal_scene()
         for (int i = 0; i < 4; ++i) {
             Builder::put_f32(p, 1.0f);
         }
+        Builder::put_u32(p, 0); // TEST lo (0 = device default)
+        Builder::put_u32(p, 0); // TEST hi
+        Builder::put_u32(p, 0); // ALPHA lo
+        Builder::put_u32(p, 0); // ALPHA hi
+        Builder::put_u32(p, 1); // flags: zwrite
+        Builder::put_u32(p, 0); // pad
         b.sections.push_back({kSectionMaterial, p});
     }
 

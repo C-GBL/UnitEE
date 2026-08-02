@@ -63,6 +63,11 @@ namespace Ps2.Editor
                 matl.F32(1);
                 matl.F32(1);
                 matl.F32(1);
+                // MATL v2 (M8 task 5): GS TEST/ALPHA precomputed as data.
+                matl.U64(GsTestFor(m.kind));
+                matl.U64(GsAlphaFor(m.kind));
+                matl.U32(MaterialFlags(m.kind));
+                matl.U32(0);
             }
             writer.AddSection(P2bWriter.SectionMaterial, matl.ToArray());
 
@@ -132,11 +137,12 @@ namespace Ps2.Editor
                 Material mat = renderer.sharedMaterial;
                 var mainTex = mat != null ? mat.mainTexture as Texture2D : null;
 
-                uint kind;
+                uint kind = ClassifyMaterial(mat, mainTex != null,
+                                             mesh.normals != null &&
+                                             mesh.normals.Length > 0);
                 uint texIndex = 0xFFFFFFFF;
-                if (mainTex != null)
+                if (kind == P2bMeshExporter.KindUnlitTextured)
                 {
-                    kind = P2bMeshExporter.KindUnlitTextured;
                     if (!textureLookup.TryGetValue(mainTex, out int ti))
                     {
                         ti = textures.Count;
@@ -144,14 +150,6 @@ namespace Ps2.Editor
                         textureLookup.Add(mainTex, ti);
                     }
                     texIndex = (uint)ti;
-                }
-                else if (mesh.normals != null && mesh.normals.Length > 0)
-                {
-                    kind = P2bMeshExporter.KindVertexLit;
-                }
-                else
-                {
-                    kind = P2bMeshExporter.KindUnlit;
                 }
 
                 string matKey = kind + ":" + texIndex;
@@ -166,7 +164,7 @@ namespace Ps2.Editor
                                                : new Color32(255, 255, 255, 255);
                 string meshKey = mesh.GetInstanceID() + ":" + kind + ":" + mi +
                                  ":" + fallback.r + "," + fallback.g + "," +
-                                 fallback.b;
+                                 fallback.b + "," + fallback.a;
                 if (!meshLookup.TryGetValue(meshKey, out int meshIndex))
                 {
                     meshIndex = meshes.Count;
@@ -219,6 +217,63 @@ namespace Ps2.Editor
             }
         }
 
+        // Kind selection (plan 7.3): explicit transparent/cutout/additive
+        // classification from the material, then the M5 texture/normals
+        // fallback. Standard "Transparent" rendering mode and anything at or
+        // past the transparent queue maps to LitAlpha.
+        private static uint ClassifyMaterial(Material mat, bool hasTexture,
+                                             bool hasNormals)
+        {
+            if (mat != null)
+            {
+                string shaderName = mat.shader != null ? mat.shader.name : "";
+                string renderType = mat.GetTag("RenderType", false, "");
+                if (shaderName.Contains("Additive"))
+                    return P2bMeshExporter.KindAdditive;
+                if (renderType == "TransparentCutout")
+                    return P2bMeshExporter.KindCutout;
+                if (renderType == "Transparent" || mat.renderQueue >= 3000)
+                    return P2bMeshExporter.KindLitAlpha;
+            }
+            if (hasTexture) return P2bMeshExporter.KindUnlitTextured;
+            if (hasNormals)
+                return RenderSettings.fog ? P2bMeshExporter.KindVertexLitFog
+                                          : P2bMeshExporter.KindVertexLit;
+            return P2bMeshExporter.KindUnlit;
+        }
+
+        // GS TEST register value, or 0 for "device default" (depth GEQUAL,
+        // no alpha test). Bit layout matches ps2ur::gfx::gs_test.
+        private static ulong GsTestFor(uint kind)
+        {
+            if (kind == P2bMeshExporter.KindCutout)
+            {
+                // ATE on, ATST=GEQUAL(5), AREF=64 (0.5 in PS2 alpha), AFAIL=
+                // KEEP(0), depth test GEQUAL(2) on.
+                return 1UL | (5UL << 1) | (64UL << 4) | (1UL << 16) | (2UL << 17);
+            }
+            return 0;
+        }
+
+        // GS ALPHA register: Cv = ((A-B)*C >> 7) + D.
+        private static ulong GsAlphaFor(uint kind)
+        {
+            if (kind == P2bMeshExporter.KindLitAlpha)
+                return 0UL | (1UL << 2) | (0UL << 4) | (1UL << 6); // (Cs-Cd)*As+Cd
+            if (kind == P2bMeshExporter.KindAdditive)
+                return 0UL | (2UL << 2) | (0UL << 4) | (1UL << 6); // Cs*As+Cd
+            return 0;
+        }
+
+        // bit0 zwrite, bit1 blend, bit2 transparent-pass.
+        private static uint MaterialFlags(uint kind)
+        {
+            if (kind == P2bMeshExporter.KindLitAlpha ||
+                kind == P2bMeshExporter.KindAdditive)
+                return 2u | 4u; // blend, transparent, no Z write
+            return 1u; // opaque: Z write
+        }
+
         private static byte[] BuildScene(List<EntityRecord> entities,
                                          Dictionary<string, uint> scriptNames)
         {
@@ -239,9 +294,26 @@ namespace Ps2.Editor
                 if (e.IsCamera)
                 {
                     var p = new ByteBuffer();
-                    p.F32(e.Camera.fieldOfView * Mathf.Deg2Rad);
-                    p.F32(e.Camera.nearClipPlane);
-                    p.F32(e.Camera.farClipPlane);
+                    var cam = e.Camera;
+                    p.F32(cam.fieldOfView * Mathf.Deg2Rad);
+                    p.F32(cam.nearClipPlane);
+                    p.F32(cam.farClipPlane);
+                    // M8 camera payload (64 bytes; readers accept the old 12).
+                    p.U32(cam.orthographic ? 1u : 0u);
+                    p.F32(cam.orthographicSize);
+                    p.F32(cam.rect.x);
+                    p.F32(cam.rect.y);
+                    p.F32(cam.rect.width);
+                    p.F32(cam.rect.height);
+                    p.U32(cam.clearFlags == CameraClearFlags.Depth ? 2u : 1u);
+                    Color32 cc = cam.backgroundColor;
+                    p.U32((uint)cc.r | ((uint)cc.g << 8) | ((uint)cc.b << 16));
+                    p.U32((uint)cam.cullingMask);
+                    p.U32(RenderSettings.fog ? 1u : 0u);
+                    Color32 fc = RenderSettings.fogColor;
+                    p.U32((uint)fc.r | ((uint)fc.g << 8) | ((uint)fc.b << 16));
+                    p.F32(RenderSettings.fogStartDistance);
+                    p.F32(RenderSettings.fogEndDistance);
                     comps.Add((2, p.ToArray()));
                 }
                 if (e.IsLight)
@@ -289,7 +361,7 @@ namespace Ps2.Editor
                 b.F32(t.localScale.y);
                 b.F32(t.localScale.z);
                 b.U32((uint)P2bWriter.Fnv1a64(t.name));
-                b.U16(0); // layer
+                b.U16((ushort)t.gameObject.layer);
                 b.U16(0); // tag
                 b.U32(0); // flags
                 b.U32((uint)perEntity[i].first);
@@ -554,6 +626,203 @@ namespace Ps2.Editor
 
             P2bSceneExporter.ExportActiveScene(output);
             Debug.Log("[PS2] spin scene exported to " + output);
+        }
+
+        // ---- M8 acceptance: the 500-object scene-graph scene ---------------
+        //
+        // Batch entry:
+        //   Unity -batchmode -quit -executeMethod Ps2.Editor.PS2ExportMenu.ExportSceneGraphScene -ps2Output <scene.p2b>
+        //
+        // 25 towers x 20 cubes = 500 mesh objects in 20-deep parent chains
+        // (each cube is the child of the one below), five material kinds:
+        // VertexLit, UnlitTextured, LitAlpha, Cutout, Additive. Two
+        // translucent towers sit near the camera line so back-to-front
+        // sorting is visible in the goldens. Deterministic by construction:
+        // no Random, no time.
+        public static void ExportSceneGraphScene()
+        {
+            string output = "scenegraph.p2b";
+            string[] args = System.Environment.GetCommandLineArgs();
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "-ps2Output")
+                {
+                    output = args[i + 1];
+                }
+            }
+
+            var scene = SceneManager.GetActiveScene();
+            foreach (GameObject root in scene.GetRootGameObjects())
+            {
+                Object.DestroyImmediate(root);
+            }
+
+            var camGo = new GameObject("Camera");
+            var cam = camGo.AddComponent<Camera>();
+            cam.fieldOfView = 60.0f;
+            cam.nearClipPlane = 0.5f;
+            cam.farClipPlane = 150.0f;
+            cam.backgroundColor = new Color(24 / 255f, 28 / 255f, 44 / 255f, 1f);
+            camGo.transform.position = new Vector3(0, 6.0f, -30.0f);
+
+            var lightGo = new GameObject("Sun");
+            var light = lightGo.AddComponent<Light>();
+            light.type = LightType.Directional;
+            light.color = Color.white;
+            light.intensity = 0.9f;
+            lightGo.transform.rotation = Quaternion.Euler(50.0f, -30.0f, 0);
+
+            // One checkerboard texture for the textured towers.
+            var tex = new Texture2D(64, 64, TextureFormat.RGBA32, false);
+            var px = new Color32[64 * 64];
+            for (int y = 0; y < 64; y++)
+            {
+                for (int x = 0; x < 64; x++)
+                {
+                    bool check = (((x >> 3) + (y >> 3)) & 1) == 0;
+                    px[y * 64 + x] = check ? new Color32(230, 200, 60, 255)
+                                           : new Color32(40, 60, 120, 255);
+                }
+            }
+            tex.SetPixels32(px);
+            tex.Apply();
+            tex.name = "sgtex";
+
+            var texturedMat = new Material(Shader.Find("Unlit/Texture"));
+            texturedMat.mainTexture = tex;
+
+            var litMat = new Material(Shader.Find("Unlit/Color"));
+            litMat.color = new Color(0.85f, 0.3f, 0.25f, 1f);
+
+            var alphaMat = new Material(Shader.Find("Unlit/Color"));
+            alphaMat.color = new Color(0.3f, 0.5f, 0.95f, 0.45f);
+            alphaMat.SetOverrideTag("RenderType", "Transparent");
+            alphaMat.renderQueue = 3000;
+
+            var cutoutMat = new Material(Shader.Find("Unlit/Color"));
+            cutoutMat.color = new Color(0.35f, 0.8f, 0.35f, 1f);
+            cutoutMat.SetOverrideTag("RenderType", "TransparentCutout");
+
+            // "Additive" is classified by shader NAME; Unlit/Color under a
+            // renamed dummy shader would not survive a build, so use the
+            // legacy particle additive shader when present and fall back to
+            // tagging via name match on Unlit/Color otherwise.
+            Shader additiveShader = Shader.Find("Legacy Shaders/Particles/Additive");
+            Material additiveMat;
+            if (additiveShader != null)
+            {
+                additiveMat = new Material(additiveShader);
+                additiveMat.color = new Color(0.9f, 0.7f, 0.3f, 0.6f);
+            }
+            else
+            {
+                additiveMat = new Material(Shader.Find("Unlit/Color"));
+                additiveMat.color = new Color(0.9f, 0.7f, 0.3f, 0.6f);
+                additiveMat.SetOverrideTag("RenderType", "Transparent");
+                additiveMat.renderQueue = 3000;
+            }
+
+            Material[] cycle = { litMat, texturedMat, alphaMat, cutoutMat, additiveMat };
+
+            for (int tower = 0; tower < 25; tower++)
+            {
+                int gx = tower % 5;
+                int gz = tower / 5;
+                // The two translucent towers land in front of the camera
+                // line (x=0) at different depths: sorting must order them.
+                float baseX = (gx - 2) * 8.0f;
+                float baseZ = gz * 8.0f;
+                Material mat = cycle[tower % 5];
+
+                Transform parent = null;
+                for (int level = 0; level < 20; level++)
+                {
+                    var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                    go.name = "t" + tower + "_l" + level;
+                    go.GetComponent<MeshRenderer>().sharedMaterial = mat;
+                    if (parent == null)
+                    {
+                        go.transform.position = new Vector3(baseX, 0.0f, baseZ);
+                    }
+                    else
+                    {
+                        go.transform.SetParent(parent, false);
+                        go.transform.localPosition = new Vector3(0, 1.05f, 0);
+                        go.transform.localRotation = Quaternion.Euler(0, 7.0f, 0);
+                        go.transform.localScale = Vector3.one * 0.97f;
+                    }
+                    parent = go.transform;
+                }
+            }
+
+            P2bSceneExporter.ExportActiveScene(output);
+            Debug.Log("[PS2] scene-graph scene exported to " + output);
+        }
+
+        // ---- M8 task 7: fog verification scene -----------------------------
+        //
+        //   Unity -batchmode -quit -executeMethod Ps2.Editor.PS2ExportMenu.ExportFogScene -ps2Output <scene.p2b>
+        //
+        // Linear fog on, five lit cubes at increasing depth. The runtime
+        // sample projects each cube's centre and asserts the rendered colour
+        // slides monotonically toward the fog colour with distance.
+        public static void ExportFogScene()
+        {
+            string output = "fogscene.p2b";
+            string[] args = System.Environment.GetCommandLineArgs();
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "-ps2Output")
+                {
+                    output = args[i + 1];
+                }
+            }
+
+            var scene = SceneManager.GetActiveScene();
+            foreach (GameObject root in scene.GetRootGameObjects())
+            {
+                Object.DestroyImmediate(root);
+            }
+
+            RenderSettings.fog = true;
+            RenderSettings.fogMode = FogMode.Linear;
+            RenderSettings.fogColor = new Color(120 / 255f, 140 / 255f, 180 / 255f, 1f);
+            RenderSettings.fogStartDistance = 10.0f;
+            RenderSettings.fogEndDistance = 60.0f;
+
+            var camGo = new GameObject("Camera");
+            var cam = camGo.AddComponent<Camera>();
+            cam.fieldOfView = 60.0f;
+            cam.nearClipPlane = 0.5f;
+            cam.farClipPlane = 120.0f;
+            cam.backgroundColor = new Color(24 / 255f, 28 / 255f, 44 / 255f, 1f);
+            camGo.transform.position = Vector3.zero;
+
+            var lightGo = new GameObject("Sun");
+            var light = lightGo.AddComponent<Light>();
+            light.type = LightType.Directional;
+            light.color = Color.white;
+            light.intensity = 0.9f;
+            lightGo.transform.rotation = Quaternion.Euler(50.0f, -30.0f, 0);
+
+            var mat = new Material(Shader.Find("Unlit/Color"));
+            mat.color = new Color(0.9f, 0.35f, 0.25f, 1f);
+
+            float[] depths = { 8f, 20f, 35f, 50f, 75f };
+            float[] lateral = { -6f, -3f, 0f, 3f, 6f };
+            for (int i = 0; i < 5; i++)
+            {
+                var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                go.name = "fogcube" + i;
+                go.GetComponent<MeshRenderer>().sharedMaterial = mat;
+                go.transform.position = new Vector3(
+                    lateral[i] * (depths[i] / 12.0f), 0f, depths[i]);
+                go.transform.localScale = Vector3.one * (depths[i] / 8.0f);
+            }
+
+            P2bSceneExporter.ExportActiveScene(output);
+            RenderSettings.fog = false; // leave the editor state clean
+            Debug.Log("[PS2] fog scene exported to " + output);
         }
 
         private static System.Type FindUserType(string name)

@@ -48,6 +48,8 @@ set(PS2UR_SOURCES
     src/vu/vu_program.cpp
     src/scene/scene.cpp
     src/scene/p2b_scene.cpp
+    src/scene/scene_renderer.cpp
+    src/gfx/render_queue.cpp
     src/anim/anim.cpp
     src/phys/phys.cpp
     src/audio/audio.cpp
@@ -93,7 +95,8 @@ if(PS2UR_PLATFORM STREQUAL "ps2")
         ${CMAKE_CURRENT_SOURCE_DIR}/src/vu/vu_passthrough.vsm
         ${CMAKE_CURRENT_SOURCE_DIR}/src/vu/vu_unlit.vsm
         ${CMAKE_CURRENT_SOURCE_DIR}/src/vu/vu_lit.vsm
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/vu/vu_unlit_tex.vsm)
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/vu/vu_unlit_tex.vsm
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/vu/vu_lit_fog.vsm)
     # The ps2 configuration must be driven through the ps2dev cross toolchain
     # file (planned at tools/cmake/ps2-toolchain.cmake, plan section 8), with
     # the toolchain rooted at $ENV{PS2DEV} (default C:/Users/Ash/ps2dev,

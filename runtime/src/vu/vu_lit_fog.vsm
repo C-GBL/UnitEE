@@ -1,0 +1,232 @@
+; runtime/src/vu/vu_lit_fog.vsm
+;
+; vu_lit with per-vertex fog (plan section 9, M8 task 7). Identical lighting,
+; transform and rejection pipeline; each vertex additionally computes a fog
+; factor from its clip-space w (the view depth):
+;
+;   f = clamp(w * fog_scale + fog_offset, 0, 255)      f=255 -> no fog
+;
+; and the output stream becomes RGBAQ, FOG, XYZ2 (GIF PACKED nreg=3, regs
+; 0x5A1). The FOG register descriptor reads F from qword bits [107:100] --
+; that is bits [11:4] of the W word, which is exactly where FTOI4 lands an
+; integer scaled by 16. So the whole packing trick is: put f in the W lane,
+; FTOI4 it, store. The GS then blends the rasterised colour toward FOGCOL by
+; (255-F)/255 when PRIM.FGE is set (baked into the batch tag at export).
+;
+; FLAG DISCIPLINE: the fog arithmetic is upper-pipeline work, so it runs
+; BEFORE the isolated clip-test window like every other upper op.
+;
+; ---------------------------------------------------------------------------
+; VU1 DATA MEMORY LAYOUT (quadwords)
+; ---------------------------------------------------------------------------
+;   0..16   exactly as vu_lit (MVP, viewport, clip, tag, count, lights,
+;           ambient, clamp)
+;   17      fog constants    : (fog_scale, fog_offset, 255, 0)
+;   18..    vertices, 3 qwords each: position, normal, colour
+;
+; Output from qword 300: tag, then RGBAQ + FOG + XYZ2 per vertex.
+; Capacity: (300-18)/3 = 94 in, 1+3*94 = 283 out (300+283 < 1024).
+
+		.vu
+		.align 4
+		.global	VuLitFog_CodeStart
+		.global	VuLitFog_CodeEnd
+
+VuLitFog_CodeStart:
+
+; --- Per-batch constants ----------------------------------------------------
+		NOP							lq		VF01, 0(VI00)
+		NOP							lq		VF02, 1(VI00)
+		NOP							lq		VF03, 2(VI00)
+		NOP							lq		VF04, 3(VI00)
+		NOP							lq		VF05, 4(VI00)		; viewport scale
+		NOP							lq		VF06, 5(VI00)		; viewport offset
+		NOP							lq		VF30, 6(VI00)		; clip constants
+		NOP							lq		VF07, 7(VI00)		; GIF tag
+		NOP							ilw.x	VI05, 8(VI00)		; vertex count
+		NOP							lq		VF20, 9(VI00)		; light dirs x row
+		NOP							lq		VF21, 10(VI00)		; light dirs y row
+		NOP							lq		VF22, 11(VI00)		; light dirs z row
+		NOP							lq		VF23, 12(VI00)		; light colour R
+		NOP							lq		VF24, 13(VI00)		; light colour G
+		NOP							lq		VF25, 14(VI00)		; light colour B
+		NOP							lq		VF26, 15(VI00)		; ambient
+		NOP							lq		VF28, 16(VI00)		; clamp
+		NOP							lq		VF27, 17(VI00)		; fog constants
+
+		FTOI4	VF31, VF00			iaddiu	VI08, VI00, 300		; degenerate pt
+
+		NOP							sq		VF07, 0(VI08)
+		NOP							iaddiu	VI08, VI08, 1
+		NOP							iaddiu	VI06, VI00, 18		; input cursor
+		NOP							iaddiu	VI07, VI00, 0		; vertex counter
+
+tri_loop:
+		NOP							iadd	VI11, VI00, VI00	; reject accum
+		NOP							iadd	VI12, VI08, VI00	; tri out base
+
+; ============================ vertex 0 =======================================
+		NOP							lq		VF10, 0(VI06)		; position
+		NOP							lq		VF16, 1(VI06)		; normal
+		NOP							lq		VF11, 2(VI06)		; colour
+		MULAx	ACC, VF20, VF16x	NOP
+		MADDAy	ACC, VF21, VF16y	NOP
+		MADDz	VF17, VF22, VF16z	NOP
+		MAX		VF17, VF17, VF00	NOP
+		MULAx	ACC, VF23, VF17x	NOP
+		MADDAy	ACC, VF24, VF17y	NOP
+		MADDAz	ACC, VF25, VF17z	NOP
+		MADDw	VF18, VF26, VF00w	NOP
+		MUL		VF19, VF18, VF11	NOP
+		MINI	VF19, VF19, VF28	NOP
+		MAX		VF19, VF19, VF00	NOP
+		MULAx	ACC, VF01, VF10x	NOP
+		MADDAy	ACC, VF02, VF10y	NOP
+		MADDAz	ACC, VF03, VF10z	NOP
+		MADDw	VF12, VF04, VF10w	NOP
+		NOP							div		Q, VF00w, VF12w
+		NOP							waitq
+		MULq	VF13, VF12, Q		NOP
+		MUL		VF13, VF13, VF05	NOP
+		ADD		VF13, VF13, VF06	NOP
+		FTOI4	VF14, VF13			NOP
+		FTOI0	VF15, VF19			NOP
+; fog factor (upper ops: BEFORE the flag window)
+		MULw.x	VF16, VF27, VF12w	NOP							; f = scale*w
+		ADDy.x	VF16, VF16, VF27	NOP							; f += offset
+		MAXx.x	VF16, VF16, VF00	NOP							; f >= 0
+		MINIz.x	VF16, VF16, VF27	NOP							; f <= 255
+		SUB.w	VF09, VF09, VF09	NOP							; w = 0
+		ADDx.w	VF09, VF09, VF16	NOP							; w = f
+		FTOI4.w	VF09, VF09			NOP							; F -> bits [11:4]
+; isolated clip-test window
+		NOP							fsset	0x000
+		SUB.w	VF29, VF12, VF30	NOP
+		SUB.xy	VF29, VF13, VF00	NOP
+		SUB.xy	VF29, VF30, VF13	NOP
+		NOP							NOP
+		NOP							NOP
+		NOP							NOP
+		NOP							fsand	VI10, 0x080
+		NOP							ior		VI11, VI11, VI10
+		NOP							sq		VF15, 0(VI08)
+		NOP							sq		VF09, 1(VI08)
+		NOP							sq		VF14, 2(VI08)
+		NOP							iaddiu	VI08, VI08, 3
+		NOP							iaddiu	VI06, VI06, 3
+
+; ============================ vertex 1 =======================================
+		NOP							lq		VF10, 0(VI06)
+		NOP							lq		VF16, 1(VI06)
+		NOP							lq		VF11, 2(VI06)
+		MULAx	ACC, VF20, VF16x	NOP
+		MADDAy	ACC, VF21, VF16y	NOP
+		MADDz	VF17, VF22, VF16z	NOP
+		MAX		VF17, VF17, VF00	NOP
+		MULAx	ACC, VF23, VF17x	NOP
+		MADDAy	ACC, VF24, VF17y	NOP
+		MADDAz	ACC, VF25, VF17z	NOP
+		MADDw	VF18, VF26, VF00w	NOP
+		MUL		VF19, VF18, VF11	NOP
+		MINI	VF19, VF19, VF28	NOP
+		MAX		VF19, VF19, VF00	NOP
+		MULAx	ACC, VF01, VF10x	NOP
+		MADDAy	ACC, VF02, VF10y	NOP
+		MADDAz	ACC, VF03, VF10z	NOP
+		MADDw	VF12, VF04, VF10w	NOP
+		NOP							div		Q, VF00w, VF12w
+		NOP							waitq
+		MULq	VF13, VF12, Q		NOP
+		MUL		VF13, VF13, VF05	NOP
+		ADD		VF13, VF13, VF06	NOP
+		FTOI4	VF14, VF13			NOP
+		FTOI0	VF15, VF19			NOP
+		MULw.x	VF16, VF27, VF12w	NOP
+		ADDy.x	VF16, VF16, VF27	NOP
+		MAXx.x	VF16, VF16, VF00	NOP
+		MINIz.x	VF16, VF16, VF27	NOP
+		SUB.w	VF09, VF09, VF09	NOP
+		ADDx.w	VF09, VF09, VF16	NOP
+		FTOI4.w	VF09, VF09			NOP
+		NOP							fsset	0x000
+		SUB.w	VF29, VF12, VF30	NOP
+		SUB.xy	VF29, VF13, VF00	NOP
+		SUB.xy	VF29, VF30, VF13	NOP
+		NOP							NOP
+		NOP							NOP
+		NOP							NOP
+		NOP							fsand	VI10, 0x080
+		NOP							ior		VI11, VI11, VI10
+		NOP							sq		VF15, 0(VI08)
+		NOP							sq		VF09, 1(VI08)
+		NOP							sq		VF14, 2(VI08)
+		NOP							iaddiu	VI08, VI08, 3
+		NOP							iaddiu	VI06, VI06, 3
+
+; ============================ vertex 2 =======================================
+		NOP							lq		VF10, 0(VI06)
+		NOP							lq		VF16, 1(VI06)
+		NOP							lq		VF11, 2(VI06)
+		MULAx	ACC, VF20, VF16x	NOP
+		MADDAy	ACC, VF21, VF16y	NOP
+		MADDz	VF17, VF22, VF16z	NOP
+		MAX		VF17, VF17, VF00	NOP
+		MULAx	ACC, VF23, VF17x	NOP
+		MADDAy	ACC, VF24, VF17y	NOP
+		MADDAz	ACC, VF25, VF17z	NOP
+		MADDw	VF18, VF26, VF00w	NOP
+		MUL		VF19, VF18, VF11	NOP
+		MINI	VF19, VF19, VF28	NOP
+		MAX		VF19, VF19, VF00	NOP
+		MULAx	ACC, VF01, VF10x	NOP
+		MADDAy	ACC, VF02, VF10y	NOP
+		MADDAz	ACC, VF03, VF10z	NOP
+		MADDw	VF12, VF04, VF10w	NOP
+		NOP							div		Q, VF00w, VF12w
+		NOP							waitq
+		MULq	VF13, VF12, Q		NOP
+		MUL		VF13, VF13, VF05	NOP
+		ADD		VF13, VF13, VF06	NOP
+		FTOI4	VF14, VF13			NOP
+		FTOI0	VF15, VF19			NOP
+		MULw.x	VF16, VF27, VF12w	NOP
+		ADDy.x	VF16, VF16, VF27	NOP
+		MAXx.x	VF16, VF16, VF00	NOP
+		MINIz.x	VF16, VF16, VF27	NOP
+		SUB.w	VF09, VF09, VF09	NOP
+		ADDx.w	VF09, VF09, VF16	NOP
+		FTOI4.w	VF09, VF09			NOP
+		NOP							fsset	0x000
+		SUB.w	VF29, VF12, VF30	NOP
+		SUB.xy	VF29, VF13, VF00	NOP
+		SUB.xy	VF29, VF30, VF13	NOP
+		NOP							NOP
+		NOP							NOP
+		NOP							NOP
+		NOP							fsand	VI10, 0x080
+		NOP							ior		VI11, VI11, VI10
+		NOP							sq		VF15, 0(VI08)
+		NOP							sq		VF09, 1(VI08)
+		NOP							sq		VF14, 2(VI08)
+		NOP							iaddiu	VI08, VI08, 3
+		NOP							iaddiu	VI06, VI06, 3
+		NOP							iaddiu	VI07, VI07, 3
+
+; --- Reject patch: XYZ2 sits at 2/5/8 with the 3-qword stride ---------------
+		NOP							ibeq	VI11, VI00, tri_ok
+		NOP							NOP
+		NOP							sq		VF31, 2(VI12)
+		NOP							sq		VF31, 5(VI12)
+		NOP							sq		VF31, 8(VI12)
+tri_ok:
+		NOP							ibne	VI07, VI05, tri_loop
+		NOP							NOP
+
+; --- Kick --------------------------------------------------------------------
+		NOP							iaddiu	VI09, VI00, 300
+		NOP							xgkick	VI09
+
+		NOP[E]						NOP
+		NOP							NOP
+		.align 4
+VuLitFog_CodeEnd:

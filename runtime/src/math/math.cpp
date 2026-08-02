@@ -82,6 +82,48 @@ Mat4 mat4_translate(Vec3 t)
 
 Mat4 mat4_mul(const Mat4& a, const Mat4& b)
 {
+#if defined(PS2UR_PLATFORM_PS2)
+    // VU0 macro mode (plan M8 task 1): r_col = A * b_col via the broadcast
+    // MAC pipeline -- one lq + four MADDs + one sq per column. Mat4 is
+    // alignas(16) so lqc2/sqc2 are safe. VU MADD keeps the accumulate in
+    // ACC with per-step rounding like the scalar version, but the fused
+    // multiply-add rounds once where scalar rounds twice: bit-level results
+    // differ from host (goldens are per-platform anyway, plan 12).
+    Mat4 r;
+    asm volatile(
+        "lqc2   $vf1,  0(%1)\n"
+        "lqc2   $vf2, 16(%1)\n"
+        "lqc2   $vf3, 32(%1)\n"
+        "lqc2   $vf4, 48(%1)\n"
+        "lqc2   $vf5,  0(%2)\n"
+        "lqc2   $vf6, 16(%2)\n"
+        "lqc2   $vf7, 32(%2)\n"
+        "lqc2   $vf8, 48(%2)\n"
+        "vmulax.xyzw  $ACC, $vf1, $vf5x\n"
+        "vmadday.xyzw $ACC, $vf2, $vf5y\n"
+        "vmaddaz.xyzw $ACC, $vf3, $vf5z\n"
+        "vmaddw.xyzw  $vf9, $vf4, $vf5w\n"
+        "vmulax.xyzw  $ACC, $vf1, $vf6x\n"
+        "vmadday.xyzw $ACC, $vf2, $vf6y\n"
+        "vmaddaz.xyzw $ACC, $vf3, $vf6z\n"
+        "vmaddw.xyzw  $vf10, $vf4, $vf6w\n"
+        "vmulax.xyzw  $ACC, $vf1, $vf7x\n"
+        "vmadday.xyzw $ACC, $vf2, $vf7y\n"
+        "vmaddaz.xyzw $ACC, $vf3, $vf7z\n"
+        "vmaddw.xyzw  $vf11, $vf4, $vf7w\n"
+        "vmulax.xyzw  $ACC, $vf1, $vf8x\n"
+        "vmadday.xyzw $ACC, $vf2, $vf8y\n"
+        "vmaddaz.xyzw $ACC, $vf3, $vf8z\n"
+        "vmaddw.xyzw  $vf12, $vf4, $vf8w\n"
+        "sqc2   $vf9,   0(%0)\n"
+        "sqc2   $vf10, 16(%0)\n"
+        "sqc2   $vf11, 32(%0)\n"
+        "sqc2   $vf12, 48(%0)\n"
+        :
+        : "r"(r.m), "r"(a.m), "r"(b.m)
+        : "memory");
+    return r;
+#else
     Mat4 r{};
     for (int c = 0; c < 4; ++c) {
         for (int row = 0; row < 4; ++row) {
@@ -93,6 +135,7 @@ Mat4 mat4_mul(const Mat4& a, const Mat4& b)
         }
     }
     return r;
+#endif
 }
 
 Vec4 mat4_mul_vec4(const Mat4& a, Vec4 v)
@@ -165,6 +208,57 @@ Mat4 mat4_rigid_inverse(const Mat4& m)
     r.m[13] = -(r.m[1] * tx + r.m[5] * ty + r.m[9] * tz);
     r.m[14] = -(r.m[2] * tx + r.m[6] * ty + r.m[10] * tz);
     return r;
+}
+
+Mat4 mat4_ortho(float half_w, float half_h, float znear, float zfar)
+{
+    Mat4 r{};
+    r.m[0] = 1.0f / half_w;
+    r.m[5] = 1.0f / half_h;
+    r.m[10] = 2.0f / (znear - zfar);
+    r.m[14] = (zfar + znear) / (znear - zfar);
+    r.m[15] = 1.0f;
+    return r;
+}
+
+FrustumPlanes frustum_from_viewproj(const Mat4& vp)
+{
+    // Gribb/Hartmann on a column-major matrix: row_i(vp) combinations.
+    // row r of vp = (m[r], m[4+r], m[8+r], m[12+r]).
+    auto row = [&vp](int r) {
+        return Vec4{vp.m[r], vp.m[4 + r], vp.m[8 + r], vp.m[12 + r]};
+    };
+    const Vec4 r0 = row(0), r1 = row(1), r2 = row(2), r3 = row(3);
+
+    FrustumPlanes f;
+    f.plane[0] = add(r3, r0);  // left
+    f.plane[1] = sub(r3, r0);  // right
+    f.plane[2] = add(r3, r1);  // bottom
+    f.plane[3] = sub(r3, r1);  // top
+    f.plane[4] = add(r3, r2);  // near
+    f.plane[5] = sub(r3, r2);  // far
+    for (int i = 0; i < 6; ++i) {
+        const Vec3 n{f.plane[i].x, f.plane[i].y, f.plane[i].z};
+        const float len = length(n);
+        if (len > 1e-12f) {
+            const float inv = 1.0f / len;
+            f.plane[i] = Vec4{n.x * inv, n.y * inv, n.z * inv,
+                              f.plane[i].w * inv};
+        }
+    }
+    return f;
+}
+
+bool frustum_culls_sphere(const FrustumPlanes& f, Vec3 center, float radius)
+{
+    for (int i = 0; i < 6; ++i) {
+        const float d = f.plane[i].x * center.x + f.plane[i].y * center.y +
+                        f.plane[i].z * center.z + f.plane[i].w;
+        if (d < -radius) {
+            return true;
+        }
+    }
+    return false;
 }
 
 } // namespace ps2ur
