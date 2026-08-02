@@ -185,6 +185,45 @@ namespace Ps2.Editor
                 report.isoBytes = new FileInfo(ctx.IsoPath).Length;
             }
 
+            // Every step ran without throwing -- but did the build actually
+            // produce a game?
+            //
+            // This check exists because it has been wrong twice. Once the
+            // native step warned instead of failing, so a compile error came
+            // back as a green build with an empty elfPath. Once the content
+            // list was populated inside a cacheable step, so an incremental
+            // build shipped an ELF with no scene beside it and the console
+            // showed a black screen. Both times every step reported success
+            // and the output directory was incomplete, and both times the
+            // person who found it was the user, running it.
+            //
+            // So success is defined here as "the output is loadable", not as
+            // "nothing threw".
+            if (report.succeeded)
+            {
+                var missing = new List<string>();
+                if (report.elfBytes == 0)
+                    missing.Add("the game ELF");
+                foreach (string content in ctx.ContentFiles)
+                {
+                    string beside = Path.Combine(ctx.OutputDirectory,
+                                                 Path.GetFileName(content));
+                    if (!File.Exists(beside))
+                        missing.Add(Path.GetFileName(content));
+                }
+                if (missing.Count > 0)
+                {
+                    report.succeeded = false;
+                    report.failureMessage =
+                        "Every build step reported success, but the output " +
+                        "directory is missing " + string.Join(", ", missing) +
+                        ". The build is not runnable, so it is reported as a " +
+                        "failure rather than a green build that shows a black " +
+                        "screen.";
+                    Debug.LogError(LogPrefix + report.failureMessage);
+                }
+            }
+
             WriteReport(ctx, report);
             LogSummary(report);
             return report;

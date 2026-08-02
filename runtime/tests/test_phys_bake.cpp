@@ -352,3 +352,49 @@ TEST_F(PhysBake, TooManyCollidersIsRefusedBeforeAnythingIsAdded)
     EXPECT_EQ(collider_count(), 0u)
         << "the table must be untouched when the file does not fit";
 }
+
+TEST_F(PhysBake, PrimitiveOnlyCollisionCarriesNoBvhAtAll)
+{
+    // The shape a real scene takes: some box colliders, no mesh collider,
+    // therefore no triangles.
+    //
+    // This pins the ONE way an empty tree may be encoded. count == 0 means
+    // "internal node" in this format, so a single node with count 0 claims
+    // two children that do not exist, and validate_bvh rejects the section.
+    // There is no way to spell an empty leaf, so an empty tree is zero
+    // nodes -- and the C# baker got this wrong in exactly that way, which
+    // no test caught because nothing had ever called it (verify-log M12).
+    PhysSection section;   // no add_quad: zero triangles, zero vertices
+    std::vector<Collider> colliders;
+    Collider box;
+    box.kind = ColliderKind::Box;
+    box.half_extents = v3(0.5f, 0.5f, 0.5f);
+    box.entity = 1;
+    colliders.push_back(box);
+    section.build(colliders);
+
+    const std::vector<uint8_t> file = wrap_container(section.bytes);
+    io::P2bFile parsed;
+    ASSERT_TRUE(parsed.parse(file.data(), static_cast<uint32_t>(file.size())));
+
+    StaticMesh mesh;
+    BakeInfo info;
+    const char* error = "";
+    ASSERT_TRUE(load_physics(parsed, &mesh, &info, &error)) << error;
+    EXPECT_STREQ(error, "");
+    EXPECT_EQ(info.collider_count, 1u);
+    EXPECT_EQ(info.node_count, 0u);
+    EXPECT_EQ(mesh.node_count, 0u);
+    EXPECT_EQ(collider_count(), 1u);
+
+    // And the world still answers queries with no static mesh to walk: the
+    // box collider is still hit, and a ray pointed away from it misses
+    // rather than dereferencing a null node array.
+    set_static_mesh(&mesh);
+    RaycastHit hit;
+    EXPECT_TRUE(raycast(v3(0, 100, 0), v3(0, -1, 0), 1000.0f, 0xFFFFFFFFu, &hit))
+        << "the primitive collider is still there";
+    EXPECT_EQ(hit.collider, 0);
+    EXPECT_FALSE(raycast(v3(50, 100, 50), v3(0, -1, 0), 1000.0f, 0xFFFFFFFFu, &hit))
+        << "nothing to hit, and no BVH to walk";
+}

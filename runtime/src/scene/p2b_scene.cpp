@@ -48,6 +48,7 @@ bool World::load(const io::P2bFile& file)
 {
     m_entity_count = 0;
     m_script_count = 0;
+    m_rigidbody_count = 0;
     m_mesh_count = 0;
     m_material_count = 0;
     // The animation tables must reset too. A World is not always fresh: a
@@ -596,6 +597,23 @@ bool World::load(const io::P2bFile& file)
                 renderer.controller = controller_idx;
                 renderer.animator = m_skinned_count;
                 ++m_skinned_count;
+            } else if (type == kComponentRigidbody) {
+                // 16 bytes: mass, linear damping, angular damping, flags.
+                if (!v.ok(data_off, 16u)) {
+                    m_error = "rigidbody payload truncated";
+                    return false;
+                }
+                if (m_rigidbody_count >= kMaxRigidbodies) {
+                    m_error = "too many rigidbodies";
+                    return false;
+                }
+                RigidbodyRef& rb = m_rigidbodies[m_rigidbody_count];
+                rb.entity = static_cast<int32_t>(i);
+                rb.mass = v.f32(data_off + 0);
+                rb.linear_damping = v.f32(data_off + 4);
+                rb.angular_damping = v.f32(data_off + 8);
+                rb.flags = v.u32(data_off + 12);
+                ++m_rigidbody_count;
             } else if (type == kComponentScript) {
                 // Payload = u32 byte offset of a NUL-terminated type name
                 // inside the SCRP section (payloads themselves stay uniform
@@ -670,6 +688,7 @@ bool World::append(const io::P2bFile& file)
     const uint32_t material_base = m_material_count;
     const uint32_t entity_base = m_entity_count;
     const uint32_t script_base = m_script_count;
+    const uint32_t rigidbody_base = m_rigidbody_count;
     const uint32_t skinned_mesh_base = m_skinned_mesh_count;
     const uint32_t skinned_base = m_skinned_count;
     const uint32_t skeleton_base = m_skeleton_count;
@@ -689,6 +708,8 @@ bool World::append(const io::P2bFile& file)
         m_error = "additive scene does not fit: materials";
     } else if (script_base + incoming.m_script_count > kMaxScripts) {
         m_error = "additive scene does not fit: scripts";
+    } else if (rigidbody_base + incoming.m_rigidbody_count > kMaxRigidbodies) {
+        m_error = "additive scene does not fit: rigidbodies";
     } else if (skinned_mesh_base + incoming.m_skinned_mesh_count >
                kMaxSkinnedMeshes) {
         m_error = "additive scene does not fit: skinned meshes";
@@ -738,6 +759,15 @@ bool World::append(const io::P2bFile& file)
         m_scripts[script_base + i] = script;
     }
 
+    // Rigidbodies rebase on the entity only: mass and damping are values,
+    // not indices. The native body they will drive does not exist yet --
+    // whoever merges the scene has to create it, exactly as boot does.
+    for (uint32_t i = 0; i < incoming.m_rigidbody_count; ++i) {
+        RigidbodyRef rb = incoming.m_rigidbodies[i];
+        rb.entity += static_cast<int32_t>(entity_base);
+        m_rigidbodies[rigidbody_base + i] = rb;
+    }
+
     // Animation: skeletons and clips move across unchanged, but a
     // controller's states name CLIP INDICES, so those rebase too. Getting
     // this wrong would not crash -- the character would simply play some
@@ -780,6 +810,7 @@ bool World::append(const io::P2bFile& file)
     m_mesh_count += incoming.m_mesh_count;
     m_entity_count += incoming.m_entity_count;
     m_script_count += incoming.m_script_count;
+    m_rigidbody_count += incoming.m_rigidbody_count;
     m_skeleton_count += incoming.m_skeleton_count;
     m_clip_count += incoming.m_clip_count;
     m_controller_count += incoming.m_controller_count;

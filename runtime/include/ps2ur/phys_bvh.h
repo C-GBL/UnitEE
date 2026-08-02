@@ -38,6 +38,14 @@ inline constexpr uint32_t bvh_max_nodes(uint32_t triangle_count)
 // first index and a count instead of an index list).
 //
 // Returns the node count written, or 0 if the node buffer was too small.
+//
+// ZERO TRIANGLES PRODUCE ZERO NODES, and that is success, not failure: a
+// scene whose colliders are all primitives has no static mesh. count == 0
+// in a node means "internal", so an empty tree cannot be spelled as one
+// empty leaf -- it has to be no nodes at all. Callers distinguish the two
+// meanings of 0 by what they passed in: triangles in and zero nodes out is
+// a failure, no triangles in and zero nodes out is an empty world.
+//
 // 'out_nodes' must hold at least bvh_max_nodes(triangle_count).
 uint32_t build_bvh(BvhTriangle* triangles, uint32_t triangle_count,
                    const Vec3* vertices, uint32_t vertex_count,

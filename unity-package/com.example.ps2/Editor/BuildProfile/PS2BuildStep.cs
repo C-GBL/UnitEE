@@ -215,6 +215,36 @@ namespace Ps2.Editor
         public static string OfProfile(PS2BuildProfile profile) =>
             OfString(UnityEngine.JsonUtility.ToJson(profile));
 
+        /// <summary>
+        /// The build code's own identity, mixed into every cacheable step.
+        ///
+        /// Without this, the cache answers "have the INPUTS changed?" when
+        /// the question that matters is "would running this step produce the
+        /// same output?". Fixing a bug in the scene exporter changes no
+        /// scene and no profile, so an incremental build skipped the export
+        /// and happily reused the .p2b the broken exporter had written --
+        /// and the fix appeared not to work. That cost a full debugging pass
+        /// on a bug that was already fixed (verify-log M12).
+        ///
+        /// Hashed once per build; the package is a few dozen small files.
+        /// </summary>
+        public static string OfBuildCode(string packageRoot)
+        {
+            if (s_BuildCodeHash != null)
+                return s_BuildCodeHash;
+            var sources = new List<string>();
+            if (!string.IsNullOrEmpty(packageRoot) && Directory.Exists(packageRoot))
+            {
+                sources.AddRange(Directory.GetFiles(packageRoot, "*.cs",
+                                                    SearchOption.AllDirectories));
+                sources.Sort(StringComparer.Ordinal);
+            }
+            s_BuildCodeHash = OfFiles(sources);
+            return s_BuildCodeHash;
+        }
+
+        private static string s_BuildCodeHash;
+
         private static string ToHex(byte[] bytes)
         {
             var sb = new StringBuilder(bytes.Length * 2);

@@ -35,6 +35,7 @@ add_executable(ps2ur_tests
     test_phys_query.cpp
     test_phys_world.cpp
     test_phys_bake.cpp
+    test_scene_rigidbody.cpp
 )
 target_link_libraries(ps2ur_tests PRIVATE ps2ur GTest::gtest_main)
 

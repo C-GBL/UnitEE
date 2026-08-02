@@ -31,6 +31,7 @@
 #include <ps2ur/p2b.h>
 #include <ps2ur/p2b_scene.h>
 #include <ps2ur/phys.h>
+#include <ps2ur/phys_bake.h>
 #include <ps2ur/platform.h>
 #include <ps2ur/vu_program.h>
 
@@ -200,6 +201,28 @@ int main(void)
     bridge::bind_world(&world);
     phys::init();
 
+    // Collision. The BVH and the vertices are used straight out of the
+    // container, so 'static_mesh' must outlive the world -- hence static
+    // storage rather than a stack local whose pointers would dangle the
+    // moment main's frame is reused.
+    //
+    // A scene with no PHYS section loads fine and reports zero colliders;
+    // not every scene has collision, and refusing to boot one would be
+    // wrong. What is NOT fine is a section that is present and malformed.
+    static phys::StaticMesh static_mesh;
+    phys::BakeInfo bake;
+    const char* phys_error = "";
+    if (!phys::load_physics(file, &static_mesh, &bake, &phys_error)) {
+        printf("[game] collision: %s\n", phys_error);
+        fatal("physics load");
+        return 1;
+    }
+    phys::set_static_mesh(&static_mesh);
+    printf("[game] collision: %u colliders, %u triangles, %u nodes\n",
+           static_cast<unsigned>(bake.collider_count),
+           static_cast<unsigned>(bake.triangle_count),
+           static_cast<unsigned>(bake.node_count));
+
     // Platform services. input::init() brings up sio2man/padman and opens
     // both ports; without it every button reads false forever and
     // Input.GetButtonDown never fires -- the managed side polls happily and
@@ -219,14 +242,46 @@ int main(void)
         return 1;
     }
     const MethodInfo* create_script = find_runtime_method("CreateScript", 2);
+    const MethodInfo* create_rigidbody = find_runtime_method("CreateRigidbody", 5);
+    const MethodInfo* bind_colliders = find_runtime_method("BindColliders", 0);
     const MethodInfo* tick = find_runtime_method("Tick", 1);
-    if (create_script == nullptr || tick == nullptr) {
+    if (create_script == nullptr || tick == nullptr ||
+        create_rigidbody == nullptr || bind_colliders == nullptr) {
         // Almost always a stripping problem: the dispatcher is reached by
         // reflection, so it needs a link.xml entry to survive.
         printf("[game] UnityEngine.Internal.Runtime was not found. It is "
                "reached by reflection, so it must be preserved in link.xml.\n");
         fatal("Runtime methods missing");
         return 1;
+    }
+
+    // --- Physics components -------------------------------------------------
+    //
+    // Before the scripts, deliberately. A script's Start() runs on the first
+    // Tick and the very first thing gameplay code does is
+    // GetComponent<Rigidbody>(); if the body were created afterwards that
+    // call would return null and the script would throw on frame 1.
+    if (!invoke_checked(bind_colliders, nullptr, "BindColliders")) {
+        fatal("BindColliders");
+        return 1;
+    }
+    for (uint32_t r = 0; r < world.rigidbody_count(); ++r) {
+        const scene::RigidbodyRef& rb = world.rigidbody(r);
+        int32_t handle = world.handle_of(rb.entity);
+        float mass = rb.mass;
+        float linear_damping = rb.linear_damping;
+        float angular_damping = rb.angular_damping;
+        int32_t flags = static_cast<int32_t>(rb.flags);
+        void* args[5] = {&handle, &mass, &linear_damping, &angular_damping,
+                         &flags};
+        if (!invoke_checked(create_rigidbody, args, "CreateRigidbody")) {
+            fatal("CreateRigidbody");
+            return 1;
+        }
+    }
+    if (world.rigidbody_count() > 0) {
+        printf("[game] %u rigidbodies\n",
+               static_cast<unsigned>(world.rigidbody_count()));
     }
 
     // --- Script components --------------------------------------------------

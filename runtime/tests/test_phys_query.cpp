@@ -140,12 +140,29 @@ TEST(PhysBvh, CoincidentTrianglesDoNotRecurseForever)
     EXPECT_TRUE(validate_bvh(grid.mesh, &error)) << error;
 }
 
-TEST(PhysBvh, AnEmptyMeshBuildsAnEmptyTreeRatherThanFailing)
+TEST(PhysBvh, AnEmptyMeshBuildsNoNodesAtAllRatherThanAnEmptyRoot)
 {
+    // This test used to assert the opposite -- one root node with count 0 --
+    // and that assertion was the bug. count == 0 means "internal node,
+    // children at first and first+1", so that root claimed two children
+    // that did not exist and validate_bvh rejected the tree it had just
+    // been handed. It never showed up because nothing built a BVH over zero
+    // triangles until the scene exporter did, and then every scene whose
+    // colliders were all primitives failed to load on target (verify-log
+    // M12).
+    //
+    // An empty tree cannot be spelled as one empty leaf, so it is no nodes.
     BvhNode nodes[4];
     const uint32_t written = build_bvh(nullptr, 0, nullptr, 0, nodes, 4);
-    EXPECT_EQ(written, 1u) << "an empty tree still needs a root";
-    EXPECT_EQ(nodes[0].count, 0u);
+    EXPECT_EQ(written, 0u) << "an empty tree is zero nodes, not an empty root";
+
+    // And what it produces must satisfy the validator, which is the whole
+    // point: the two halves of this module have to agree.
+    StaticMesh mesh;
+    mesh.nodes = nodes;
+    mesh.node_count = written;
+    const char* error = nullptr;
+    EXPECT_TRUE(validate_bvh(mesh, &error)) << error;
 }
 
 TEST(PhysBvh, AnOutOfRangeVertexIndexIsRefused)

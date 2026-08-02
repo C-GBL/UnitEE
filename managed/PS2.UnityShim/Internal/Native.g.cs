@@ -195,6 +195,22 @@ namespace UnityEngine.Internal
         [DllImport("__Internal")]
         internal static extern void ps2ur_phys_body_add_force(int body, float x, float y, float z);
 
+        // Rigidbody.linearDamping / angularDamping. Separate from add_body because they are settable at any time; a body created without them would silently ignore what the scene exported.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_phys_body_set_damping(int body, float linearDamping, float angularDamping);
+
+        // Rigidbody.useGravity / isKinematic / freezeRotation. add_body takes the first two as well, but only as initial values; without this setter changing either after binding would be a property that reads back what you set and changes nothing.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_phys_body_set_flags(int body, int useGravity, int isKinematic, int freezeRotation);
+
+        // Colliders in the table, including the ones the PHYS section baked. Walked once at boot to map collider indices to GameObjects for the contact callbacks.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_phys_collider_count();
+
+        // The entity HANDLE a collider rides on, or 0 for baked static geometry that belongs to no entity.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_phys_collider_entity(int index);
+
         // The collider index riding on an entity, or -1. Baked colliders arrive from the PHYS section already bound to their entity.
         [DllImport("__Internal")]
         internal static extern int ps2ur_phys_collider_for_entity(int handle);

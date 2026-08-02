@@ -18,19 +18,56 @@ namespace UnityEngine
     {
         private int m_Body = -1;
         private float m_Mass = 1f;
+        private float m_LinearDamping;
+        private float m_AngularDamping = 0.05f;
         private bool m_UseGravity = true;
         private bool m_IsKinematic;
+        private bool m_FreezeRotation;
 
-        // Created against the collider already on this entity. A Rigidbody
-        // with no collider still integrates but never collides, which is
-        // also what Unity does.
+        // Created against the collider already on this entity.
+        //
+        // A collider index of -1 means this entity has none. In Unity such a
+        // body still falls; here it CANNOT, and saying so is the whole point
+        // of this branch. The solver addresses positions by collider index
+        // (phys::step takes a per-collider transform array), so a body with
+        // no collider integrates a velocity into a slot that does not exist
+        // and its transform never moves. A silent no-op is the worst
+        // possible outcome, so it is a console error naming the fix.
         internal void Bind(int colliderIndex)
         {
+            if (colliderIndex < 0)
+            {
+                Debug.LogError(
+                    "Rigidbody on '" + (gameObject != null ? gameObject.name : "?") +
+                    "' has no Collider, so it cannot simulate: this solver moves " +
+                    "bodies through their collider. Add a BoxCollider, " +
+                    "SphereCollider or CapsuleCollider. Deviation 23 in " +
+                    "docs/supported-api.md.");
+                return;
+            }
             m_Body = Native.ps2ur_phys_add_body(colliderIndex, m_Mass,
                                                 m_UseGravity ? 1 : 0,
                                                 m_IsKinematic ? 1 : 0);
             if (m_Body < 0)
+            {
                 Debug.LogError("Rigidbody: the native body table is full");
+                return;
+            }
+            // add_body does not carry these, so they are pushed after: a body
+            // that took the scene's mass but the runtime's default damping
+            // would drift from the Editor in a way nobody would think to
+            // look for.
+            Native.ps2ur_phys_body_set_damping(m_Body, m_LinearDamping,
+                                               m_AngularDamping);
+            PushFlags();
+        }
+
+        private void PushFlags()
+        {
+            if (m_Body >= 0)
+                Native.ps2ur_phys_body_set_flags(m_Body, m_UseGravity ? 1 : 0,
+                                                 m_IsKinematic ? 1 : 0,
+                                                 m_FreezeRotation ? 1 : 0);
         }
 
         internal int BodyIndex => m_Body;
@@ -41,16 +78,66 @@ namespace UnityEngine
             set => m_Mass = value > 0f ? value : 0.0001f;
         }
 
+        public float linearDamping
+        {
+            get => m_LinearDamping;
+            set
+            {
+                m_LinearDamping = value > 0f ? value : 0f;
+                if (m_Body >= 0)
+                    Native.ps2ur_phys_body_set_damping(m_Body, m_LinearDamping,
+                                                       m_AngularDamping);
+            }
+        }
+
+        public float angularDamping
+        {
+            get => m_AngularDamping;
+            set
+            {
+                m_AngularDamping = value > 0f ? value : 0f;
+                if (m_Body >= 0)
+                    Native.ps2ur_phys_body_set_damping(m_Body, m_LinearDamping,
+                                                       m_AngularDamping);
+            }
+        }
+
+        // Unity 6 renamed drag/angularDrag to linearDamping/angularDamping and
+        // kept the old names as obsolete aliases. Both exist here for the same
+        // reason they exist there: existing scripts still say 'drag'.
+        [System.Obsolete("Use linearDamping instead. (UnityUpgradable) -> linearDamping")]
+        public float drag
+        {
+            get => linearDamping;
+            set => linearDamping = value;
+        }
+
+        [System.Obsolete("Use angularDamping instead. (UnityUpgradable) -> angularDamping")]
+        public float angularDrag
+        {
+            get => angularDamping;
+            set => angularDamping = value;
+        }
+
         public bool useGravity
         {
             get => m_UseGravity;
-            set => m_UseGravity = value;
+            set { m_UseGravity = value; PushFlags(); }
         }
 
         public bool isKinematic
         {
             get => m_IsKinematic;
-            set => m_IsKinematic = value;
+            set { m_IsKinematic = value; PushFlags(); }
+        }
+
+        // The one constraint this solver has. Unity's RigidbodyConstraints
+        // (position freezing, per-axis rotation freezing) needs a constraint
+        // solver, which ADR-009 deliberately does not build.
+        public bool freezeRotation
+        {
+            get => m_FreezeRotation;
+            set { m_FreezeRotation = value; PushFlags(); }
         }
 
         public Vector3 velocity

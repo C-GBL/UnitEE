@@ -24,6 +24,7 @@ namespace Ps2.Editor
             public Light Light;
             public List<string> Scripts; // managed type names, or null
             public SkinnedMeshRenderer Skinned; // M9, or null
+            public Rigidbody Body;              // M11, or null
         }
 
         // Pre-built animation sections handed in by a caller that owns the
@@ -73,8 +74,8 @@ namespace Ps2.Editor
                 materialLookup[P2bMeshExporter.KindSkinned + ":4294967295"] = 0;
             }
 
-            foreach (GameObject root in SceneManager.GetActiveScene()
-                         .GetRootGameObjects())
+            GameObject[] roots = SceneManager.GetActiveScene().GetRootGameObjects();
+            foreach (GameObject root in roots)
             {
                 Walk(root.transform, -1, entities, meshes, meshLookup, textures,
                      textureLookup, materials, materialLookup);
@@ -156,11 +157,48 @@ namespace Ps2.Editor
                 writer.AddSection(P2bWriter.SectionSound, PendingSound);
             }
 
+            // PHYS (M11 task 1). Colliders are baked against the entity table
+            // built by the walk above, so this has to run after it: a collider
+            // record names the entity index it rides on, and a primitive
+            // collider whose entity resolved to -1 would be static geometry
+            // that can never move.
+            //
+            // This is deliberately unconditional. Baking is cheap when a scene
+            // has no colliders (an empty BVH is one degenerate node), and the
+            // alternative -- exporting collision only when someone remembers
+            // to ask -- is exactly how the section came to be missing from
+            // every build until now.
+            var entityOf = new Dictionary<GameObject, int>();
+            for (int i = 0; i < entities.Count; i++)
+            {
+                entityOf[entities[i].Transform.gameObject] = i;
+            }
+            P2bPhysicsExporter.BakeResult phys = P2bPhysicsExporter.Bake(
+                roots, go => entityOf.TryGetValue(go, out int index) ? index : -1);
+            foreach (string warning in phys.Warnings)
+            {
+                Debug.LogWarning("[PS2] " + warning);
+            }
+            // A null payload means the bake refused (the vertex cap); the
+            // warning above says why. Writing a section anyway would ship
+            // collision that silently disagrees with the scene.
+            if (phys.Payload != null)
+            {
+                writer.AddSection(P2bWriter.SectionPhysics, phys.Payload);
+            }
+
             writer.AddSection(P2bWriter.SectionScene, BuildScene(entities, scriptNames));
             writer.Write(path);
+            int bodies = 0;
+            foreach (var e in entities)
+            {
+                if (e.Body != null) bodies++;
+            }
             Debug.Log($"[PS2] exported '{path}': {entities.Count} entities, " +
                       $"{meshes.Count} meshes, {textures.Count} textures, " +
-                      $"{materials.Count} materials, {scriptComponents} scripts");
+                      $"{materials.Count} materials, {scriptComponents} scripts, " +
+                      $"{phys.ColliderCount} colliders, {bodies} rigidbodies, " +
+                      $"{phys.TriangleCount} collision triangles");
         }
 
         private static void Walk(Transform t, int parent,
@@ -235,6 +273,13 @@ namespace Ps2.Editor
             {
                 record.Skinned = skinned;
             }
+
+            // Rigidbody (M11). The COLLIDER travels in the PHYS section and the
+            // BODY travels here, because they are different kinds of thing: a
+            // collider is baked geometry the solver reads, a body is component
+            // state the managed Rigidbody owns. Keeping the body in SCEN is
+            // what lets GetComponent<Rigidbody>() find one.
+            record.Body = t.GetComponent<Rigidbody>();
 
             var camera = t.GetComponent<Camera>();
             if (camera != null)
@@ -392,6 +437,25 @@ namespace Ps2.Editor
                     p.U32(0);          // skeleton (the mesh names its own)
                     p.U32(0);          // controller index
                     comps.Add((5, p.ToArray()));
+                }
+                if (e.Body != null)
+                {
+                    // 16 bytes: mass, the two damping terms, and the flags the
+                    // solver actually reads. Deliberately NOT here: constraints
+                    // beyond freezeRotation, interpolation, collision detection
+                    // mode and centre of mass -- this solver has no equivalent
+                    // for any of them (ADR-009), and exporting a field nothing
+                    // consumes is how a value silently stops meaning anything.
+                    var p = new ByteBuffer();
+                    p.F32(e.Body.mass);
+                    p.F32(e.Body.linearDamping);
+                    p.F32(e.Body.angularDamping);
+                    uint flags = 0;
+                    if (e.Body.useGravity) flags |= 1u;
+                    if (e.Body.isKinematic) flags |= 2u;
+                    if (e.Body.freezeRotation) flags |= 4u;
+                    p.U32(flags);
+                    comps.Add((6, p.ToArray()));
                 }
                 if (e.Scripts != null)
                 {

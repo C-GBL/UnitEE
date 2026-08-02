@@ -986,6 +986,69 @@
       ]
     },
     {
+      "name": "ps2ur_phys_body_set_damping",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "Rigidbody.linearDamping / angularDamping. Separate from add_body because they are settable at any time; a body created without them would silently ignore what the scene exported.",
+      "returns": "void",
+      "params": [
+        {
+          "name": "body",
+          "type": "i32"
+        },
+        {
+          "name": "linearDamping",
+          "type": "f32"
+        },
+        {
+          "name": "angularDamping",
+          "type": "f32"
+        }
+      ]
+    },
+    {
+      "name": "ps2ur_phys_body_set_flags",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "Rigidbody.useGravity / isKinematic / freezeRotation. add_body takes the first two as well, but only as initial values; without this setter changing either after binding would be a property that reads back what you set and changes nothing.",
+      "returns": "void",
+      "params": [
+        {
+          "name": "body",
+          "type": "i32"
+        },
+        {
+          "name": "useGravity",
+          "type": "i32"
+        },
+        {
+          "name": "isKinematic",
+          "type": "i32"
+        },
+        {
+          "name": "freezeRotation",
+          "type": "i32"
+        }
+      ]
+    },
+    {
+      "name": "ps2ur_phys_collider_count",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "Colliders in the table, including the ones the PHYS section baked. Walked once at boot to map collider indices to GameObjects for the contact callbacks.",
+      "returns": "i32",
+      "params": []
+    },
+    {
+      "name": "ps2ur_phys_collider_entity",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "The entity HANDLE a collider rides on, or 0 for baked static geometry that belongs to no entity.",
+      "returns": "i32",
+      "params": [
+        {
+          "name": "index",
+          "type": "i32"
+        }
+      ]
+    },
+    {
       "name": "ps2ur_phys_collider_for_entity",
       "cs_class": "UnityEngine.Internal.Native",
       "doc": "The collider index riding on an entity, or -1. Baked colliders arrive from the PHYS section already bound to their entity.",

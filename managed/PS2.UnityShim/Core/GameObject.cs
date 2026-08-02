@@ -70,7 +70,22 @@ namespace UnityEngine
             c.Attach(this);
             m_Components.Add(c);
             if (c is MonoBehaviour behaviour)
+            {
                 Runtime.Register(behaviour);
+            }
+            // Physics components are backed by a NATIVE table entry, and
+            // nothing else creates it. Without this an AddComponent<Rigidbody>
+            // returns an object whose AddForce silently does nothing -- the
+            // component exists, so the compiler and GetComponent are both
+            // happy, and the object simply never moves.
+            else if (c is Rigidbody body)
+            {
+                body.Bind(Native.ps2ur_phys_collider_for_entity(m_Handle));
+            }
+            else if (c is CharacterController controller)
+            {
+                controller.Bind(m_Handle);
+            }
             return c;
         }
 

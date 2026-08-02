@@ -173,13 +173,22 @@ uint32_t build_bvh(BvhTriangle* triangles, uint32_t triangle_count,
         return 0;
     }
     if (triangle_count == 0) {
-        // An empty tree is legal and useful: a scene with primitives only.
-        // One inverted-bounds node means every query misses immediately.
-        out_nodes[0].bmin = Vec3{3.4e38f, 3.4e38f, 3.4e38f};
-        out_nodes[0].bmax = Vec3{-3.4e38f, -3.4e38f, -3.4e38f};
-        out_nodes[0].first = 0;
-        out_nodes[0].count = 0;
-        return 1;
+        // An empty tree is ZERO nodes, not one empty node.
+        //
+        // This used to emit a single node with inverted bounds and count 0,
+        // on the reasoning that every query would miss it immediately. But
+        // count == 0 is how this format spells "INTERNAL node, children at
+        // first and first+1", so that lone node claimed two children that
+        // did not exist and validate_bvh rejected the whole tree with "bvh
+        // internal node points outside the node array". There is no way to
+        // encode an empty leaf, so the empty tree has to be no tree.
+        //
+        // Zero is also the failure return, which is not ambiguous in
+        // practice: a caller that passed triangles and got zero nodes
+        // failed, and a caller that passed none did not. Traversal already
+        // handles node_count == 0 -- a container with no PHYS section
+        // produces exactly that (see load_physics).
+        return 0;
     }
     if (triangles == nullptr || vertices == nullptr) {
         return 0;
@@ -209,9 +218,24 @@ uint32_t build_bvh(BvhTriangle* triangles, uint32_t triangle_count,
 bool validate_bvh(const StaticMesh& mesh, const char** out_error)
 {
     const char* error = nullptr;
-    // A tree with no nodes is not the same as an empty tree; the builder
-    // always emits at least a root.
-    if (mesh.nodes == nullptr || mesh.node_count == 0) {
+    // No nodes IS the empty tree, and it is valid.
+    //
+    // This function used to reject it, on the belief that "the builder
+    // always emits at least a root". The builder did -- and what it emitted
+    // was a node with count 0, which this same function then read as an
+    // internal node pointing at two children that did not exist. Three
+    // pieces of one module each held a different idea of how to spell an
+    // empty tree; this is the one they now agree on.
+    if (mesh.node_count == 0) {
+        if (mesh.triangle_count > 0) {
+            error = "bvh has triangles but no nodes to reach them";
+        }
+        if (out_error != nullptr) {
+            *out_error = error == nullptr ? "" : error;
+        }
+        return error == nullptr;
+    }
+    if (mesh.nodes == nullptr) {
         error = "bvh has no nodes";
     } else if (mesh.triangle_count > 0 &&
                (mesh.triangles == nullptr || mesh.vertices == nullptr)) {

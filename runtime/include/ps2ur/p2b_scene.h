@@ -41,6 +41,12 @@ inline constexpr uint16_t kComponentCamera = 2;
 inline constexpr uint16_t kComponentDirectionalLight = 3;
 inline constexpr uint16_t kComponentScript = 4;
 inline constexpr uint16_t kComponentSkinnedMeshRenderer = 5;
+inline constexpr uint16_t kComponentRigidbody = 6;
+
+// A Rigidbody at most per entity, so the table is bounded by kMaxEntities;
+// this is the far smaller number a scene realistically simulates, and
+// overflowing it is a loud load failure rather than a silent drop.
+inline constexpr uint32_t kMaxRigidbodies = 64;
 
 // Material kinds (plan section 7.3). The VALUE is the sort-key field too.
 inline constexpr uint32_t kMaterialUnlit = 0;
@@ -117,6 +123,18 @@ struct DirectionalLight {
 struct ScriptRef {
     int32_t entity = -1;
     const char* type_name = "";
+};
+
+// A Rigidbody on an entity (M11): the component state the managed Rigidbody
+// is constructed from at load. The native BODY is not created here -- the
+// managed side creates it, because it is the managed Rigidbody that owns the
+// body index for the rest of the object's life.
+struct RigidbodyRef {
+    int32_t entity = -1;
+    float mass = 1.0f;
+    float linear_damping = 0.0f;
+    float angular_damping = 0.05f;
+    uint32_t flags = 1u; // bit0 use_gravity, bit1 kinematic, bit2 freeze rotation
 };
 
 // A skinned mesh (M9). Batches are zero-copy blobs like rigid meshes, but
@@ -206,6 +224,9 @@ public:
     uint32_t script_count() const { return m_script_count; }
     const ScriptRef& script(uint32_t i) const { return m_scripts[i]; }
 
+    uint32_t rigidbody_count() const { return m_rigidbody_count; }
+    const RigidbodyRef& rigidbody(uint32_t i) const { return m_rigidbodies[i]; }
+
     // ---- M9: skinning + animation ---------------------------------------
 
     uint32_t skinned_mesh_count() const { return m_skinned_mesh_count; }
@@ -262,6 +283,9 @@ private:
 
     ScriptRef m_scripts[kMaxScripts];
     uint32_t m_script_count = 0;
+
+    RigidbodyRef m_rigidbodies[kMaxRigidbodies];
+    uint32_t m_rigidbody_count = 0;
 
     LoadedSkinnedMesh m_skinned_meshes[kMaxSkinnedMeshes];
     uint32_t m_skinned_mesh_count = 0;

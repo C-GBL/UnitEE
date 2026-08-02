@@ -170,6 +170,14 @@ void ps2ur_phys_body_set_velocity(int32_t body, float x, float y, float z);
 void ps2ur_phys_body_get_velocity(int32_t body, P2Vec3* value);
 // Rigidbody.AddForce in Force mode; the accumulator is cleared each step.
 void ps2ur_phys_body_add_force(int32_t body, float x, float y, float z);
+// Rigidbody.linearDamping / angularDamping. Separate from add_body because they are settable at any time; a body created without them would silently ignore what the scene exported.
+void ps2ur_phys_body_set_damping(int32_t body, float linearDamping, float angularDamping);
+// Rigidbody.useGravity / isKinematic / freezeRotation. add_body takes the first two as well, but only as initial values; without this setter changing either after binding would be a property that reads back what you set and changes nothing.
+void ps2ur_phys_body_set_flags(int32_t body, int32_t useGravity, int32_t isKinematic, int32_t freezeRotation);
+// Colliders in the table, including the ones the PHYS section baked. Walked once at boot to map collider indices to GameObjects for the contact callbacks.
+int32_t ps2ur_phys_collider_count(void);
+// The entity HANDLE a collider rides on, or 0 for baked static geometry that belongs to no entity.
+int32_t ps2ur_phys_collider_entity(int32_t index);
 // The collider index riding on an entity, or -1. Baked colliders arrive from the PHYS section already bound to their entity.
 int32_t ps2ur_phys_collider_for_entity(int32_t handle);
 // Creates a CharacterController on an entity. Returns its index, or -1.

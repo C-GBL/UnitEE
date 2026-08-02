@@ -25,14 +25,75 @@ namespace Ps2.Editor
     /// </summary>
     public static class PS2ContentValidator
     {
-        /// <summary>Components with a real equivalent in the shim.</summary>
-        private static readonly HashSet<string> SupportedComponents = new HashSet<string>
+        /// <summary>
+        /// Components the runtime knows about at all. Anything outside this
+        /// set has no equivalent whatsoever and is a hard error.
+        /// </summary>
+        private static readonly HashSet<string> KnownComponents = new HashSet<string>
         {
             "Transform", "RectTransform", "MeshFilter", "MeshRenderer",
             "SkinnedMeshRenderer", "Camera", "Light", "Animator", "Animation",
             "AudioSource", "AudioListener", "BoxCollider", "SphereCollider",
             "CapsuleCollider", "MeshCollider", "Rigidbody", "CharacterController",
         };
+
+        /// <summary>
+        /// Components the SCENE EXPORTER actually writes into the container.
+        ///
+        /// This set exists because of a bug worth not repeating. Rigidbody was
+        /// in the supported list, the shim implemented it, the physics engine
+        /// simulated it -- and the scene exporter carried no record of it, so
+        /// GetComponent&lt;Rigidbody&gt;() returned null on target and the
+        /// user's script died with a NullReferenceException on the frame they
+        /// pressed a button. Every piece was present and the chain still had
+        /// a hole in it.
+        ///
+        /// A validator that only asks "is this component supported?" cannot
+        /// see that hole, because every individual answer is yes. So the
+        /// question asked here is the end-to-end one: does this component
+        /// survive the trip into the .p2b?
+        /// </summary>
+        private static readonly HashSet<string> ExportedComponents = new HashSet<string>
+        {
+            "Transform", "RectTransform", "MeshFilter", "MeshRenderer",
+            "Camera", "Light", "Rigidbody",
+            "BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider",
+        };
+
+        /// <summary>
+        /// Known-but-dropped components, each with what actually happens on
+        /// target. The text is the whole value of this check: "unsupported"
+        /// sends someone looking for a workaround, "the exporter has no path
+        /// for it, so GetComponent returns null" tells them what to expect.
+        /// </summary>
+        private static readonly Dictionary<string, string> DropReasons =
+            new Dictionary<string, string>
+            {
+                ["SkinnedMeshRenderer"] =
+                    "skinned meshes need a baked rig (skeleton + clips + " +
+                    "controller), which the scene exporter does not produce on " +
+                    "its own. The character will not be drawn.",
+                ["Animator"] =
+                    "the Animator is bound to a baked controller, which the " +
+                    "scene exporter does not produce on its own. " +
+                    "GetComponent<Animator>() returns null.",
+                ["Animation"] =
+                    "the legacy Animation component is not implemented; the " +
+                    "runtime animates through Animator and baked clips only.",
+                ["AudioSource"] =
+                    "audio is exported as a separate SND section with no " +
+                    "per-entity binding, so the source will not play by itself. " +
+                    "Drive it from a script through the PS2Audio API.",
+                ["AudioListener"] =
+                    "there is a single implicit listener at the active camera; " +
+                    "the component itself does nothing.",
+                ["CharacterController"] =
+                    "the exporter carries no record of its radius/height/slope " +
+                    "settings, so GetComponent<CharacterController>() returns " +
+                    "null. Add one from a script with " +
+                    "gameObject.AddComponent<CharacterController>() and set its " +
+                    "properties there.",
+            };
 
         public sealed class Finding
         {
@@ -80,7 +141,7 @@ namespace Ps2.Editor
                     continue; // user scripts are the point; the shim validates their API use
 
                 string type = c.GetType().Name;
-                if (!SupportedComponents.Contains(type))
+                if (!KnownComponents.Contains(type))
                 {
                     findings.Add(Error(
                         $"{scenePath}: '{PathOf(go)}' has a {type}, which this runtime " +
@@ -88,6 +149,44 @@ namespace Ps2.Editor
                         "supported component list; remove it or replace it with a " +
                         "supported equivalent.", go));
                 }
+                else if (!ExportedComponents.Contains(type))
+                {
+                    string why = DropReasons.TryGetValue(type, out string reason)
+                        ? reason
+                        : "the scene exporter has no path for it.";
+                    findings.Add(Error(
+                        $"{scenePath}: '{PathOf(go)}' has a {type} that WILL NOT be " +
+                        $"exported: {why} The build will otherwise succeed, so this " +
+                        "would only show up as wrong behaviour on the console. See " +
+                        "docs/supported-api.md.", go));
+                }
+            }
+
+            // A directional Light is the only kind the container carries: the
+            // VU1 lighting program takes a direction and a colour, and there
+            // is no per-pixel path a point light could use.
+            var light = go.GetComponent<Light>();
+            if (light != null && light.type != LightType.Directional)
+            {
+                findings.Add(Error(
+                    $"{scenePath}: '{PathOf(go)}' has a {light.type} Light. Only " +
+                    "Directional lights are exported -- vertex lighting on VU1 " +
+                    "takes a direction, so a point or spot light has no " +
+                    "equivalent. The object will simply be unlit.", light));
+            }
+
+            // The failure this whole check exists for, in its remaining form:
+            // a Rigidbody that IS exported but can never move, because this
+            // solver drives bodies through their collider.
+            var body = go.GetComponent<Rigidbody>();
+            if (body != null && go.GetComponent<Collider>() == null)
+            {
+                findings.Add(Error(
+                    $"{scenePath}: '{PathOf(go)}' has a Rigidbody but no Collider. " +
+                    "This solver moves a body through its collider (ADR-009), so " +
+                    "the body would integrate a velocity and never move. Add a " +
+                    "Box, Sphere or CapsuleCollider. Deviation 23 in " +
+                    "docs/supported-api.md.", body));
             }
 
             var filter = go.GetComponent<MeshFilter>();

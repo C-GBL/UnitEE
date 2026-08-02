@@ -146,3 +146,22 @@ These are listed prominently here and asserted in the conformance suite
     other than `Force`. Each needs a solver this runtime does not have, and
     a property that read back what you set while changing nothing would be
     worse than a compile error.
+23. **A `Rigidbody` needs a `Collider` on the same GameObject to move at
+    all.** The solver addresses transforms by collider index -- `phys::step`
+    takes one position per collider -- so a body with no collider integrates
+    a velocity into a slot that does not exist. In Unity such a body still
+    falls. Here it cannot, so `Rigidbody.Bind` logs an error naming the
+    object, and the build validator reports it before the build runs.
+24. **Components carried into the build are a smaller set than components
+    the runtime supports.** `MeshFilter`/`MeshRenderer`, `Camera`, a
+    Directional `Light`, `Rigidbody` and the four collider types are
+    exported from the scene. `SkinnedMeshRenderer` and `Animator` need a
+    baked rig; `AudioSource` needs the separate SND export; `Animation`,
+    `AudioListener` and an Editor-placed `CharacterController` are not
+    carried at all. The build validator reports each with what happens on
+    target, because "supported" and "exported" being different sets is
+    exactly how a `GetComponent` came to return null on the console while
+    every individual piece looked present.
+25. **Only Directional lights are exported.** Vertex lighting on VU1 takes a
+    direction and a colour; a point or spot light has no equivalent, so an
+    object lit only by one renders unlit.

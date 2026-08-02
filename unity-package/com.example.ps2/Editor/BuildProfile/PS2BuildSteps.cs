@@ -154,7 +154,8 @@ namespace Ps2.Editor
             inputs.Sort(StringComparer.Ordinal);
             return PS2ContentHash.OfString(
                 PS2ContentHash.OfFiles(inputs) +
-                PS2ContentHash.OfProfile(ctx.Profile));
+                PS2ContentHash.OfProfile(ctx.Profile) +
+                PS2ContentHash.OfBuildCode(ctx.PackageRoot));
         }
     }
 
@@ -496,6 +497,7 @@ namespace Ps2.Editor
                 inputs.Add(shim);
             return PS2ContentHash.OfString(
                 PS2ContentHash.OfFiles(inputs) +
+                PS2ContentHash.OfBuildCode(ctx.PackageRoot) +
                 string.Join(",", ctx.Profile.scriptingDefines ?? new string[0]) +
                 ctx.Profile.strippingLevel +
                 (ctx.Profile.linkXmlPath ?? ""));
@@ -576,6 +578,7 @@ namespace Ps2.Editor
                              : new List<string>();
             return PS2ContentHash.OfString(
                 PS2ContentHash.OfFiles(inputs) +
+                PS2ContentHash.OfBuildCode(ctx.PackageRoot) +
                 string.Join(",", ctx.Profile.additionalIl2cppArgs ?? new string[0]) +
                 ctx.Profile.developmentBuild);
         }
@@ -708,11 +711,19 @@ namespace Ps2.Editor
             int code = PS2Process.Run(ctx.Toolchain.CMakeExe, configure.ToString(),
                                       ctx.PackageRoot, out output,
                                       line => Debug.Log("[game-cmake] " + line));
+            // A failure here is FATAL, not a warning.
+            //
+            // These two used to warn and return, from when the game host was
+            // an experiment bolted onto a runtime-only build. It is now the
+            // build's entire product, and warning meant a compile error came
+            // back as "succeeded: true" with an empty elfPath -- a green
+            // build that shipped nothing. Whatever else this pipeline gets
+            // wrong, it must never report success for output it did not
+            // produce.
             if (code != 0)
             {
-                ctx.Warn("The game executable could not be configured, so only the " +
-                         "runtime was built:\n" + output);
-                return;
+                throw new PS2BuildException(
+                    "The game executable could not be configured:\n" + output);
             }
 
             code = PS2Process.Run(ctx.Toolchain.CMakeExe,
@@ -721,8 +732,8 @@ namespace Ps2.Editor
                                   line => Debug.Log("[game] " + line));
             if (code != 0)
             {
-                ctx.Warn("The game executable failed to link:\n" + output);
-                return;
+                throw new PS2BuildException(
+                    "The game executable failed to build:\n" + output);
             }
             ctx.GameBuildDirectory = gameBuild;
         }
@@ -794,10 +805,11 @@ namespace Ps2.Editor
             string elf = FindBuiltElf(ctx);
             if (elf == null)
             {
-                ctx.Warn("No game ELF was produced, so packaging was skipped. " +
-                         "This is expected until a game main() exists in the " +
-                         "native tree.");
-                return;
+                throw new PS2BuildException(
+                    "No game ELF was produced, so there is nothing to package. " +
+                    "The native build step should already have failed; if the " +
+                    "build got this far, look at its log rather than at this " +
+                    "message.");
             }
             File.Copy(elf, ctx.ElfPath, true);
             File.Copy(elf, Path.Combine(stage, ctx.Profile.bootElfName), true);

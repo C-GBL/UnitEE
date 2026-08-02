@@ -117,6 +117,57 @@ namespace UnityEngine.Internal
             Register(behaviour);
         }
 
+        // Instantiates the Rigidbody a scene exported and binds it to the
+        // collider the PHYS section put on the same entity. Called once per
+        // Rigidbody at boot, BEFORE the first Tick -- so a script's Start()
+        // doing GetComponent<Rigidbody>() finds one, which is the entire
+        // reason the component travels in the container at all.
+        internal static void CreateRigidbody(int entityHandle, float mass,
+                                             float linearDamping,
+                                             float angularDamping, int flags)
+        {
+            GameObject go = GetOrCreateWrapper(entityHandle);
+            if (go == null)
+            {
+                Debug.LogError("CreateRigidbody: dead entity handle");
+                return;
+            }
+            Rigidbody body = new Rigidbody();
+            body.Attach(go);
+            body.mass = mass;
+            body.linearDamping = linearDamping;
+            body.angularDamping = angularDamping;
+            body.useGravity = (flags & 1) != 0;
+            body.isKinematic = (flags & 2) != 0;
+            body.freezeRotation = (flags & 4) != 0;
+            // Registered before Bind so that even a body that fails to bind
+            // is findable: GetComponent<Rigidbody>() returning null would
+            // turn a diagnosable configuration problem into a
+            // NullReferenceException in user code.
+            go.RegisterComponent(body);
+            body.Bind(Native.ps2ur_phys_collider_for_entity(entityHandle));
+        }
+
+        // Maps every native collider to the entity it rides on, so a contact
+        // can be delivered to the right GameObject.
+        //
+        // ONE call for the whole table rather than one per collider, and it
+        // stores HANDLES rather than GameObjects: a wrapper is a managed
+        // allocation, and materialising one for all 500 colliders in a scene
+        // would spend the GC heap on objects no script will ever look at.
+        // DeliverContact resolves a handle to a wrapper only when a contact
+        // actually involves it.
+        internal static void BindColliders()
+        {
+            int count = Native.ps2ur_phys_collider_count();
+            for (int i = 0; i < count; i++)
+            {
+                int handle = Native.ps2ur_phys_collider_entity(i);
+                if (handle != 0)
+                    s_HandleByCollider[i] = handle;
+            }
+        }
+
         internal static void Register(MonoBehaviour behaviour)
         {
             BehaviourState state = Bind(behaviour);
@@ -225,9 +276,7 @@ namespace UnityEngine.Internal
 
         private static void DeliverContact(NativeContact nc, int self, int other)
         {
-            GameObject go = s_GameObjectByCollider.TryGetValue(self, out GameObject found)
-                ? found
-                : null;
+            GameObject go = GameObjectForCollider(self);
             if (go == null)
                 return;
 
@@ -239,8 +288,7 @@ namespace UnityEngine.Internal
             s_Collision.normal = new Vector3(nc.normalX, nc.normalY, nc.normalZ);
             s_Collision.separation = nc.separation;
             s_Collision.otherColliderIndex = other;
-            s_Collision.gameObject =
-                s_GameObjectByCollider.TryGetValue(other, out GameObject o) ? o : null;
+            s_Collision.gameObject = GameObjectForCollider(other);
 
             bool isTrigger = nc.isTrigger != 0;
             for (int i = 0; i < s_Behaviours.Count; i++)
@@ -282,11 +330,30 @@ namespace UnityEngine.Internal
         private static readonly object[] s_ContactArgs = new object[1];
         private static readonly Dictionary<int, GameObject> s_GameObjectByCollider =
             new Dictionary<int, GameObject>();
+        private static readonly Dictionary<int, int> s_HandleByCollider =
+            new Dictionary<int, int>();
 
         internal static void RegisterCollider(int colliderIndex, GameObject go)
         {
             if (colliderIndex >= 0)
                 s_GameObjectByCollider[colliderIndex] = go;
+        }
+
+        // A collider's GameObject: an explicit registration first (a wrapper
+        // created by script or by AddComponent), then the entity handle
+        // BindColliders recorded, resolved to a wrapper on first use.
+        private static GameObject GameObjectForCollider(int colliderIndex)
+        {
+            if (colliderIndex < 0)
+                return null;
+            if (s_GameObjectByCollider.TryGetValue(colliderIndex, out GameObject found))
+                return found;
+            if (!s_HandleByCollider.TryGetValue(colliderIndex, out int handle))
+                return null;
+            GameObject go = GetOrCreateWrapper(handle);
+            if (go != null)
+                s_GameObjectByCollider[colliderIndex] = go;
+            return go;
         }
 
         // ---- object registry ----------------------------------------------

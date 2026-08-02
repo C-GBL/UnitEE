@@ -271,16 +271,19 @@ namespace Ps2.Editor
         private static int BuildBvh(Tri[] triangles, List<Vector3> vertices,
                                     Node[] nodes)
         {
+            // NO NODES, not one empty node.
+            //
+            // In this format count == 0 means "internal node, children at
+            // first and first+1". A lone node with count 0 therefore claims
+            // two children that do not exist, and the runtime's validate_bvh
+            // rejects the whole section with "bvh internal node points
+            // outside the node array" -- which is what a scene whose only
+            // colliders are primitives looks like. There is no way to spell
+            // "empty leaf", so the answer is no tree at all: load_physics
+            // skips the mesh entirely when node_count is 0.
             if (triangles.Length == 0)
             {
-                nodes[0] = new Node
-                {
-                    Min = new Vector3(3.4e38f, 3.4e38f, 3.4e38f),
-                    Max = new Vector3(-3.4e38f, -3.4e38f, -3.4e38f),
-                    First = 0,
-                    Count = 0,
-                };
-                return 1;
+                return 0;
             }
             int count = 1;
             Build(triangles, vertices, nodes, 0, 0, triangles.Length, 0, ref count);

@@ -283,6 +283,57 @@ extern "C" void ps2ur_phys_body_add_force(int32_t body, float x, float y,
     }
 }
 
+extern "C" void ps2ur_phys_body_set_damping(int32_t body, float linearDamping,
+                                            float angularDamping)
+{
+    if (body >= 0 && static_cast<uint32_t>(body) < phys::body_count()) {
+        phys::RigidBody& b = phys::body(static_cast<uint32_t>(body));
+        b.drag = linearDamping > 0.0f ? linearDamping : 0.0f;
+        b.angular_drag = angularDamping > 0.0f ? angularDamping : 0.0f;
+    }
+}
+
+extern "C" void ps2ur_phys_body_set_flags(int32_t body, int32_t useGravity,
+                                          int32_t isKinematic,
+                                          int32_t freezeRotation)
+{
+    if (body < 0 || static_cast<uint32_t>(body) >= phys::body_count()) {
+        return;
+    }
+    phys::RigidBody& b = phys::body(static_cast<uint32_t>(body));
+    b.use_gravity = useGravity != 0;
+    b.freeze_rotation = freezeRotation != 0;
+    if (b.is_kinematic && isKinematic == 0) {
+        // Leaving kinematic mode: the integrator has been clearing this
+        // body's force accumulator and never touching its velocity, so it
+        // starts from rest rather than resuming whatever it held before.
+        b.velocity = Vec3{0, 0, 0};
+        b.angular_velocity = Vec3{0, 0, 0};
+        b.sleeping = false;
+        b.sleep_timer = 0.0f;
+    }
+    b.is_kinematic = isKinematic != 0;
+}
+
+extern "C" int32_t ps2ur_phys_collider_count()
+{
+    return static_cast<int32_t>(phys::collider_count());
+}
+
+extern "C" int32_t ps2ur_phys_collider_entity(int32_t index)
+{
+    scene::World* world = bridge::world();
+    if (world == nullptr || index < 0 ||
+        static_cast<uint32_t>(index) >= phys::collider_count()) {
+        return 0;
+    }
+    const int32_t entity = phys::collider_const(static_cast<uint32_t>(index)).entity;
+    if (entity < 0 || static_cast<uint32_t>(entity) >= world->entity_count()) {
+        return 0;
+    }
+    return world->handle_of(entity);
+}
+
 extern "C" int32_t ps2ur_phys_collider_for_entity(int32_t handle)
 {
     const int32_t entity = resolve_entity(handle);
