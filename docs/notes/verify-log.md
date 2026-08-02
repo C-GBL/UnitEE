@@ -235,6 +235,21 @@ additively while streamed music plays and asserts both.
 | 2026-08-02 | A raw-dump fallback must not accept prose | With no `M10_TRACE` lines present the tool falls back to "one path per line", which happily turned `[m10] nothing happened` into a file name. Lines now have to look like a disc path (no spaces, an extension) to count. |
 | 2026-08-02 | Verified end to end | Planner -> `mkps2iso disc.xml` -> a 4,063,232-byte ISO with the six files packed in first-access order. Reported seek cost on that trace: 1021 sectors planned vs 1392 unplanned. |
 
+## Physics (M11)
+
+Acceptance run: `samples/21-kart` -- 2,074 terrain/obstacle triangles, a
+driving kart, a trigger volume and a 200 m/s tunnelling case.
+
+| Date | Finding | Detail |
+|---|---|---|
+| 2026-08-02 | **A character standing on the ground could never walk** | Its capsule touches the floor exactly, "touching" counts as overlapping to `capsule_triangle`, so every sweep reported an immediate zero-fraction hit and the controller was pinned by the floor it was standing on. Two fixes, both needed: the sweep capsule is a skin width thinner than the nominal shape (which is what `skin_width` is FOR), and an initial overlap has to exceed a tolerance rather than being a mere touch. Three character tests failed identically -- all showing a position that never changed at all, which is the signature of a blocked-at-t=0 sweep rather than a maths error. |
+| 2026-08-02 | **Nothing ever slept, because the sleep check ran one phase too early** | Sampled right after integration, a body resting on the floor always looks like it is moving at 0.33 m/s: gravity has just been added and the contact impulse has not yet taken it away. So the timer reset every step and no body ever settled. Moved to after contact resolution, which is the honest measure of "is this still moving". Also removed the sleep-timer reset from static contact resolution, and made dynamic pairs wake each other only on a MEANINGFUL approach -- a resting pile is in contact every step, and waking on that keeps it awake forever. |
+| 2026-08-02 | `validate_bvh` reports success by writing an EMPTY string, not a null one | `load_physics` assigned straight into its own error pointer and then treated non-null as failure, so every valid collision file was rejected with a blank message. A blank error message is itself the clue: the code that set it had nothing to say. |
+| 2026-08-02 | Measured physics cost on the EE | **71 us average, 154 us worst** per fixed step over 2,074 triangles with a kart driving and a trigger active, against the plan's 4 ms budget (15.3) -- 56x under. 7,144 BVH nodes and 1,740 triangle tests over 300 steps, so the tree is doing its job: a linear scan would have been 622,200 triangle tests. |
+| 2026-08-02 | Anti-tunnelling verified at 6.67 metres per step | 200 m/s at a 1/30 s step, against a wall far thinner than that. Sweeps advance at half the capsule radius and then bisect eight times, so nothing thinner than the shape can be stepped over. A discrete overlap test at the end position would have found the kart cleanly past the wall and reported nothing. |
+| 2026-08-02 | Transient penetration during a fast landing is real and expected | The kart dropped from 6 m reached -1.31 at its deepest before being pushed back out. One position-correction pass at 0.8 removes most of an overlap per step, not all of it, so a fast impact takes a few steps to resolve. Resting penetration on a flat floor is well under 0.1 (asserted by `ABodyComesToRestOnTheFloorAndSleeps`). This is the documented cost of the 4 ms budget, not a bug -- but it is why a thin fast-moving object should use the swept controller rather than a rigid body. |
+| 2026-08-02 | The golden checker is not safe to run in a back-to-back loop | Running all five goldens in one shell loop reported 02-scene-graph as changed; run on its own it passes with all 512 tiles bit-identical. The samples share `/tmp/ps2-emu-stage/emulog.txt`, so a fast successive run can read the previous sample's log. Check goldens one at a time, or give each an `EMU_TEST_STAGE` of its own. |
+
 ## Still open
 
 | Item (plan ref) | Status |

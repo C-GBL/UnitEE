@@ -31,6 +31,56 @@ static_assert(offsetof(P2Quat, y) == 4, "P2Quat.y offset drifted");
 static_assert(offsetof(P2Quat, z) == 8, "P2Quat.z offset drifted");
 static_assert(offsetof(P2Quat, w) == 12, "P2Quat.w offset drifted");
 
+typedef struct P2RaycastHit {
+    float pointX;
+    float pointY;
+    float pointZ;
+    float normalX;
+    float normalY;
+    float normalZ;
+    float distance;
+    int32_t collider;
+    int32_t triangle;
+    int32_t layer;
+} P2RaycastHit;
+static_assert(sizeof(P2RaycastHit) == 40, "P2RaycastHit size drifted from the api-def");
+static_assert(offsetof(P2RaycastHit, pointX) == 0, "P2RaycastHit.pointX offset drifted");
+static_assert(offsetof(P2RaycastHit, pointY) == 4, "P2RaycastHit.pointY offset drifted");
+static_assert(offsetof(P2RaycastHit, pointZ) == 8, "P2RaycastHit.pointZ offset drifted");
+static_assert(offsetof(P2RaycastHit, normalX) == 12, "P2RaycastHit.normalX offset drifted");
+static_assert(offsetof(P2RaycastHit, normalY) == 16, "P2RaycastHit.normalY offset drifted");
+static_assert(offsetof(P2RaycastHit, normalZ) == 20, "P2RaycastHit.normalZ offset drifted");
+static_assert(offsetof(P2RaycastHit, distance) == 24, "P2RaycastHit.distance offset drifted");
+static_assert(offsetof(P2RaycastHit, collider) == 28, "P2RaycastHit.collider offset drifted");
+static_assert(offsetof(P2RaycastHit, triangle) == 32, "P2RaycastHit.triangle offset drifted");
+static_assert(offsetof(P2RaycastHit, layer) == 36, "P2RaycastHit.layer offset drifted");
+
+typedef struct P2Contact {
+    float pointX;
+    float pointY;
+    float pointZ;
+    float normalX;
+    float normalY;
+    float normalZ;
+    int32_t colliderA;
+    int32_t colliderB;
+    int32_t phase;
+    int32_t isTrigger;
+    float separation;
+} P2Contact;
+static_assert(sizeof(P2Contact) == 44, "P2Contact size drifted from the api-def");
+static_assert(offsetof(P2Contact, pointX) == 0, "P2Contact.pointX offset drifted");
+static_assert(offsetof(P2Contact, pointY) == 4, "P2Contact.pointY offset drifted");
+static_assert(offsetof(P2Contact, pointZ) == 8, "P2Contact.pointZ offset drifted");
+static_assert(offsetof(P2Contact, normalX) == 12, "P2Contact.normalX offset drifted");
+static_assert(offsetof(P2Contact, normalY) == 16, "P2Contact.normalY offset drifted");
+static_assert(offsetof(P2Contact, normalZ) == 20, "P2Contact.normalZ offset drifted");
+static_assert(offsetof(P2Contact, colliderA) == 24, "P2Contact.colliderA offset drifted");
+static_assert(offsetof(P2Contact, colliderB) == 28, "P2Contact.colliderB offset drifted");
+static_assert(offsetof(P2Contact, phase) == 32, "P2Contact.phase offset drifted");
+static_assert(offsetof(P2Contact, isTrigger) == 36, "P2Contact.isTrigger offset drifted");
+static_assert(offsetof(P2Contact, separation) == 40, "P2Contact.separation offset drifted");
+
 extern "C" {
 
 // UTF-8 message to the EE console at Info level. Diagnostic path; the per-call string copy is accepted (ADR-002 cstr rules).
@@ -91,6 +141,43 @@ float ps2ur_scene_load_progress(void);
 int32_t ps2ur_scene_load_state(void);
 // AsyncOperation.allowSceneActivation. 0 parks a completed read at progress 0.9 without swapping the world; setting it back to 1 lets the next update finish. Defaults to 1 on every begin.
 void ps2ur_scene_load_set_allow_activation(int32_t allow);
+// Advances the physics world by one fixed step against the scene's own transforms. The managed dispatcher calls this from its FixedUpdate loop, before FixedUpdate scripts run.
+void ps2ur_phys_step(void);
+// Physics.gravity.
+void ps2ur_phys_set_gravity(float x, float y, float z);
+// Time.fixedDeltaTime as the solver sees it.
+float ps2ur_phys_fixed_timestep(void);
+void ps2ur_phys_set_fixed_timestep(float dt);
+// One cell of Unity's layer collision matrix. Symmetric: setting (a,b) also sets (b,a).
+void ps2ur_phys_set_layers_collide(int32_t a, int32_t b, int32_t collide);
+// Physics.Raycast. Returns 1 on a hit and fills the caller-owned P2RaycastHit; 0 leaves it untouched.
+int32_t ps2ur_phys_raycast(float originX, float originY, float originZ, float dirX, float dirY, float dirZ, float maxDistance, int32_t mask, P2RaycastHit* hit);
+// Physics.SphereCast, same contract as the raycast above.
+int32_t ps2ur_phys_spherecast(float originX, float originY, float originZ, float radius, float dirX, float dirY, float dirZ, float maxDistance, int32_t mask, P2RaycastHit* hit);
+// Physics.OverlapSphere. Runs the query, keeps the result in a native scratch list and returns how many were FOUND -- which may exceed what the list can hold, so a caller can tell it was truncated. Read the entries with ps2ur_phys_overlap_result.
+int32_t ps2ur_phys_overlap_sphere(float x, float y, float z, float radius, int32_t mask);
+// Collider index from the last overlap query, or -1 when the index is past what the scratch list actually holds.
+int32_t ps2ur_phys_overlap_result(int32_t index);
+// Contacts produced by the last step. The managed dispatcher reads the whole list in ONE interop call per frame (M11 task 3) rather than one call per event.
+int32_t ps2ur_phys_contact_count(void);
+// Fills a caller-owned P2Contact from the last step's list. Returns 0 if the index is out of range.
+int32_t ps2ur_phys_get_contact(int32_t index, P2Contact* contact);
+// Contacts that did not fit this frame. Non-zero means the game is silently missing events, and the runtime says so rather than hiding it.
+int32_t ps2ur_phys_contacts_dropped(void);
+// Creates a Rigidbody driving the given collider. Returns the body index, or -1 when the table is full.
+int32_t ps2ur_phys_add_body(int32_t colliderIndex, float mass, int32_t useGravity, int32_t isKinematic);
+void ps2ur_phys_body_set_velocity(int32_t body, float x, float y, float z);
+void ps2ur_phys_body_get_velocity(int32_t body, P2Vec3* value);
+// Rigidbody.AddForce in Force mode; the accumulator is cleared each step.
+void ps2ur_phys_body_add_force(int32_t body, float x, float y, float z);
+// The collider index riding on an entity, or -1. Baked colliders arrive from the PHYS section already bound to their entity.
+int32_t ps2ur_phys_collider_for_entity(int32_t handle);
+// Creates a CharacterController on an entity. Returns its index, or -1.
+int32_t ps2ur_phys_add_character(int32_t handle, float radius, float height, float slopeLimit, float stepOffset);
+// CharacterController.Move. Writes the position reached back to the entity transform and returns Unity's CollisionFlags bits.
+int32_t ps2ur_phys_move_character(int32_t index, int32_t handle, float x, float y, float z);
+// CharacterController.isGrounded.
+int32_t ps2ur_phys_character_grounded(int32_t index);
 
 } // extern "C"
 

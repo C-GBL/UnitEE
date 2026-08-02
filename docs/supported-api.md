@@ -18,7 +18,7 @@ presumed to be the explicit "not supported" list. TODO(spec missing: section
 | Lifecycle | `Awake`, `OnEnable`, `Start`, `Update`, `FixedUpdate`, `LateUpdate`, `OnDisable`, `OnDestroy`, coroutines (`WaitForSeconds`, `WaitForFixedUpdate`, `WaitUntil`, `null`) |
 | Rendering | `MeshFilter`, `MeshRenderer`, `SkinnedMeshRenderer`, `Camera` (perspective + ortho), a fixed material model (below), `Light` (directional + ambient, baked-ish), sorting layers |
 | Animation | `Animation`-style clip playback with crossfade, additive blending, root motion; a simplified `Animator` supporting states + transitions authored in a restricted controller |
-| Physics | Raycast/spherecast against static geometry; `Rigidbody` with a simple integrator; `BoxCollider`, `SphereCollider`, `CapsuleCollider`, `MeshCollider` (static, convex-decomposed offline); `CharacterController`; trigger + collision callbacks |
+| Physics | `Physics.Raycast`/`SphereCast`/`OverlapSphereNonAlloc` against a baked BVH and primitives; `Rigidbody` (semi-implicit Euler); `BoxCollider`, `SphereCollider`, `CapsuleCollider`, `MeshCollider` (static, baked to world space offline); `CharacterController` (swept capsule, step + slope); trigger + collision callbacks (deviations 16-21) |
 | Audio | `AudioSource` (2D + simple 3D pan/attenuation), `AudioClip` (streamed music, resident SFX), `AudioListener` |
 | Input | `Input.GetAxis`/`GetAxisRaw`/`GetButton*` over Unity's default axis and button names, mapped to DualShock 2; `PS2Input` for per-button access, analog pressure, rumble and port 2 (deviations 11-12) |
 | UI | An immediate-mode-backed subset of uGUI: `Canvas` (screen space overlay), `Image`, `RawImage`, `Text` (bitmap fonts baked offline), `Button`, `Slider` |
@@ -106,3 +106,43 @@ These are listed prominently here and asserted in the conformance suite
     never applied halfway.
 15. Reflection is limited to what survives managed stripping; `link.xml` is
     mandatory for any reflective code.
+16. **Physics is not PhysX and does not try to be** (ADR-009, and the plan
+    says so in as many words). Contact behaviour, resting jitter and
+    stacking all differ from the Editor. What matches exactly is the API
+    shape, so gameplay code compiles and reads the same. Deviations 17-21
+    are the specifics.
+17. **One contact point per pair, one position-correction pass, no
+    constraint solver.** No manifolds, no joints, no friction model (a fixed
+    tangential damping stands in for it). A resting box settles but may
+    creep; a tower of three boxes will not stay a tower. Gameplay that needs
+    reliable stacking should use `CharacterController` and kinematic bodies,
+    which is what PS2-era games did. Measured cost of what is there: 71 us
+    average, 154 us worst, against a 4 ms budget.
+18. **Colliders are baked, not constructed at runtime.** Static mesh
+    collision is baked to world space offline, which is what makes its
+    broadphase free -- so `AddComponent<BoxCollider>()` mid-game is not
+    supported, a `MeshCollider` cannot move, and a convex `MeshCollider`
+    (Unity's hull-for-a-dynamic-body) is refused by the exporter rather than
+    silently reinterpreted as static triangles.
+19. **`RaycastHit` names a collider INDEX, not a `Collider` component**, and
+    reports -1 for a hit on baked static geometry -- which has no GameObject
+    in this runtime. `RaycastAll`, `CapsuleCast`, `OverlapBox`/`Capsule` and
+    `ComputePenetration` are absent; `OverlapSphereNonAlloc` is provided
+    because a console has no business allocating an array per query.
+20. **The `Collision` object passed to callbacks is REUSED, not allocated
+    per event.** A 4 MB managed heap with a 2 ms GC budget cannot afford one
+    allocation per contact per frame. Do not cache it -- copy what you need.
+    `OnTrigger*` receives a `Collision` too, not a `Collider`, since a
+    Collider here is an index rather than a component.
+21. **Physics is deterministic per build, not across builds.** The step is
+    fixed, iteration order is array order, and there is no `double` -- so
+    the same inputs give the same result every run of the same binary. The
+    EE's floats are not IEEE 754 (deviation 1), so a compiler change can
+    move the last bit. Replays shared between differently-built binaries,
+    and lockstep multiplayer, cannot rely on it.
+22. `Rigidbody` omits `constraints` beyond `freezeRotation`,
+    `interpolation`, `collisionDetectionMode`, `centerOfMass`,
+    `inertiaTensor`, `AddTorque`, `AddExplosionForce` and `AddForce` modes
+    other than `Force`. Each needs a solver this runtime does not have, and
+    a property that read back what you set while changing nothing would be
+    worse than a compile error.

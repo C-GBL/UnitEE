@@ -133,5 +133,82 @@ namespace UnityEngine.Internal
         // AsyncOperation.allowSceneActivation. 0 parks a completed read at progress 0.9 without swapping the world; setting it back to 1 lets the next update finish. Defaults to 1 on every begin.
         [DllImport("__Internal")]
         internal static extern void ps2ur_scene_load_set_allow_activation(int allow);
+
+        // Advances the physics world by one fixed step against the scene's own transforms. The managed dispatcher calls this from its FixedUpdate loop, before FixedUpdate scripts run.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_phys_step();
+
+        // Physics.gravity.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_phys_set_gravity(float x, float y, float z);
+
+        // Time.fixedDeltaTime as the solver sees it.
+        [DllImport("__Internal")]
+        internal static extern float ps2ur_phys_fixed_timestep();
+
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_phys_set_fixed_timestep(float dt);
+
+        // One cell of Unity's layer collision matrix. Symmetric: setting (a,b) also sets (b,a).
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_phys_set_layers_collide(int a, int b, int collide);
+
+        // Physics.Raycast. Returns 1 on a hit and fills the caller-owned P2RaycastHit; 0 leaves it untouched.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_phys_raycast(float originX, float originY, float originZ, float dirX, float dirY, float dirZ, float maxDistance, int mask, ref UnityEngine.Internal.NativeRaycastHit hit);
+
+        // Physics.SphereCast, same contract as the raycast above.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_phys_spherecast(float originX, float originY, float originZ, float radius, float dirX, float dirY, float dirZ, float maxDistance, int mask, ref UnityEngine.Internal.NativeRaycastHit hit);
+
+        // Physics.OverlapSphere. Runs the query, keeps the result in a native scratch list and returns how many were FOUND -- which may exceed what the list can hold, so a caller can tell it was truncated. Read the entries with ps2ur_phys_overlap_result.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_phys_overlap_sphere(float x, float y, float z, float radius, int mask);
+
+        // Collider index from the last overlap query, or -1 when the index is past what the scratch list actually holds.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_phys_overlap_result(int index);
+
+        // Contacts produced by the last step. The managed dispatcher reads the whole list in ONE interop call per frame (M11 task 3) rather than one call per event.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_phys_contact_count();
+
+        // Fills a caller-owned P2Contact from the last step's list. Returns 0 if the index is out of range.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_phys_get_contact(int index, ref UnityEngine.Internal.NativeContact contact);
+
+        // Contacts that did not fit this frame. Non-zero means the game is silently missing events, and the runtime says so rather than hiding it.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_phys_contacts_dropped();
+
+        // Creates a Rigidbody driving the given collider. Returns the body index, or -1 when the table is full.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_phys_add_body(int colliderIndex, float mass, int useGravity, int isKinematic);
+
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_phys_body_set_velocity(int body, float x, float y, float z);
+
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_phys_body_get_velocity(int body, ref UnityEngine.Vector3 value);
+
+        // Rigidbody.AddForce in Force mode; the accumulator is cleared each step.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_phys_body_add_force(int body, float x, float y, float z);
+
+        // The collider index riding on an entity, or -1. Baked colliders arrive from the PHYS section already bound to their entity.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_phys_collider_for_entity(int handle);
+
+        // Creates a CharacterController on an entity. Returns its index, or -1.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_phys_add_character(int handle, float radius, float height, float slopeLimit, float stepOffset);
+
+        // CharacterController.Move. Writes the position reached back to the entity transform and returns Unity's CollisionFlags bits.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_phys_move_character(int index, int handle, float x, float y, float z);
+
+        // CharacterController.isGrounded.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_phys_character_grounded(int index);
     }
 }

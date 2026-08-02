@@ -24,10 +24,15 @@ namespace UnityEngine.Internal
     // this reflection safe under aggressive stripping.
     internal static class Runtime
     {
-        private sealed class TypeMethods
+        internal sealed class TypeMethods
         {
             public MethodInfo Awake, OnEnable, Start, Update, FixedUpdate;
             public MethodInfo LateUpdate, OnDisable, OnDestroy;
+            // Physics callbacks (M11 task 3). Kept as MethodInfo and invoked
+            // with one argument, so they cannot be Action delegates like the
+            // zero-arg lifecycle methods above.
+            public MethodInfo OnCollisionEnter, OnCollisionStay, OnCollisionExit;
+            public MethodInfo OnTriggerEnter, OnTriggerStay, OnTriggerExit;
         }
 
         internal sealed class BehaviourState
@@ -36,6 +41,7 @@ namespace UnityEngine.Internal
             public Action Awake, OnEnable, Start, Update, FixedUpdate;
             public Action LateUpdate, OnDisable, OnDestroy;
             public bool AwakeRan, StartRan, EnabledRan;
+            public TypeMethods Methods;
         }
 
         internal sealed class CoroutineState
@@ -149,6 +155,13 @@ namespace UnityEngine.Internal
                     if (b.FixedUpdate != null && IsRunnable(b))
                         b.FixedUpdate();
                 }
+                // Physics steps AFTER FixedUpdate, so a force added there
+                // is integrated in the same step -- Unity's order, and the
+                // one every physics tutorial assumes.
+                Native.ps2ur_phys_step();
+                // Then the callbacks it produced, before coroutines resume,
+                // so a coroutine waiting on a trigger sees it this step.
+                DispatchContacts();
                 ResumeCoroutines(fixedStep: true);
             }
 
@@ -178,6 +191,102 @@ namespace UnityEngine.Internal
             }
 
             ProcessDeferredDestroy();
+        }
+
+        // ---- physics callbacks (M11 task 3) -------------------------------
+        //
+        // The whole contact list is pulled across with ONE call for the count
+        // and one per contact, then fanned out to behaviours entirely in
+        // managed code. Doing it the other way -- native calling into managed
+        // per event -- would cost a runtime_invoke per contact, and M7
+        // measured that at 87x a direct call.
+
+        private static readonly Collision s_Collision = new Collision();
+
+        private static void DispatchContacts()
+        {
+            int count = Native.ps2ur_phys_contact_count();
+            if (count == 0)
+                return;
+
+            for (int i = 0; i < count; i++)
+            {
+                NativeContact nc = default;
+                if (Native.ps2ur_phys_get_contact(i, ref nc) == 0)
+                    continue;
+                DeliverContact(nc, nc.colliderA, nc.colliderB);
+                // Both sides get the callback, with the OTHER side reported
+                // as 'other'. A contact against static geometry (colliderB
+                // -1) only has one side to notify.
+                if (nc.colliderB >= 0)
+                    DeliverContact(nc, nc.colliderB, nc.colliderA);
+            }
+        }
+
+        private static void DeliverContact(NativeContact nc, int self, int other)
+        {
+            GameObject go = s_GameObjectByCollider.TryGetValue(self, out GameObject found)
+                ? found
+                : null;
+            if (go == null)
+                return;
+
+            // The Collision object is REUSED across callbacks. Unity
+            // allocates a fresh one; a console with a 4 MB managed heap and
+            // a 2 ms GC budget cannot afford one allocation per contact per
+            // frame. Documented in supported-api.md: do not cache it.
+            s_Collision.point = new Vector3(nc.pointX, nc.pointY, nc.pointZ);
+            s_Collision.normal = new Vector3(nc.normalX, nc.normalY, nc.normalZ);
+            s_Collision.separation = nc.separation;
+            s_Collision.otherColliderIndex = other;
+            s_Collision.gameObject =
+                s_GameObjectByCollider.TryGetValue(other, out GameObject o) ? o : null;
+
+            bool isTrigger = nc.isTrigger != 0;
+            for (int i = 0; i < s_Behaviours.Count; i++)
+            {
+                BehaviourState b = s_Behaviours[i];
+                if (b.Methods == null || !IsRunnable(b))
+                    continue;
+                if (!ReferenceEquals(b.Behaviour.gameObject, go))
+                    continue;
+
+                MethodInfo method = null;
+                if (isTrigger)
+                {
+                    // 0 Enter, 1 Stay, 2 Exit -- ps2ur::phys::ContactPhase.
+                    method = nc.phase == 0 ? b.Methods.OnTriggerEnter
+                           : nc.phase == 1 ? b.Methods.OnTriggerStay
+                                           : b.Methods.OnTriggerExit;
+                }
+                else
+                {
+                    method = nc.phase == 0 ? b.Methods.OnCollisionEnter
+                           : nc.phase == 1 ? b.Methods.OnCollisionStay
+                                           : b.Methods.OnCollisionExit;
+                }
+                if (method == null)
+                    continue;
+                try
+                {
+                    s_ContactArgs[0] = s_Collision;
+                    method.Invoke(b.Behaviour, s_ContactArgs);
+                }
+                catch (Exception e)
+                {
+                    Debug.LogError("Physics callback threw: " + e);
+                }
+            }
+        }
+
+        private static readonly object[] s_ContactArgs = new object[1];
+        private static readonly Dictionary<int, GameObject> s_GameObjectByCollider =
+            new Dictionary<int, GameObject>();
+
+        internal static void RegisterCollider(int colliderIndex, GameObject go)
+        {
+            if (colliderIndex >= 0)
+                s_GameObjectByCollider[colliderIndex] = go;
         }
 
         // ---- object registry ----------------------------------------------
@@ -423,12 +532,19 @@ namespace UnityEngine.Internal
                     LateUpdate = FindMagicMethod(type, "LateUpdate"),
                     OnDisable = FindMagicMethod(type, "OnDisable"),
                     OnDestroy = FindMagicMethod(type, "OnDestroy"),
+                    OnCollisionEnter = FindContactMethod(type, "OnCollisionEnter"),
+                    OnCollisionStay = FindContactMethod(type, "OnCollisionStay"),
+                    OnCollisionExit = FindContactMethod(type, "OnCollisionExit"),
+                    OnTriggerEnter = FindContactMethod(type, "OnTriggerEnter"),
+                    OnTriggerStay = FindContactMethod(type, "OnTriggerStay"),
+                    OnTriggerExit = FindContactMethod(type, "OnTriggerExit"),
                 };
                 s_TypeCache[type] = methods;
             }
             return new BehaviourState
             {
                 Behaviour = behaviour,
+                Methods = methods,
                 Awake = MakeAction(behaviour, methods.Awake),
                 OnEnable = MakeAction(behaviour, methods.OnEnable),
                 Start = MakeAction(behaviour, methods.Start),
@@ -451,6 +567,27 @@ namespace UnityEngine.Internal
                     BindingFlags.Instance | BindingFlags.Public |
                     BindingFlags.NonPublic | BindingFlags.DeclaredOnly,
                     null, System.Type.EmptyTypes, null);
+                if (mi != null)
+                    return mi;
+            }
+            return null;
+        }
+
+        // The physics callbacks take one Collision argument. Unity's real
+        // signatures are OnCollision*(Collision) and OnTrigger*(Collider);
+        // both take Collision here, because a Collider in this runtime is an
+        // index rather than a component and a trigger callback that handed
+        // back a null Collider would be useless.
+        private static MethodInfo FindContactMethod(Type type, string name)
+        {
+            Type[] signature = { typeof(Collision) };
+            for (Type t = type; t != null && t != typeof(MonoBehaviour); t = t.BaseType)
+            {
+                MethodInfo mi = t.GetMethod(
+                    name,
+                    BindingFlags.Instance | BindingFlags.Public |
+                    BindingFlags.NonPublic | BindingFlags.DeclaredOnly,
+                    null, signature, null);
                 if (mi != null)
                     return mi;
             }
