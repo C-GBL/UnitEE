@@ -268,7 +268,7 @@ void GsDevice::draw_triangles_immediate(const Vertex* vertices, uint32_t count)
     }
 }
 
-void GsDevice::end_frame()
+void GsDevice::end_frame(bool flip)
 {
     PS2UR_ASSERT(m_initialized);
 
@@ -288,14 +288,29 @@ void GsDevice::end_frame()
 
 #if defined(PS2UR_PLATFORM_PS2)
     submit_and_wait();
+#endif
+    if (flip) {
+        present();
+    }
+}
+
+void GsDevice::present()
+{
+    PS2UR_ASSERT(m_initialized);
+#if defined(PS2UR_PLATFORM_PS2)
     // Display the buffer we just finished drawing. The vsync wait both paces
-    // the loop and ensures the flip happens between fields rather than mid-scan.
+    // the loop and ensures the flip happens between fields rather than
+    // mid-scan.
     graph_wait_vsync();
     graph_set_framebuffer_filtered(static_cast<int>(draw_buffer_page()),
                                    static_cast<int>(m_config.width),
                                    static_cast<int>(m_config.colour_format), 0, 0);
 #endif
 
+    // The frame index advances on PRESENT, not at the end of end_frame: it
+    // selects which buffer is drawn into next, so bumping it before the flip
+    // would send the following frame's geometry to the buffer about to be
+    // displayed.
     m_frame_index++;
 }
 

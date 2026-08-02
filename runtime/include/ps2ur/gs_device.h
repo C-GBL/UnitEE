@@ -47,10 +47,29 @@ public:
     const VideoConfig& config() const { return m_config; }
     VramAllocator& vram() { return m_vram; }
 
-    // Frame loop. Draw calls go between begin_frame() and end_frame(); the
-    // packet is submitted and the buffers flipped by end_frame().
+    // Frame loop. Draw calls go between begin_frame() and end_frame().
+    //
+    // FLIPPING, and why it is a parameter. end_frame() submits the packet
+    // and, by default, waits for vsync and flips the finished buffer onto
+    // the screen. That is correct only when the packet contains the WHOLE
+    // frame.
+    //
+    // A caller that clears through this device and then draws geometry
+    // through a separate DmaChain must pass flip = false, do the geometry,
+    // and call present() afterwards. Flipping in between puts the buffer on
+    // screen and then draws into it while the viewer is looking at it --
+    // which is visible as heavy per-object flicker, and is invisible to any
+    // test that captures a single frame (a golden pins determinism, not
+    // correctness).
+    //
+    // The default stays true so every existing caller that submits a
+    // complete frame in one packet keeps its behaviour unchanged.
     void begin_frame();
-    void end_frame();
+    void end_frame(bool flip = true);
+
+    // Waits for vsync and displays the buffer just drawn. Only needed by
+    // callers that passed flip = false to end_frame().
+    void present();
 
     // Full-screen clear, implemented as a sprite primitive with the depth test
     // forced to ALWAYS and Z-write on, so it also resets the Z buffer

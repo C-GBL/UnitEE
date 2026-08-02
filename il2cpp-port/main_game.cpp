@@ -301,9 +301,14 @@ int main(void)
             world.world_matrix(static_cast<uint32_t>(world.camera().entity)));
         const Mat4 viewproj = mat4_mul(proj, mat4_mul(flipz, view));
 
+        // Clear WITHOUT flipping: the geometry below goes through a
+        // separate DmaChain, so the buffer is only complete once that chain
+        // has been kicked. Flipping here would put a cleared buffer on
+        // screen and then draw into it live -- visible as heavy per-object
+        // flicker.
         device.begin_frame();
         device.clear(cam.clear_r, cam.clear_g, cam.clear_b);
-        device.end_frame();
+        device.end_frame(/*flip=*/false);
 
         chain.begin();
         bool ok = true;
@@ -361,6 +366,9 @@ int main(void)
             return 1;
         }
         chain.wait();
+
+        // The frame is complete: now show it.
+        device.present();
 
         // A liveness marker the emulator harness can assert on, and a sign of
         // life in a log when someone is debugging a black screen. Once a
