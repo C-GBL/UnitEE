@@ -220,22 +220,28 @@ namespace Ps2.Editor
                     }
                 }
 
+                // A portable PCSX2 unzipped into a user folder is at least as
+                // common as an installed one -- it is how the verify-log's
+                // reference install is set up -- so the user profile is
+                // searched too, not just Program Files.
+                string userProfile = Environment.GetFolderPath(
+                    Environment.SpecialFolder.UserProfile);
                 string[] candidates = new string[]
                 {
                     "C:/Program Files/PCSX2/pcsx2-qt.exe",
                     "C:/Program Files/PCSX2/pcsx2.exe",
-                    "C:/Program Files (x86)/PCSX2/pcsx2.exe"
+                    "C:/Program Files (x86)/PCSX2/pcsx2.exe",
+                    userProfile + "/pcsx2/pcsx2-qt.exe",
+                    userProfile + "/pcsx2/pcsx2.exe",
+                    userProfile + "/PCSX2/pcsx2-qt.exe"
                 };
                 string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
                 if (!string.IsNullOrEmpty(localAppData))
                 {
-                    candidates = new string[]
-                    {
-                        candidates[0],
-                        candidates[1],
-                        candidates[2],
-                        localAppData + "/Programs/PCSX2/pcsx2-qt.exe"
-                    };
+                    var extended = new string[candidates.Length + 1];
+                    Array.Copy(candidates, extended, candidates.Length);
+                    extended[candidates.Length] = localAppData + "/Programs/PCSX2/pcsx2-qt.exe";
+                    candidates = extended;
                 }
                 for (int i = 0; i < candidates.Length; i++)
                 {

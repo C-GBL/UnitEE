@@ -134,12 +134,63 @@ namespace Ps2.Editor
 
         private static void ScanApiUsage(PS2BuildProfile profile, List<PS2ValidationMessage> messages)
         {
-            // TODO(spec missing: section 13.5): API-usage scan. The plan requires an
-            // Editor-side scan of user scripts that rejects use of Unity APIs outside
-            // the supported subset (plan section 7.1) and warns on conformance traps
-            // such as 'double' arithmetic in hot paths (plan sections 3.1 and 7.4).
-            // Blocked until section 13.5 of the plan is available; intentionally adds
-            // no messages today so it cannot mask real validation results.
+            // Plan 13.5's API-usage scan, unblocked now that the section is
+            // available. PS2ApiScanner documents exactly what a source-text
+            // scan can and cannot see; the authoritative check remains the C++
+            // link, which fails on a missing symbol.
+            foreach (PS2ContentValidator.Finding finding in PS2ApiScanner.Scan("."))
+            {
+                messages.Add(new PS2ValidationMessage(
+                    finding.severity, finding.message,
+                    "See docs/supported-api.md for the supported subset."));
+            }
+        }
+
+        /// <summary>
+        /// The build-time entry point: profile checks plus the content scan
+        /// over the scenes actually being built. Throws PS2BuildException on
+        /// any error, so the pipeline fails before doing expensive work.
+        /// </summary>
+        public static void ValidateForBuild(PS2BuildContext ctx)
+        {
+            var errors = new List<string>();
+
+            foreach (PS2ContentValidator.Finding finding in PS2ContentValidator.Validate(ctx))
+            {
+                if (finding.severity == PS2ValidationSeverity.Error)
+                {
+                    errors.Add(finding.message);
+                    UnityEngine.Debug.LogError("[PS2 Build] " + finding.message,
+                                               finding.context);
+                }
+                else
+                {
+                    ctx.Warn(finding.message);
+                }
+            }
+
+            foreach (PS2ContentValidator.Finding finding in PS2ApiScanner.Scan(ctx.ProjectRoot))
+            {
+                if (finding.severity == PS2ValidationSeverity.Error)
+                {
+                    errors.Add(finding.message);
+                    UnityEngine.Debug.LogError("[PS2 Build] " + finding.message);
+                }
+                else
+                {
+                    ctx.Warn(finding.message);
+                }
+            }
+
+            if (errors.Count > 0)
+            {
+                throw new PS2BuildException(
+                    $"Validation found {errors.Count} " +
+                    (errors.Count == 1 ? "problem" : "problems") +
+                    " that would produce a broken build. Each is logged above " +
+                    "with the asset it refers to:\n  - " +
+                    string.Join("\n  - ", errors));
+            }
         }
 
         private static PS2ValidationMessage Error(string message, string fixHint)

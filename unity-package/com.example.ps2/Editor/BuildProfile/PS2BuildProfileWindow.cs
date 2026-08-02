@@ -21,7 +21,11 @@ namespace Ps2.Editor
         private SerializedObject _serializedProfile;
         private ReorderableList _sceneList;
         private bool _settingsFoldout = true;
+        private bool _stepsFoldout = true;
+        private bool _toolchainFoldout;
         private Vector2 _scroll;
+        private PS2BuildReport _lastReport;
+        private PS2ToolchainInfo _toolchain;
 
         [MenuItem("Window/PS2/Build Profiles")]
         public static void Open()
@@ -64,9 +68,13 @@ namespace Ps2.Editor
             DrawSettings();
             _serializedProfile.ApplyModifiedProperties();
 
+            DrawSteps();
+            DrawToolchain();
+
             List<PS2ValidationMessage> messages = PS2ProjectValidator.Validate(_profile);
             DrawValidation(messages);
             DrawButtons(messages);
+            DrawLastBuild();
 
             EditorGUILayout.EndScrollView();
         }
@@ -100,7 +108,68 @@ namespace Ps2.Editor
             EditorGUILayout.PropertyField(_serializedProfile.FindProperty("buildIso"));
             EditorGUILayout.PropertyField(_serializedProfile.FindProperty("outputDirectory"));
             EditorGUILayout.PropertyField(_serializedProfile.FindProperty("scriptingDefines"), true);
+            EditorGUILayout.HelpBox(
+                "The full settings set is on the profile asset itself -- select it " +
+                "to see every group from plan 13.1 with live budget readouts.",
+                MessageType.None);
             EditorGUI.indentLevel--;
+        }
+
+        /// <summary>
+        /// The build steps, shown before a build rather than only after one.
+        /// Seeing the named stages up front is what makes a five-minute build
+        /// feel like a process rather than a hang, and it is why the pipeline
+        /// exposes its steps as data (plan 13.3).
+        /// </summary>
+        private void DrawSteps()
+        {
+            _stepsFoldout = EditorGUILayout.Foldout(_stepsFoldout, "Build Steps", true);
+            if (!_stepsFoldout)
+            {
+                return;
+            }
+            EditorGUI.indentLevel++;
+            IPS2BuildStep[] steps = PS2BuildPipeline.CreateSteps();
+            for (int i = 0; i < steps.Length; i++)
+            {
+                string status = "";
+                if (_lastReport != null && i < _lastReport.steps.Count)
+                {
+                    PS2BuildReport.Step s = _lastReport.steps[i];
+                    status = "   " + s.outcome + ", " + s.milliseconds + " ms";
+                }
+                EditorGUILayout.LabelField((i + 1) + ". " + steps[i].Name + status);
+            }
+            EditorGUI.indentLevel--;
+        }
+
+        /// <summary>
+        /// A doctor report for the toolchain, so a missing tool is visible
+        /// before a build rather than as a failure forty minutes in.
+        /// </summary>
+        private void DrawToolchain()
+        {
+            _toolchainFoldout = EditorGUILayout.Foldout(_toolchainFoldout, "Toolchain", true);
+            if (!_toolchainFoldout)
+            {
+                return;
+            }
+            if (_toolchain == null)
+            {
+                if (GUILayout.Button("Check toolchain"))
+                {
+                    string projectRoot = System.IO.Path.GetDirectoryName(Application.dataPath);
+                    _toolchain = PS2ToolchainInfo.Discover(
+                        PS2BuildPipeline.FindPackageRoot(projectRoot));
+                }
+                return;
+            }
+            EditorGUILayout.HelpBox(_toolchain.Report(),
+                                    _toolchain.CanBuild ? MessageType.Info : MessageType.Error);
+            if (GUILayout.Button("Re-check"))
+            {
+                _toolchain = null;
+            }
         }
 
         private void DrawValidation(List<PS2ValidationMessage> messages)
@@ -126,11 +195,11 @@ namespace Ps2.Editor
                 EditorGUILayout.BeginHorizontal();
                 if (GUILayout.Button("Build", GUILayout.Height(28f)))
                 {
-                    RunPipeline(() => PS2BuildPipeline.Build(_profile));
+                    RunPipeline(() => { _lastReport = PS2BuildPipeline.Build(_profile); });
                 }
                 if (GUILayout.Button("Build And Run", GUILayout.Height(28f)))
                 {
-                    RunPipeline(() => PS2BuildPipeline.BuildAndRun(_profile));
+                    RunPipeline(() => { _lastReport = PS2BuildPipeline.BuildAndRun(_profile); });
                 }
                 EditorGUILayout.EndHorizontal();
             }
@@ -138,6 +207,35 @@ namespace Ps2.Editor
             {
                 RunPipeline(() => PS2BuildPipeline.Clean(_profile));
             }
+        }
+
+        /// <summary>The build-status strip plan 13.2 asks for in the bottom bar.</summary>
+        private void DrawLastBuild()
+        {
+            if (_lastReport == null)
+            {
+                return;
+            }
+            string summary = _lastReport.succeeded
+                ? "Last build SUCCEEDED in " + _lastReport.totalMilliseconds + " ms"
+                : "Last build FAILED: " + _lastReport.failureMessage;
+            if (_lastReport.isoBytes > 0)
+            {
+                summary += "\nISO " + (_lastReport.isoBytes / 1024) + " KB at " +
+                           _lastReport.isoPath;
+            }
+            else if (_lastReport.elfBytes > 0)
+            {
+                summary += "\nELF " + (_lastReport.elfBytes / 1024) + " KB at " +
+                           _lastReport.elfPath;
+            }
+            if (_lastReport.warnings.Count > 0)
+            {
+                summary += "\n" + _lastReport.warnings.Count +
+                           " warning(s) -- see the console.";
+            }
+            EditorGUILayout.HelpBox(
+                summary, _lastReport.succeeded ? MessageType.Info : MessageType.Error);
         }
 
         private static void RunPipeline(Action action)
