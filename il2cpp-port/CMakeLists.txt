@@ -29,6 +29,8 @@ endif()
 # and needs PS2UR_RUNTIME pointing at a ps2-platform build of the runtime
 # (its libps2ur.a carries the VU microprograms as linkable blobs).
 set(M6_MAIN "main_ee.cpp" CACHE STRING "host program source")
+# Where the build pipeline wrote game_config.h (main_game.cpp only).
+set(PS2_GAME_CONFIG_DIR "" CACHE PATH "directory containing generated game_config.h")
 set(PS2UR_RUNTIME "" CACHE PATH "ps2 runtime build dir containing libps2ur.a (optional)")
 
 # Platform-neutral libil2cpp sources; per-platform subdirectories are excluded
@@ -105,6 +107,11 @@ target_include_directories(m6-hello PRIVATE
     "${BDWGC}/include"
     "${M6_GENERATED}"
 )
+
+# main_game.cpp includes the pipeline-generated game_config.h.
+if(PS2_GAME_CONFIG_DIR)
+    target_include_directories(m6-hello PRIVATE "${PS2_GAME_CONFIG_DIR}")
+endif()
 
 target_compile_definitions(m6-hello PRIVATE
     IL2CPP_USE_PLATFORM_CONFIG=1
