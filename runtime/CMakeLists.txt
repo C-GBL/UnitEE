@@ -53,6 +53,12 @@ set(PS2UR_SOURCES
     src/gfx/render_queue.cpp
     src/anim/anim.cpp
     src/phys/phys.cpp
+    src/phys/phys_shapes.cpp
+    src/phys/phys_bvh.cpp
+    src/phys/phys_query.cpp
+    src/phys/phys_body.cpp
+    src/phys/phys_character.cpp
+    src/phys/phys_bake.cpp
     src/audio/audio.cpp
     src/io/io.cpp
     src/io/p2b.cpp

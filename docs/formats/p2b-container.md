@@ -303,6 +303,84 @@ than drawing a character inside out. When a character's whole skeleton fits
 one palette -- the usual case -- every batch is given the same table so the
 palette uploads once per character instead of once per batch.
 
+## PHYS section (M11), baked collision
+
+One per scene. Carries the primitive colliders and a world-space BVH over
+the static mesh-collider triangles. `PHYS` is the type plan 10.2 reserved.
+
+Header (32 bytes), all `u32`. Offsets are relative to the SECTION PAYLOAD,
+so the section relocates freely:
+
+```
++0  collider_count
++4  node_count
++8  triangle_count
++12 vertex_count
++16 colliders_offset
++20 nodes_offset
++24 triangles_offset
++28 vertices_offset
+```
+
+Collider record (48 bytes):
+
+```
++0  u32 kind          0 sphere, 1 box, 2 capsule, 3 mesh
++4  u32 flags         bit0 is_trigger, bit1 enabled,
+                      bits2-3 capsule axis (0 X, 1 Y, 2 Z)
++8  u32 layer         0..31
++12 i32 entity        scene entity index, or -1 for a purely static collider
++16 f32 center[3]     local offset from the entity origin
++28 f32 half_extents[3]  box: half size. sphere/capsule: [0] is the radius.
++40 f32 height        capsule total height, INCLUDING both caps (Unity's)
++44 u32 reserved      0
+```
+
+The record deliberately has no Rigidbody index: which body drives a collider
+is runtime state the file cannot know, so the loader writes -1 and whoever
+creates the body wires it up.
+
+BVH node (32 bytes), and the reason it is exactly 32: the EE's data cache is
+8 KB, and a traversal that touches one cache line per node is the difference
+between a query that fits the 4 ms budget and one that does not.
+
+```
++0  f32 bmin[3]
++12 u32 first     leaf: first triangle index. internal: LEFT child index.
++16 f32 bmax[3]
++28 u32 count     0 means internal; the right child is always first + 1
+```
+
+Triangle (8 bytes). Vertices are shared and indexed, which is what keeps a
+collision mesh smaller than the render mesh it came from:
+
+```
++0 u16 v0
++2 u16 v1
++4 u16 v2
++6 u8  layer
++7 u8  flags     0 in v1
+```
+
+Vertices are `f32[3]`, world space, 12 bytes each. Baking to world space is
+what lets the runtime traverse with no per-query transform; it also means
+static geometry cannot be moved at runtime, which is the definition of
+static.
+
+Because triangle indices are `u16`, a single scene's collision mesh is
+capped at 65,536 vertices; the loader refuses more rather than wrapping.
+Leaves hold at most 4 triangles (`kBvhLeafSize`), and the builder caps depth
+at 32 so coincident triangles -- a common export artefact, since they never
+split on any axis -- cannot recurse forever.
+
+The runtime uses the nodes, triangles and vertices IN PLACE (zero copy), so
+the payload must be 16-byte aligned; the container's 2048-byte payload
+alignment covers it, and the loader checks anyway. `validate_bvh` re-derives
+that every child index is in range, every leaf's triangles lie inside the
+array, every parent box contains its children, and every triangle is
+reachable from exactly one leaf -- so a bad exporter fails at load rather
+than producing collision that is quietly wrong in one corner of the level.
+
 ## Reader obligations
 
 The reader must treat every field as hostile (M5 task 1: fuzzed): validate

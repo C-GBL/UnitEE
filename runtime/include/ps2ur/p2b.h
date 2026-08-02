@@ -40,6 +40,9 @@ inline constexpr uint32_t kSectionController = fourcc('C', 'T', 'R', 'L');
 inline constexpr uint32_t kSectionSkinnedMesh = fourcc('S', 'K', 'M', 'S');
 // Encoded SPU2 ADPCM clips (M10).
 inline constexpr uint32_t kSectionSound = fourcc('S', 'N', 'D', ' ');
+// Baked collision (M11 task 1): primitive colliders plus a world-space BVH
+// over the static mesh triangles. Reserved as `PHYS` by plan 10.2.
+inline constexpr uint32_t kSectionPhysics = fourcc('P', 'H', 'Y', 'S');
 
 // Plain CRC-32 (reflected, poly 0xEDB88320), the same the writer uses.
 uint32_t crc32(const void* data, uint32_t size);

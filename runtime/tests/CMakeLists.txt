@@ -31,6 +31,10 @@ add_executable(ps2ur_tests
     test_memcard.cpp
     test_stream.cpp
     test_scene_load.cpp
+    test_phys_shapes.cpp
+    test_phys_query.cpp
+    test_phys_world.cpp
+    test_phys_bake.cpp
 )
 target_link_libraries(ps2ur_tests PRIVATE ps2ur GTest::gtest_main)
 
