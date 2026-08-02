@@ -151,6 +151,276 @@ bool World::load(const io::P2bFile& file)
     }
     m_mesh_count = mesh_sections;
 
+    // --- Skeletons (M9) -----------------------------------------------------
+    // Bone record: parent i32, name_hash u32, inverse_bind 16 x f32,
+    // rest pos 3 / rot 4 / scale 3 -- 112 bytes.
+    {
+        const uint32_t sections = file.count_of(io::kSectionSkeleton);
+        if (sections > kMaxSkeletons) {
+            m_error = "too many skeletons";
+            return false;
+        }
+        for (uint32_t si = 0; si < sections; ++si) {
+            const io::P2bSection* sec = file.find(io::kSectionSkeleton, si);
+            const View v{sec->data, sec->size};
+            if (!v.ok(0, 16u)) {
+                m_error = "skeleton header truncated";
+                return false;
+            }
+            const uint32_t bones = v.u32(0);
+            if (bones == 0 || bones > anim::kMaxBones) {
+                m_error = "bad bone count";
+                return false;
+            }
+            const uint32_t stride = 112u;
+            if (!v.ok(16u, bones * stride)) {
+                m_error = "skeleton table truncated";
+                return false;
+            }
+            anim::Skeleton& skeleton = m_skeletons[si];
+            skeleton.bone_count = bones;
+            for (uint32_t b = 0; b < bones; ++b) {
+                const uint32_t at = 16u + b * stride;
+                anim::Bone& bone = skeleton.bones[b];
+                bone.parent = v.i32(at + 0);
+                if (bone.parent >= static_cast<int32_t>(b)) {
+                    // Same rule as the entity table: parents must precede
+                    // children or the single-pass bone update reads stale
+                    // matrices.
+                    m_error = "bone parent not before child";
+                    return false;
+                }
+                if (bone.parent < -1) {
+                    m_error = "negative bone parent";
+                    return false;
+                }
+                bone.name_hash = v.u32(at + 4);
+                for (uint32_t i = 0; i < 16; ++i) {
+                    bone.inverse_bind.m[i] = v.f32(at + 8u + i * 4u);
+                }
+                bone.rest_pos = Vec3{v.f32(at + 72), v.f32(at + 76), v.f32(at + 80)};
+                bone.rest_rot = Quat{v.f32(at + 84), v.f32(at + 88), v.f32(at + 92),
+                                     v.f32(at + 96)};
+                bone.rest_scale =
+                    Vec3{v.f32(at + 100), v.f32(at + 104), v.f32(at + 108)};
+            }
+            m_skeleton_count = si + 1;
+        }
+    }
+
+    // --- Clips (M9) ---------------------------------------------------------
+    // Header 32 bytes, then tracks (16 bytes each), then 12-byte keys.
+    {
+        const uint32_t sections = file.count_of(io::kSectionClip);
+        if (sections > anim::kMaxClips) {
+            m_error = "too many clips";
+            return false;
+        }
+        for (uint32_t ci = 0; ci < sections; ++ci) {
+            const io::P2bSection* sec = file.find(io::kSectionClip, ci);
+            const View v{sec->data, sec->size};
+            if (!v.ok(0, 32u)) {
+                m_error = "clip header truncated";
+                return false;
+            }
+            anim::Clip& clip = m_clips[ci];
+            clip.name_hash = v.u32(0);
+            clip.duration = v.f32(4);
+            clip.track_count = v.u32(8);
+            clip.loop = (v.u32(12) & 1u) != 0u;
+            clip.key_count = v.u32(16);
+            if (clip.duration <= 0.0f || clip.track_count > anim::kMaxTracks) {
+                m_error = "bad clip header";
+                return false;
+            }
+            const uint32_t tracks_at = 32u;
+            if (!v.ok(tracks_at, clip.track_count * 16u)) {
+                m_error = "clip track table truncated";
+                return false;
+            }
+            const uint32_t keys_at = tracks_at + clip.track_count * 16u;
+            if (!v.ok(keys_at, clip.key_count * 12u)) {
+                m_error = "clip key stream truncated";
+                return false;
+            }
+            for (uint32_t t = 0; t < clip.track_count; ++t) {
+                const uint32_t at = tracks_at + t * 16u;
+                anim::Track& track = clip.tracks[t];
+                track.bone = v.u16(at + 0);
+                track.channel = sec->data[at + 2];
+                track.key_count = v.u16(at + 4);
+                track.key_first = v.u32(at + 8);
+                track.quant_scale = v.f32(at + 12);
+                if (track.key_count == 0 ||
+                    track.key_first + track.key_count > clip.key_count) {
+                    m_error = "clip track keys out of range";
+                    return false;
+                }
+            }
+            clip.keys = sec->data + keys_at;
+            m_clip_count = ci + 1;
+        }
+    }
+
+    // --- Controllers (M9) ---------------------------------------------------
+    {
+        const uint32_t sections = file.count_of(io::kSectionController);
+        if (sections > kMaxControllers) {
+            m_error = "too many controllers";
+            return false;
+        }
+        for (uint32_t ci = 0; ci < sections; ++ci) {
+            const io::P2bSection* sec = file.find(io::kSectionController, ci);
+            const View v{sec->data, sec->size};
+            if (!v.ok(0, 16u)) {
+                m_error = "controller header truncated";
+                return false;
+            }
+            anim::Controller& controller = m_controllers[ci];
+            controller.state_count = v.u32(0);
+            controller.transition_count = v.u32(4);
+            controller.param_count = v.u32(8);
+            if (controller.state_count > anim::kMaxStates ||
+                controller.transition_count > anim::kMaxTransitions ||
+                controller.param_count > anim::kMaxParams) {
+                m_error = "controller too large";
+                return false;
+            }
+            const uint32_t states_at = 16u;
+            const uint32_t transitions_at =
+                states_at + controller.state_count * 16u;
+            const uint32_t params_at =
+                transitions_at + controller.transition_count * 16u;
+            if (!v.ok(params_at, controller.param_count * 4u)) {
+                m_error = "controller tables truncated";
+                return false;
+            }
+            for (uint32_t s = 0; s < controller.state_count; ++s) {
+                const uint32_t at = states_at + s * 16u;
+                anim::StateDef& state = controller.states[s];
+                state.name_hash = v.u32(at + 0);
+                state.clip = v.u16(at + 4);
+                state.speed = v.f32(at + 8);
+                state.loop = (v.u32(at + 12) & 1u) != 0u;
+                if (state.clip >= m_clip_count) {
+                    m_error = "controller state clip out of range";
+                    return false;
+                }
+            }
+            for (uint32_t t = 0; t < controller.transition_count; ++t) {
+                const uint32_t at = transitions_at + t * 16u;
+                anim::TransitionDef& transition = controller.transitions[t];
+                transition.from = v.u16(at + 0);
+                transition.to = v.u16(at + 2);
+                transition.duration = v.f32(at + 4);
+                transition.condition = sec->data[at + 8];
+                transition.param = sec->data[at + 9];
+                transition.threshold = v.f32(at + 12);
+                if (transition.from >= controller.state_count ||
+                    transition.to >= controller.state_count) {
+                    m_error = "transition state out of range";
+                    return false;
+                }
+            }
+            for (uint32_t p = 0; p < controller.param_count; ++p) {
+                controller.param_hash[p] = v.u32(params_at + p * 4u);
+            }
+            m_controller_count = ci + 1;
+        }
+    }
+
+    // --- Skinned meshes (M9) ------------------------------------------------
+    {
+        const uint32_t sections = file.count_of(io::kSectionSkinnedMesh);
+        if (sections > kMaxSkinnedMeshes) {
+            m_error = "too many skinned meshes";
+            return false;
+        }
+        for (uint32_t mi = 0; mi < sections; ++mi) {
+            const io::P2bSection* sec = file.find(io::kSectionSkinnedMesh, mi);
+            const View v{sec->data, sec->size};
+            const uint32_t header_bytes = 32u;
+            if (!v.ok(0, header_bytes)) {
+                m_error = "skinned mesh header truncated";
+                return false;
+            }
+            LoadedSkinnedMesh& mesh = m_skinned_meshes[mi];
+            mesh.batch_count = v.u32(0);
+            mesh.material_index = v.u32(4);
+            mesh.bounds_center = Vec3{v.f32(8), v.f32(12), v.f32(16)};
+            mesh.bounds_radius = v.f32(20);
+            mesh.skeleton = v.u32(24);
+            if (mesh.batch_count == 0 || mesh.batch_count > kMaxSkinBatches) {
+                m_error = "bad skinned batch count";
+                return false;
+            }
+            if (mesh.skeleton >= m_skeleton_count) {
+                m_error = "skinned mesh skeleton out of range";
+                return false;
+            }
+            const uint32_t descs_at = header_bytes;
+            const uint32_t tables_at = descs_at + mesh.batch_count * 16u;
+            if (!v.ok(tables_at, mesh.batch_count * 64u)) {
+                m_error = "skinned mesh tables truncated";
+                return false;
+            }
+            const uint32_t bones_in_skeleton =
+                m_skeletons[mesh.skeleton].bone_count;
+
+            for (uint32_t b = 0; b < mesh.batch_count; ++b) {
+                const uint32_t d = descs_at + b * 16u;
+                const uint32_t offset_qw = v.u32(d + 0);
+                const uint32_t vert_qw = v.u32(d + 4);
+                const uint32_t vcount = v.u32(d + 8);
+                const uint32_t vdest = v.u32(d + 12);
+
+                const uint32_t byte_off = offset_qw * 16u;
+                if (offset_qw > 0x0FFFFFFFu ||
+                    !v.ok(byte_off, (2u + vert_qw) * 16u)) {
+                    m_error = "skinned batch blob outside its section";
+                    return false;
+                }
+                if (vcount == 0 || vcount % 3u != 0 || vert_qw != vcount * 5u) {
+                    m_error = "skinned batch vertex counts inconsistent";
+                    return false;
+                }
+                if (vert_qw > 255u) {
+                    // The VIF NUM field is 8 bits; a larger unpack would
+                    // silently truncate on target.
+                    m_error = "skinned batch exceeds the VIF unpack limit";
+                    return false;
+                }
+                if (vdest != 114u) {
+                    m_error = "skinned batch vert_dest not the palette layout";
+                    return false;
+                }
+                const gfx::Qword* blob =
+                    reinterpret_cast<const gfx::Qword*>(sec->data + byte_off);
+                mesh.batches[b] =
+                    gfx::BatchBlock{blob, blob + 2, vert_qw, vcount, vdest};
+
+                // Bone table: u32 count then 24 u16 slots, 64-byte stride.
+                const uint32_t t = tables_at + b * 64u;
+                const uint32_t count = v.u32(t + 0);
+                if (count == 0 || count > anim::kMaxPaletteBones) {
+                    m_error = "skinned batch bone table size";
+                    return false;
+                }
+                for (uint32_t s = 0; s < count; ++s) {
+                    mesh.bone_table[b][s] = v.u16(t + 4u + s * 2u);
+                }
+                mesh.bone_count[b] = static_cast<uint8_t>(count);
+                if (!anim::validate_partition(mesh.bone_table[b], count,
+                                              bones_in_skeleton, nullptr, 0,
+                                              anim::kMaxPaletteBones)) {
+                    m_error = "skinned batch bone table invalid";
+                    return false;
+                }
+            }
+            m_skinned_mesh_count = mi + 1;
+        }
+    }
+
     // --- Scene --------------------------------------------------------------
     const io::P2bSection* scn = file.find(io::kSectionScene);
     if (scn == nullptr) {
@@ -281,6 +551,39 @@ bool World::load(const io::P2bFile& file)
                                    v.f32(data_off + 8)};
                 m_light.colour = Vec3{v.f32(data_off + 12), v.f32(data_off + 16),
                                       v.f32(data_off + 20)};
+            } else if (type == kComponentSkinnedMeshRenderer) {
+                if (!v.ok(data_off, 16u)) {
+                    m_error = "skinned renderer payload truncated";
+                    return false;
+                }
+                if (m_skinned_count >= kMaxSkinnedRenderers) {
+                    m_error = "too many skinned renderers";
+                    return false;
+                }
+                const uint32_t mesh_idx = v.u32(data_off + 0);
+                const uint32_t mat_idx = v.u32(data_off + 4);
+                const uint32_t controller_idx = v.u32(data_off + 12);
+                if (mesh_idx >= m_skinned_mesh_count) {
+                    m_error = "skinned mesh index out of range";
+                    return false;
+                }
+                if (mat_idx != 0xFFFFFFFFu && mat_idx >= m_material_count) {
+                    m_error = "skinned material index out of range";
+                    return false;
+                }
+                if (controller_idx >= m_controller_count) {
+                    m_error = "skinned controller index out of range";
+                    return false;
+                }
+                SkinnedRenderer& renderer = m_skinned[m_skinned_count];
+                renderer.entity = static_cast<int32_t>(i);
+                renderer.mesh = static_cast<int32_t>(mesh_idx);
+                renderer.material =
+                    mat_idx == 0xFFFFFFFFu ? -1 : static_cast<int32_t>(mat_idx);
+                renderer.skeleton = m_skinned_meshes[mesh_idx].skeleton;
+                renderer.controller = controller_idx;
+                renderer.animator = m_skinned_count;
+                ++m_skinned_count;
             } else if (type == kComponentScript) {
                 // Payload = u32 byte offset of a NUL-terminated type name
                 // inside the SCRP section (payloads themselves stay uniform
@@ -325,8 +628,64 @@ bool World::load(const io::P2bFile& file)
         }
     }
     m_entity_count = entity_count;
+
+    // Bind one animator per skinned renderer (M9). They start in their
+    // controller's first state; the frame loop drives them.
+    for (uint32_t i = 0; i < m_skinned_count; ++i) {
+        const SkinnedRenderer& renderer = m_skinned[i];
+        m_animators[renderer.animator].bind(&m_skeletons[renderer.skeleton],
+                                            &m_controllers[renderer.controller],
+                                            m_clips, m_clip_count);
+    }
+
     update_world_matrices();
     return true;
+}
+
+int32_t World::animator_for_entity(int32_t entity_index) const
+{
+    for (uint32_t i = 0; i < m_skinned_count; ++i) {
+        if (m_skinned[i].entity == entity_index) {
+            return static_cast<int32_t>(m_skinned[i].animator);
+        }
+    }
+    return -1;
+}
+
+int32_t World::state_index(uint32_t controller, uint32_t name_hash) const
+{
+    if (controller >= m_controller_count) {
+        return -1;
+    }
+    const anim::Controller& c = m_controllers[controller];
+    for (uint32_t i = 0; i < c.state_count; ++i) {
+        if (c.states[i].name_hash == name_hash) {
+            return static_cast<int32_t>(i);
+        }
+    }
+    return -1;
+}
+
+void World::update_animators(float dt)
+{
+    for (uint32_t i = 0; i < m_skinned_count; ++i) {
+        anim::Animator& animator = m_animators[m_skinned[i].animator];
+        if (!animator.valid()) {
+            continue;
+        }
+        animator.update(dt);
+        // Root motion drives the entity, so a walk cycle actually travels
+        // (M9 task 4). The delta is zero unless root motion is enabled, so
+        // this is unconditional; it is expressed in the entity's local
+        // space, and the rotation delta composes on the entity's rotation.
+        const int32_t entity = m_skinned[i].entity;
+        if (entity >= 0) {
+            const Entity& e = m_entities[entity];
+            set_local_position(entity, add(e.pos, animator.root_motion_delta()));
+            set_local_rotation(entity, quat_normalize(quat_mul(
+                                           animator.root_rotation_delta(), e.rot)));
+        }
+    }
 }
 
 void World::update_world_matrices()

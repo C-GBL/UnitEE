@@ -23,6 +23,7 @@ namespace Ps2.Editor
         public const uint KindCutout = 4;   // lit layout + alpha test
         public const uint KindAdditive = 5; // unlit layout + additive blend
         public const uint KindVertexLitFog = 6; // lit layout + per-vertex F (M8)
+        public const uint KindSkinned = 7;      // vu_skin palette (M9)
 
         // Vertex layout selectors: the new kinds reuse the M4/M5 layouts.
         public static bool UsesLitLayout(uint kind) =>

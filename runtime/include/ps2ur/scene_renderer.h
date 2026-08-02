@@ -30,13 +30,16 @@ struct RendererPrograms {
     uint32_t tex_addr = 300;
     uint32_t lit_addr = 700;
     uint32_t lit_fog_addr = 1000;
+    uint32_t skin_addr = 1300;
 };
 
 struct RenderStats {
-    uint32_t considered = 0; // alive, visible, has a mesh
-    uint32_t culled = 0;     // rejected by frustum or layer mask
-    uint32_t drawn = 0;      // draws that reached the chain
-    uint32_t kicks = 0;      // chain kicks (group boundaries)
+    uint32_t considered = 0;    // alive, visible, has a mesh
+    uint32_t culled = 0;        // rejected by frustum or layer mask
+    uint32_t drawn = 0;         // draws that reached the chain
+    uint32_t kicks = 0;         // chain kicks (group boundaries)
+    uint32_t skinned_drawn = 0; // skinned characters drawn (M9)
+    uint32_t skin_batches = 0;  // skinned batches submitted
 };
 
 class SceneRenderer {

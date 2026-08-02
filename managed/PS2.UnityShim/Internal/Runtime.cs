@@ -151,6 +151,15 @@ namespace UnityEngine.Internal
 
             ResumeCoroutines(fixedStep: false);
 
+            // Animation lands HERE: after Update and coroutines, before
+            // LateUpdate (M9 task 4). Scripts that read a bone-driven
+            // transform in LateUpdate -- the standard camera-follow and
+            // IK-fixup pattern -- see the posed skeleton, and scripts that
+            // set animator parameters in Update have them applied the same
+            // frame. Getting this order wrong is invisible until someone's
+            // camera lags a frame behind the character.
+            Native.ps2ur_anim_update(dt);
+
             for (int i = 0; i < s_Behaviours.Count; i++)
             {
                 BehaviourState b = s_Behaviours[i];

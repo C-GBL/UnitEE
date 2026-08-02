@@ -30,6 +30,14 @@ inline constexpr uint32_t kSectionMaterial = fourcc('M', 'A', 'T', 'L');
 // Packed NUL-terminated managed type names referenced by script components
 // (M7). Offsets in component payloads index into this section.
 inline constexpr uint32_t kSectionScripts = fourcc('S', 'C', 'R', 'P');
+// Animation and skinning (M9). Skinned meshes carry their own section type
+// rather than extending MESH: their batches need per-batch bone tables and a
+// much higher batch count, and a separate index space keeps both formats
+// simple.
+inline constexpr uint32_t kSectionSkeleton = fourcc('S', 'K', 'E', 'L');
+inline constexpr uint32_t kSectionClip = fourcc('A', 'N', 'I', 'M');
+inline constexpr uint32_t kSectionController = fourcc('C', 'T', 'R', 'L');
+inline constexpr uint32_t kSectionSkinnedMesh = fourcc('S', 'K', 'M', 'S');
 
 // Plain CRC-32 (reflected, poly 0xEDB88320), the same the writer uses.
 uint32_t crc32(const void* data, uint32_t size);

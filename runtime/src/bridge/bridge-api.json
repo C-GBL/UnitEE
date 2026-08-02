@@ -173,6 +173,60 @@
         { "name": "handle", "type": "i32" },
         { "name": "index", "type": "i32" }
       ]
+    },
+    {
+      "name": "ps2ur_anim_update",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "Advances every animator by dt and writes their root motion back to entity transforms. The managed dispatcher calls this AFTER Update and coroutines and BEFORE LateUpdate, which is the ordering Unity users rely on (M9 task 4).",
+      "returns": "void",
+      "params": [ { "name": "dt", "type": "f32" } ]
+    },
+    {
+      "name": "ps2ur_animator_play",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "Jumps the entity's animator to the named baked state with no blend. Returns 1 when the state exists, 0 otherwise. Names are FNV-1a-64 hashes truncated to 32 bits, matching the exporter.",
+      "returns": "i32",
+      "params": [
+        { "name": "handle", "type": "i32" },
+        { "name": "stateHash", "type": "u32" }
+      ]
+    },
+    {
+      "name": "ps2ur_animator_crossfade",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "Starts a crossfade to the named state over a duration in SECONDS. Returns 1 when the state exists.",
+      "returns": "i32",
+      "params": [
+        { "name": "handle", "type": "i32" },
+        { "name": "stateHash", "type": "u32" },
+        { "name": "seconds", "type": "f32" }
+      ]
+    },
+    {
+      "name": "ps2ur_animator_set_trigger",
+      "cs_class": "UnityEngine.Internal.Native",
+      "returns": "void",
+      "params": [
+        { "name": "handle", "type": "i32" },
+        { "name": "paramHash", "type": "u32" }
+      ]
+    },
+    {
+      "name": "ps2ur_animator_set_float",
+      "cs_class": "UnityEngine.Internal.Native",
+      "returns": "void",
+      "params": [
+        { "name": "handle", "type": "i32" },
+        { "name": "paramHash", "type": "u32" },
+        { "name": "value", "type": "f32" }
+      ]
+    },
+    {
+      "name": "ps2ur_animator_is_blending",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "1 while a crossfade is running on the entity's animator.",
+      "returns": "i32",
+      "params": [ { "name": "handle", "type": "i32" } ]
     }
   ]
 }

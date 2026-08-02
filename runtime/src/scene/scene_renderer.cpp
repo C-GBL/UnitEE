@@ -8,7 +8,9 @@ namespace scene {
 
 namespace {
 
-alignas(16) gfx::Qword g_constants[18]; // 0-16 lit block + 17 fog
+// 0..16 lit block, 17 fog, 18..113 the M9 bone palette (24 x 4 qwords).
+alignas(16) gfx::Qword g_constants[18 + anim::kMaxPaletteBones * 4];
+alignas(16) Mat4 g_palette[anim::kMaxPaletteBones];
 
 void set_float4(gfx::Qword& q, float x, float y, float z, float w)
 {
@@ -223,14 +225,16 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
             set_float4(g_constants[9], obj.x, 0, 0, 0);
             set_float4(g_constants[10], obj.y, 0, 0, 0);
             set_float4(g_constants[11], obj.z, 0, 0, 0);
+            // Qwords 12..14 are the COLOURS OF LIGHTS 0..2 as (r,g,b,0) --
+            // the microprogram broadcasts N.L per light and spends its
+            // fourth MADD on ambient. Packing them per-channel instead lit
+            // only the red channel (verify-log M9).
+            //
             // Scale discipline: exported vertex colours are 0..255, so the
-            // light factor must be ~0..1: intensity = lc*N.L + ambient, then
-            // x colour -> 0..255 (matches 12-vu1-lit's verified arithmetic
-            // with its unity-scale vertex colour). The old *255 here double-
-            // scaled and saturated every lit pixel white (verify-log, M8).
-            set_float4(g_constants[12], lc.x, 0, 0, 0);
-            set_float4(g_constants[13], lc.y, 0, 0, 0);
-            set_float4(g_constants[14], lc.z, 0, 0, 0);
+            // light factor stays ~0..1 (verify-log M8).
+            set_float4(g_constants[12], lc.x, lc.y, lc.z, 0);
+            set_float4(g_constants[13], 0, 0, 0, 0);
+            set_float4(g_constants[14], 0, 0, 0, 0);
             set_float4(g_constants[15], 0.157f, 0.157f, 0.157f, 0);
             set_float4(g_constants[16], 255.0f, 255.0f, 255.0f, 128.0f);
             if (mat.kind == kMaterialVertexLitFog) {
@@ -269,6 +273,113 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
         }
         chain.wait();
         ++local.kicks;
+        chain_open = false;
+    }
+
+    // --- Skinned pass (M9) --------------------------------------------------
+    //
+    // One constants upload per character carries the MVP block AND the 24
+    // matrix palette (qwords 18..113), then every batch of that character
+    // unpacks its vertices above it. The palette is per-batch in principle,
+    // but a character whose whole bone set fits one table -- the common case
+    // and the M9 acceptance case -- uploads it once and draws every batch
+    // against it.
+    if (world.skinned_renderer_count() > 0) {
+        device.packet().reset();
+        device.set_material_state(0, 0, false, true);
+        device.flush_packet();
+    }
+    for (uint32_t s = 0; s < world.skinned_renderer_count(); ++s) {
+        const SkinnedRenderer& renderer = world.skinned_renderer(s);
+        if (renderer.entity < 0 || renderer.mesh < 0) {
+            continue;
+        }
+        const uint32_t entity = static_cast<uint32_t>(renderer.entity);
+        if (!world.entity(entity).alive ||
+            !world.entity_visible(renderer.entity)) {
+            continue;
+        }
+        const LoadedSkinnedMesh& mesh =
+            world.skinned_mesh(static_cast<uint32_t>(renderer.mesh));
+        const anim::Animator& animator = world.animator(renderer.animator);
+
+        // Cull the whole character on its bounding sphere, grown to cover
+        // the animation: a posed limb reaches past the bind-pose bounds.
+        const Mat4& w = world.world_matrix(entity);
+        const Vec4 centre = mat4_mul_vec4(
+            w, Vec4{mesh.bounds_center.x, mesh.bounds_center.y,
+                    mesh.bounds_center.z, 1.0f});
+        const float radius = world_radius(w, mesh.bounds_radius) * 1.5f;
+        ++local.considered;
+        if (frustum_culls_sphere(frustum, Vec3{centre.x, centre.y, centre.z},
+                                 radius)) {
+            ++local.culled;
+            continue;
+        }
+
+        const Mat4 mvp = mat4_mul(viewproj, w);
+        gfx::BatchBuilder::build_unlit_constants(mvp.m, vscale, voffset, 4095.0f,
+                                                 cam.znear, g_constants);
+        if (world.has_light()) {
+            const Vec3 ld = world.light().dir;
+            const Vec3 obj = normalize(Vec3{
+                -(w.m[0] * ld.x + w.m[1] * ld.y + w.m[2] * ld.z),
+                -(w.m[4] * ld.x + w.m[5] * ld.y + w.m[6] * ld.z),
+                -(w.m[8] * ld.x + w.m[9] * ld.y + w.m[10] * ld.z)});
+            const Vec3 lc = world.light().colour;
+            set_float4(g_constants[9], obj.x, 0, 0, 0);
+            set_float4(g_constants[10], obj.y, 0, 0, 0);
+            set_float4(g_constants[11], obj.z, 0, 0, 0);
+            set_float4(g_constants[12], lc.x, lc.y, lc.z, 0);
+        } else {
+            set_float4(g_constants[9], 0, 0, 0, 0);
+            set_float4(g_constants[10], 0, 0, 0, 0);
+            set_float4(g_constants[11], 0, 0, 0, 0);
+            set_float4(g_constants[12], 0, 0, 0, 0);
+        }
+        set_float4(g_constants[13], 0, 0, 0, 0);
+        set_float4(g_constants[14], 0, 0, 0, 0);
+        set_float4(g_constants[15], 0.157f, 0.157f, 0.157f, 0);
+        set_float4(g_constants[16], 255.0f, 255.0f, 255.0f, 128.0f);
+        set_float4(g_constants[17], 0, 0, 0, 0);
+
+        uint32_t last_table = 0xFFFFFFFFu;
+        chain.begin();
+        chain_open = true;
+        bool ok = true;
+        for (uint32_t b = 0; b < mesh.batch_count && ok; ++b) {
+            const uint32_t table_count = mesh.bone_count[b];
+            // Re-upload the palette only when this batch's bone table
+            // differs from the one already resident.
+            if (last_table == 0xFFFFFFFFu ||
+                mesh.bone_table[b][0] != mesh.bone_table[last_table][0] ||
+                table_count != mesh.bone_count[last_table]) {
+                anim::build_palette(animator, mesh.bone_table[b], table_count,
+                                    g_palette);
+                for (uint32_t slot = 0; slot < table_count; ++slot) {
+                    for (uint32_t c = 0; c < 4; ++c) {
+                        set_float4(g_constants[18u + slot * 4u + c],
+                                   g_palette[slot].m[c * 4 + 0],
+                                   g_palette[slot].m[c * 4 + 1],
+                                   g_palette[slot].m[c * 4 + 2],
+                                   g_palette[slot].m[c * 4 + 3]);
+                    }
+                }
+                ok = chain.add_constants(g_constants, 18u + table_count * 4u, 0);
+                last_table = b;
+            }
+            if (ok) {
+                ok = chain.add_batch(mesh.batches[b], programs.skin_addr);
+                ++local.skin_batches;
+            }
+        }
+        if (!ok || !chain.kick()) {
+            return false;
+        }
+        chain.wait();
+        chain_open = false;
+        ++local.kicks;
+        ++local.skinned_drawn;
     }
 
     if (stats != nullptr) {

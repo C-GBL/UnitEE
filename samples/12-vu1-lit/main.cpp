@@ -40,8 +40,11 @@ alignas(16) gfx::Qword g_data[kDataQwords];
 alignas(16) uint8_t g_pixels[kScreenW * 64 * 4];
 
 // One white light straight down -Z, plus a modest ambient.
-constexpr float kLightR = 200.0f, kLightG = 200.0f, kLightB = 200.0f;
-constexpr float kAmbR = 40.0f, kAmbG = 40.0f, kAmbB = 40.0f;
+// Deliberately NOT grey: a light whose channels differ is the only way this
+// test can catch a constant-packing mix-up between channels and lights (it
+// could not, while it asserted red alone -- verify-log M9).
+constexpr float kLightR = 200.0f, kLightG = 140.0f, kLightB = 80.0f;
+constexpr float kAmbR = 40.0f, kAmbG = 30.0f, kAmbB = 20.0f;
 constexpr float kVertexGrey = 1.0f; // vertex colour is unity so light dominates
 
 void set_float4(gfx::Qword& q, float x, float y, float z, float w)
@@ -111,9 +114,13 @@ int main(void)
     set_float4(g_data[9], 0.0f, 0.0f, 0.0f, 0.0f);  // x row
     set_float4(g_data[10], 0.0f, 0.0f, 0.0f, 0.0f); // y row
     set_float4(g_data[11], 1.0f, 0.0f, 0.0f, 0.0f); // z row: only light 0
-    set_float4(g_data[12], kLightR, 0.0f, 0.0f, 0.0f); // per-light R
-    set_float4(g_data[13], kLightG, 0.0f, 0.0f, 0.0f); // per-light G
-    set_float4(g_data[14], kLightB, 0.0f, 0.0f, 0.0f); // per-light B
+    // Colour of light 0/1/2 as (r,g,b,0). The microprogram's MADD chain
+    // broadcasts N.L per LIGHT (x, then y, then z) and spends its fourth
+    // slot on ambient, so THREE directional lights fit -- and these qwords
+    // are per-light colours, not per-channel light lists.
+    set_float4(g_data[12], kLightR, kLightG, kLightB, 0.0f); // light 0
+    set_float4(g_data[13], 0.0f, 0.0f, 0.0f, 0.0f);          // light 1
+    set_float4(g_data[14], 0.0f, 0.0f, 0.0f, 0.0f);          // light 2
     set_float4(g_data[15], kAmbR, kAmbG, kAmbB, 0.0f);
     set_float4(g_data[16], 255.0f, 255.0f, 255.0f, 128.0f); // clamp ceiling
 
@@ -153,12 +160,10 @@ int main(void)
         return 1;
     }
 
-    // Expected: light * N.L + ambient, modulated by a unity vertex colour.
-    const float expect[kQuadCount] = {
-        kLightR * 1.0f + kAmbR,
-        kLightR * 0.5f + kAmbR,
-        kAmbR, // clamped: ambient only
-    };
+    // Expected: light * N.L + ambient, modulated by a unity vertex colour --
+    // asserted on ALL THREE channels. Checking red alone let a packing bug
+    // that lit only the red channel survive from M4 to M9 (verify-log M9).
+    const float nl[kQuadCount] = {1.0f, 0.5f, 0.0f};
 
     uint32_t failures = 0;
     for (uint32_t q = 0; q < kQuadCount; ++q) {
@@ -166,14 +171,24 @@ int main(void)
         const float ndc_mid = x0[q] + 0.2f;
         const uint32_t sx = static_cast<uint32_t>(ndc_mid * half_w + half_w);
         const uint8_t* p = &g_pixels[(32u * kScreenW + sx) * 4u];
-        const int want = static_cast<int>(expect[q]);
-        const int got = static_cast<int>(p[0]);
-        const int diff = got - want;
-        const bool ok = diff > -8 && diff < 8;
-        printf("  quad %u (N.L=%s): got R=%u want R=%d %s\n",
+        const int want[3] = {
+            static_cast<int>(kLightR * nl[q] + kAmbR),
+            static_cast<int>(kLightG * nl[q] + kAmbG),
+            static_cast<int>(kLightB * nl[q] + kAmbB),
+        };
+        bool ok = true;
+        for (int c = 0; c < 3; ++c) {
+            const int diff = static_cast<int>(p[c]) - want[c];
+            if (diff <= -8 || diff >= 8) {
+                ok = false;
+            }
+        }
+        printf("  quad %u (N.L=%s): got (%u,%u,%u) want (%d,%d,%d) %s\n",
                static_cast<unsigned>(q),
                q == 0 ? "1.0" : (q == 1 ? "0.5" : "clamped"),
-               static_cast<unsigned>(got), want, ok ? "OK" : "MISMATCH");
+               static_cast<unsigned>(p[0]), static_cast<unsigned>(p[1]),
+               static_cast<unsigned>(p[2]), want[0], want[1], want[2],
+               ok ? "OK" : "MISMATCH");
         if (!ok) {
             failures++;
         }

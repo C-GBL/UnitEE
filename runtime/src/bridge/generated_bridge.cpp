@@ -19,6 +19,12 @@ const Ps2urBridgeEntry ps2ur_bridge_table[] = {
     { "ps2ur_tf_set_parent", reinterpret_cast<const void*>(&ps2ur_tf_set_parent) },
     { "ps2ur_tf_child_count", reinterpret_cast<const void*>(&ps2ur_tf_child_count) },
     { "ps2ur_tf_get_child", reinterpret_cast<const void*>(&ps2ur_tf_get_child) },
+    { "ps2ur_anim_update", reinterpret_cast<const void*>(&ps2ur_anim_update) },
+    { "ps2ur_animator_play", reinterpret_cast<const void*>(&ps2ur_animator_play) },
+    { "ps2ur_animator_crossfade", reinterpret_cast<const void*>(&ps2ur_animator_crossfade) },
+    { "ps2ur_animator_set_trigger", reinterpret_cast<const void*>(&ps2ur_animator_set_trigger) },
+    { "ps2ur_animator_set_float", reinterpret_cast<const void*>(&ps2ur_animator_set_float) },
+    { "ps2ur_animator_is_blending", reinterpret_cast<const void*>(&ps2ur_animator_is_blending) },
 };
 
 const int ps2ur_bridge_table_count =

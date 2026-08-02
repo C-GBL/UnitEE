@@ -30,7 +30,10 @@
 ;   9..11   light direction matrix rows x/y/z, one COLUMN per light,
 ;           pre-negated, normalised, in OBJECT space (EE supplies them, so the
 ;           microprogram needs no inverse-transpose)
-;   12..14  light colour R / G / B: (l0, l1, l2, l3) per channel
+;   12..14  COLOUR of light 0 / 1 / 2, each (r, g, b, 0). The MADD chain
+;           broadcasts N.L per LIGHT and spends its fourth slot on
+;           ambient, so three directional lights fit -- these are NOT
+;           per-channel lists of four lights (verify-log M9)
 ;   15      ambient          : (r, g, b, 0)
 ;   16      colour clamp     : (255, 255, 255, 128) -- GS ceiling; 128 = opaque
 ;   17      reserved

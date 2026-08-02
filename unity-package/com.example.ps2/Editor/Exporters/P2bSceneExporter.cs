@@ -23,7 +23,25 @@ namespace Ps2.Editor
             public bool IsLight;
             public Light Light;
             public List<string> Scripts; // managed type names, or null
+            public SkinnedMeshRenderer Skinned; // M9, or null
         }
+
+        // Pre-built animation sections handed in by a caller that owns the
+        // rig (the M9 scene builder). Baking arbitrary AnimatorController
+        // assets is Editor plumbing this milestone does not attempt; the
+        // container and runtime accept whatever a baker produces.
+        internal sealed class SkinPayload
+        {
+            public byte[] Skeleton;
+            public List<byte[]> Clips = new List<byte[]>();
+            public byte[] Controller;
+            public byte[] SkinnedMesh;
+            // Renderers that use SkinnedMesh index 0 / Controller index 0.
+            public HashSet<SkinnedMeshRenderer> Renderers =
+                new HashSet<SkinnedMeshRenderer>();
+        }
+
+        internal static SkinPayload PendingSkin;
 
         private sealed class MeshKey
         {
@@ -42,6 +60,14 @@ namespace Ps2.Editor
             var textureLookup = new Dictionary<Texture2D, int>();
             var materials = new List<(uint kind, uint texture)>();
             var materialLookup = new Dictionary<string, int>();
+
+            // Skinned meshes name material 0 (they are exported before the
+            // walk, so the index has to be known up front).
+            if (PendingSkin != null)
+            {
+                materials.Add((P2bMeshExporter.KindSkinned, 0xFFFFFFFF));
+                materialLookup[P2bMeshExporter.KindSkinned + ":4294967295"] = 0;
+            }
 
             foreach (GameObject root in SceneManager.GetActiveScene()
                          .GetRootGameObjects())
@@ -105,6 +131,20 @@ namespace Ps2.Editor
             if (scrp.Position > 0)
             {
                 writer.AddSection(P2bWriter.SectionScripts, scrp.ToArray());
+            }
+
+            // M9 sections, in the order the loader wants them available:
+            // skeletons before clips before controllers before skinned
+            // meshes (each validates against the previous).
+            if (PendingSkin != null)
+            {
+                writer.AddSection(P2bWriter.SectionSkeleton, PendingSkin.Skeleton);
+                foreach (byte[] clip in PendingSkin.Clips)
+                {
+                    writer.AddSection(P2bWriter.SectionClip, clip);
+                }
+                writer.AddSection(P2bWriter.SectionController, PendingSkin.Controller);
+                writer.AddSection(P2bWriter.SectionSkinnedMesh, PendingSkin.SkinnedMesh);
             }
 
             writer.AddSection(P2bWriter.SectionScene, BuildScene(entities, scriptNames));
@@ -178,6 +218,13 @@ namespace Ps2.Editor
                     meshLookup.Add(meshKey, meshIndex);
                 }
                 record.Mesh = meshIndex;
+            }
+
+            var skinned = t.GetComponent<SkinnedMeshRenderer>();
+            if (skinned != null && PendingSkin != null &&
+                PendingSkin.Renderers.Contains(skinned))
+            {
+                record.Skinned = skinned;
             }
 
             var camera = t.GetComponent<Camera>();
@@ -327,6 +374,15 @@ namespace Ps2.Editor
                     p.F32(e.Light.color.g * e.Light.intensity);
                     p.F32(e.Light.color.b * e.Light.intensity);
                     comps.Add((3, p.ToArray()));
+                }
+                if (e.Skinned != null)
+                {
+                    var p = new ByteBuffer();
+                    p.U32(0);          // skinned mesh index
+                    p.U32(0xFFFFFFFF); // no material override
+                    p.U32(0);          // skeleton (the mesh names its own)
+                    p.U32(0);          // controller index
+                    comps.Add((5, p.ToArray()));
                 }
                 if (e.Scripts != null)
                 {

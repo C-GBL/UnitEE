@@ -53,10 +53,16 @@ inline float dot(Vec4 a, Vec4 b)     { return a.x * b.x + a.y * b.y + a.z * b.z 
 
 // ---- Quat ------------------------------------------------------------------
 inline Quat quat_identity()          { return Quat{0.0f, 0.0f, 0.0f, 1.0f}; }
+inline float quat_dot(Quat a, Quat b) { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
+inline Quat quat_conjugate(Quat q)   { return Quat{-q.x, -q.y, -q.z, q.w}; }
 Quat quat_mul(Quat a, Quat b);       // Hamilton product: applies b, then a
 Quat quat_normalize(Quat q);
 Quat quat_from_axis_angle(Vec3 axis, float radians);
 Vec3 quat_rotate(Quat q, Vec3 v);
+// Shortest-arc interpolation (M9): flips b when the dot product is negative
+// so a blend never takes the long way round. Falls back to normalised lerp
+// for nearly parallel inputs, where the slerp denominator collapses.
+Quat quat_slerp(Quat a, Quat b, float t);
 
 // ---- Mat4 ------------------------------------------------------------------
 Mat4 mat4_identity();

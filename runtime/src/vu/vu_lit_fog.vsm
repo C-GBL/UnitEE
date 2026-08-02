@@ -20,7 +20,8 @@
 ; VU1 DATA MEMORY LAYOUT (quadwords)
 ; ---------------------------------------------------------------------------
 ;   0..16   exactly as vu_lit (MVP, viewport, clip, tag, count, lights,
-;           ambient, clamp)
+;           ambient, clamp). Note 12..14 are the COLOURS of lights 0..2 as
+;           (r,g,b,0), not per-channel lists (verify-log M9).
 ;   17      fog constants    : (fog_scale, fog_offset, 255, 0)
 ;   18..    vertices, 3 qwords each: position, normal, colour
 ;

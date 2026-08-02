@@ -25,6 +25,7 @@ add_executable(ps2ur_tests
     test_p2b.cpp
     test_world_handles.cpp
     test_render_queue.cpp
+    test_anim.cpp
 )
 target_link_libraries(ps2ur_tests PRIVATE ps2ur GTest::gtest_main)
 

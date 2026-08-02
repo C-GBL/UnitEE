@@ -173,6 +173,136 @@ Packed NUL-terminated managed type names, ASCII, in the form
 offsets into this section; the reader must prove the NUL lies inside the
 section before keeping a pointer.
 
+## SKEL section (M9)
+
+```
+u32 bone_count
+u32 pad[3]
+Bone[bone_count] {                  // 112 bytes each
+    i32 parent                      // < own index, or -1 (see below)
+    u32 name_hash
+    f32 inverse_bind[16]            // mesh space -> bone space (Unity bindpose)
+    f32 rest_pos[3]
+    f32 rest_rot[4]                 // quaternion x,y,z,w
+    f32 rest_scale[3]
+}
+```
+
+Bones are written **parent-before-child**, the same rule the entity table
+follows and for the same reason: the runtime composes bone matrices in one
+linear pass. Unity's `SkinnedMeshRenderer.bones` carries no such guarantee,
+so the exporter topologically sorts and permutes the bind poses and every
+weight index to match.
+
+## ANIM section (M9), one per clip
+
+```
+ClipHeader {
+    u32 name_hash
+    f32 duration                    // seconds
+    u32 track_count
+    u32 flags                       // bit0 loop
+    u32 key_count                   // total keys in this clip
+    u32 pad[3]
+}
+Track[track_count] {                // 16 bytes each
+    u16 bone
+    u8  channel                     // 0 translation, 1 rotation, 2 scale
+    u8  pad
+    u16 key_count
+    u16 pad2
+    u32 key_first                   // index into the key stream
+    f32 quant_scale                 // dequantise: raw * quant_scale / 32767
+}
+Key[key_count] {                    // 12 bytes each, one stride for all channels
+    u16 time_norm                   // time / duration * 65535
+    u16 pad
+    i16 v[4]                        // translation/scale use v[0..2]
+}
+```
+
+Rotations are 4x16-bit quaternion components with `quant_scale` 1.0;
+translations and scales are 16-bit with a per-track scale, so a track that
+moves a few centimetres keeps full precision instead of spending its range
+on a world-sized bound. Time resolves to `duration / 65535` -- 76 us on a
+5-second clip.
+
+Keys are keyframe-reduced at export: a sample survives only if dropping it
+would move the reconstructed curve past a tolerance somewhere between its
+surviving neighbours (rotations compare by quaternion dot product, since
+their components are not independent).
+
+## CTRL section (M9), the baked state machine
+
+```
+u32 state_count, transition_count, param_count, pad
+State[state_count] {                // 16 bytes
+    u32 name_hash
+    u16 clip
+    u16 pad
+    f32 speed
+    u32 flags                       // bit0 loop
+}
+Transition[transition_count] {      // 16 bytes
+    u16 from, to
+    f32 duration                    // crossfade seconds
+    u8  condition                   // 0 exit-time, 1 bool-true, 2 bool-false,
+                                    // 3 float>, 4 float<, 5 trigger
+    u8  param
+    u16 pad
+    f32 threshold
+}
+u32 param_hash[param_count]
+```
+
+## SKMS section (M9), one per skinned mesh
+
+Skinned meshes carry their own section type rather than extending MESH:
+their batches need per-batch bone tables, and 16 triangles per batch means a
+character needs ~100 batches where a rigid mesh needs one or two.
+
+```
+SkinnedMeshHeader {                 // 32 bytes
+    u32 batch_count
+    u32 material_index
+    f32 bounds_center[3]
+    f32 bounds_radius
+    u32 skeleton_index
+    u32 pad
+}
+BatchDesc[batch_count] { u32 offset_qw, vert_qw, vcount, vdest }   // vdest = 114
+BoneTable[batch_count] {            // 64 bytes, fixed stride
+    u32 count                       // <= 24
+    u16 bones[24]                   // indices into the skeleton
+    u16 pad[6]
+}
+(pad to 16)
+Blob[batch_count] { GifTag; count qw; Vertex[vcount] }
+```
+
+Vertex, 5 quadwords:
+
+```
++0 f32 position[4]      // w = 1
++1 f32 normal[4]        // w = 0
++2 f32 colour[4]        // 0..255, alpha in PS2 range (0x80 opaque)
++3 i32 palette_offset[4] // bone_slot * 4 -- INTEGERS, read by ILW
++4 f32 weight[4]        // sums to 1
+```
+
+`palette_offset` holds *local slot* indices (already multiplied by the
+4-quadword matrix stride), not skeleton bone indices: the microprogram adds
+the palette base and loads directly. Unused influences point at slot 0 with
+weight 0, because the microprogram always reads four matrices and the
+address has to stay inside the palette.
+
+Batches are produced by the greedy partitioner described in
+`runtime/include/ps2ur/anim.h`; the runtime re-validates every table it
+loads (size, range, duplicates), so an exporter bug fails at load rather
+than drawing a character inside out. When a character's whole skeleton fits
+one palette -- the usual case -- every batch is given the same table so the
+palette uploads once per character instead of once per batch.
+
 ## Reader obligations
 
 The reader must treat every field as hostile (M5 task 1: fuzzed): validate

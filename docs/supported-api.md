@@ -34,7 +34,8 @@ a VU1 microprogram + GS register configuration:
 | Kind | VU1 program | Notes |
 |---|---|---|
 | `Unlit` | `vu_unlit` | Texture x vertex colour |
-| `VertexLit` | `vu_lit` | Up to 4 directional lights + ambient, computed per vertex |
+| `VertexLit` | `vu_lit` | **Three** directional lights + ambient, per vertex. The plan says four; the microprogram's MADD chain spends its fourth accumulate slot on ambient, so three is what the hardware path actually delivers (verify-log M9). |
+| `VertexLitFog` | `vu_lit_fog` | `VertexLit` plus per-vertex fog factor (GS `FOGCOL` + `PRIM.FGE`) |
 | `LitAlpha` | `vu_lit` + alpha blend state | Sorted back-to-front, no Z write |
 | `Cutout` | `vu_lit` + alpha test | Z write on |
 | `Additive` | `vu_unlit` + additive blend | Effects |
@@ -58,5 +59,13 @@ These are listed prominently here and asserted in the conformance suite
    tables.
 4. `DateTime` resolution is limited by the RTC; time zones are UTC-only.
 5. Deterministic GC pauses are not guaranteed; the profiler exposes them.
+6. Skinning takes at most 4 influences per vertex and 24 bones per batch, and
+   transforms normals by the blended matrix rather than its inverse
+   transpose: bones with NON-UNIFORM scale light incorrectly (uniform scale,
+   what a character rig uses, is exact).
+7. `Animator.CrossFade` (normalized transition duration) is absent;
+   `CrossFadeInFixedTime` (seconds) is provided and exact. A member that
+   looked like Unity's but measured time differently would be worse than no
+   member at all.
 6. Reflection is limited to what survives managed stripping; `link.xml` is
    mandatory for any reflective code.

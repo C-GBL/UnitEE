@@ -62,5 +62,27 @@ namespace UnityEngine.Internal
         // Child handle by index, or 0 if out of range.
         [DllImport("__Internal")]
         internal static extern int ps2ur_tf_get_child(int handle, int index);
+
+        // Advances every animator by dt and writes their root motion back to entity transforms. The managed dispatcher calls this AFTER Update and coroutines and BEFORE LateUpdate, which is the ordering Unity users rely on (M9 task 4).
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_anim_update(float dt);
+
+        // Jumps the entity's animator to the named baked state with no blend. Returns 1 when the state exists, 0 otherwise. Names are FNV-1a-64 hashes truncated to 32 bits, matching the exporter.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_animator_play(int handle, uint stateHash);
+
+        // Starts a crossfade to the named state over a duration in SECONDS. Returns 1 when the state exists.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_animator_crossfade(int handle, uint stateHash, float seconds);
+
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_animator_set_trigger(int handle, uint paramHash);
+
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_animator_set_float(int handle, uint paramHash, float value);
+
+        // 1 while a crossfade is running on the entity's animator.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_animator_is_blending(int handle);
     }
 }

@@ -16,6 +16,10 @@ namespace Ps2.Editor
         public const uint SectionScene = 0x4E454353;    // 'SCEN'
         public const uint SectionMaterial = 0x4C54414D; // 'MATL'
         public const uint SectionScripts = 0x50524353;  // 'SCRP' (M7)
+        public const uint SectionSkeleton = 0x4C454B53;   // 'SKEL' (M9)
+        public const uint SectionClip = 0x4D494E41;       // 'ANIM' (M9)
+        public const uint SectionController = 0x4C525443; // 'CTRL' (M9)
+        public const uint SectionSkinnedMesh = 0x534D4B53; // 'SKMS' (M9)
 
         private struct Section
         {

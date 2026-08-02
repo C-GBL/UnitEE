@@ -74,6 +74,11 @@ struct BatchBlock {
 inline constexpr uint32_t kMaxUnlitVertsPerBatch = 93; // 2 qw/vert, dest 10
 inline constexpr uint32_t kMaxLitVertsPerBatch = 78;   // 3 qw/vert, dest 18
 inline constexpr uint32_t kMaxTexVertsPerBatch = 78;   // 3 qw/vert, dest 10
+// Skinned vertices are 5 qwords (position, normal, colour, palette offsets,
+// weights) and unpack to dest 114, above the 24-matrix bone palette. 48 x 5
+// = 240 qwords keeps the 8-bit VIF NUM field valid -- the binding constraint
+// here is NUM, not VU data memory (M9).
+inline constexpr uint32_t kMaxSkinVertsPerBatch = 48;
 
 class BatchBuilder {
 public:

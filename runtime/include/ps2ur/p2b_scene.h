@@ -12,6 +12,7 @@
 // may break it, so the world-matrix pass resolves dependencies iteratively.
 #pragma once
 
+#include "ps2ur/anim.h"
 #include "ps2ur/gs_batch.h"
 #include "ps2ur/math.h"
 #include "ps2ur/p2b.h"
@@ -26,11 +27,20 @@ inline constexpr uint32_t kMaxMeshes = 96;
 inline constexpr uint32_t kMaxMaterials = 32;
 inline constexpr uint32_t kMaxBatchesPerMesh = 32;
 inline constexpr uint32_t kMaxScripts = 64;
+// Skinning (M9). A 1,500-triangle character at 16 triangles per batch (the
+// VIF NUM ceiling for 5-qword vertices) is ~94 batches, so skinned meshes
+// need a far larger batch budget than rigid ones -- hence separate storage.
+inline constexpr uint32_t kMaxSkinnedMeshes = 4;
+inline constexpr uint32_t kMaxSkinBatches = 128;
+inline constexpr uint32_t kMaxSkeletons = 2;
+inline constexpr uint32_t kMaxControllers = 2;
+inline constexpr uint32_t kMaxSkinnedRenderers = 4;
 
 inline constexpr uint16_t kComponentMeshRenderer = 1;
 inline constexpr uint16_t kComponentCamera = 2;
 inline constexpr uint16_t kComponentDirectionalLight = 3;
 inline constexpr uint16_t kComponentScript = 4;
+inline constexpr uint16_t kComponentSkinnedMeshRenderer = 5;
 
 // Material kinds (plan section 7.3). The VALUE is the sort-key field too.
 inline constexpr uint32_t kMaterialUnlit = 0;
@@ -40,6 +50,7 @@ inline constexpr uint32_t kMaterialLitAlpha = 3;  // transparent pass
 inline constexpr uint32_t kMaterialCutout = 4;    // alpha test, Z write on
 inline constexpr uint32_t kMaterialAdditive = 5;  // transparent pass
 inline constexpr uint32_t kMaterialVertexLitFog = 6; // lit + per-vertex F (M8 task 7)
+inline constexpr uint32_t kMaterialSkinned = 7;      // vu_skin palette (M9)
 
 struct LoadedMesh {
     uint32_t material_index = 0;
@@ -108,6 +119,30 @@ struct ScriptRef {
     const char* type_name = "";
 };
 
+// A skinned mesh (M9). Batches are zero-copy blobs like rigid meshes, but
+// each carries the bone table its vertices' local slots index.
+struct LoadedSkinnedMesh {
+    uint32_t material_index = 0;
+    uint32_t batch_count = 0;
+    uint32_t skeleton = 0;
+    gfx::BatchBlock batches[kMaxSkinBatches];
+    uint16_t bone_table[kMaxSkinBatches][anim::kMaxPaletteBones];
+    uint8_t bone_count[kMaxSkinBatches];
+    Vec3 bounds_center{0, 0, 0};
+    float bounds_radius = 0;
+};
+
+// A SkinnedMeshRenderer component: the entity it draws on, what it draws,
+// and which animator drives it.
+struct SkinnedRenderer {
+    int32_t entity = -1;
+    int32_t mesh = -1;      // index into the skinned-mesh table
+    int32_t material = -1;  // override; -1 = the mesh's own
+    uint32_t skeleton = 0;
+    uint32_t controller = 0;
+    uint32_t animator = 0;  // index into the world's animator pool
+};
+
 class World {
 public:
     // Populates from the parsed file. The file's buffer must outlive the
@@ -156,6 +191,43 @@ public:
     uint32_t script_count() const { return m_script_count; }
     const ScriptRef& script(uint32_t i) const { return m_scripts[i]; }
 
+    // ---- M9: skinning + animation ---------------------------------------
+
+    uint32_t skinned_mesh_count() const { return m_skinned_mesh_count; }
+    const LoadedSkinnedMesh& skinned_mesh(uint32_t i) const
+    {
+        return m_skinned_meshes[i];
+    }
+
+    uint32_t skinned_renderer_count() const { return m_skinned_count; }
+    const SkinnedRenderer& skinned_renderer(uint32_t i) const
+    {
+        return m_skinned[i];
+    }
+
+    uint32_t skeleton_count() const { return m_skeleton_count; }
+    const anim::Skeleton& skeleton(uint32_t i) const { return m_skeletons[i]; }
+    uint32_t clip_count() const { return m_clip_count; }
+    const anim::Clip& clip(uint32_t i) const { return m_clips[i]; }
+    uint32_t controller_count() const { return m_controller_count; }
+    const anim::Controller& controller(uint32_t i) const
+    {
+        return m_controllers[i];
+    }
+
+    // One animator per skinned renderer, bound at load. Advancing them is
+    // the caller's call (the frame loop runs animation between the managed
+    // Update and LateUpdate phases -- M9 task 4).
+    anim::Animator& animator(uint32_t i) { return m_animators[i]; }
+    const anim::Animator& animator(uint32_t i) const { return m_animators[i]; }
+    void update_animators(float dt);
+
+    // The animator driving an entity, or -1. The bridge resolves handles
+    // through this so managed Animator components address the right one.
+    int32_t animator_for_entity(int32_t entity_index) const;
+    // Baked state index for a name hash, or -1.
+    int32_t state_index(uint32_t controller, uint32_t name_hash) const;
+
     uint32_t mesh_count() const { return m_mesh_count; }
     const LoadedMesh& mesh(uint32_t i) const { return m_meshes[i]; }
     uint32_t material_count() const { return m_material_count; }
@@ -175,6 +247,18 @@ private:
 
     ScriptRef m_scripts[kMaxScripts];
     uint32_t m_script_count = 0;
+
+    LoadedSkinnedMesh m_skinned_meshes[kMaxSkinnedMeshes];
+    uint32_t m_skinned_mesh_count = 0;
+    SkinnedRenderer m_skinned[kMaxSkinnedRenderers];
+    uint32_t m_skinned_count = 0;
+    anim::Skeleton m_skeletons[kMaxSkeletons];
+    uint32_t m_skeleton_count = 0;
+    anim::Clip m_clips[anim::kMaxClips];
+    uint32_t m_clip_count = 0;
+    anim::Controller m_controllers[kMaxControllers];
+    uint32_t m_controller_count = 0;
+    anim::Animator m_animators[kMaxSkinnedRenderers];
 
     LoadedMesh m_meshes[kMaxMeshes];
     uint32_t m_mesh_count = 0;

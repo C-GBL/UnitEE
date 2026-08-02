@@ -210,6 +210,29 @@ Mat4 mat4_rigid_inverse(const Mat4& m)
     return r;
 }
 
+Quat quat_slerp(Quat a, Quat b, float t)
+{
+    float cosine = quat_dot(a, b);
+    if (cosine < 0.0f) {
+        // Same rotation, opposite representation: take the short arc.
+        b = Quat{-b.x, -b.y, -b.z, -b.w};
+        cosine = -cosine;
+    }
+    if (cosine > 0.9995f) {
+        // Nearly parallel: the sine denominator collapses, and lerp is
+        // indistinguishable at this angle anyway.
+        return quat_normalize(Quat{a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t,
+                                   a.z + (b.z - a.z) * t,
+                                   a.w + (b.w - a.w) * t});
+    }
+    const float theta = acosf(cosine);
+    const float sin_theta = sinf(theta);
+    const float wa = sinf((1.0f - t) * theta) / sin_theta;
+    const float wb = sinf(t * theta) / sin_theta;
+    return Quat{a.x * wa + b.x * wb, a.y * wa + b.y * wb, a.z * wa + b.z * wb,
+                a.w * wa + b.w * wb};
+}
+
 Mat4 mat4_ortho(float half_w, float half_h, float znear, float zfar)
 {
     Mat4 r{};

@@ -182,6 +182,101 @@ extern "C" int32_t ps2ur_tf_child_count(int32_t handle)
     return count;
 }
 
+// ---- animation (M9) --------------------------------------------------------
+
+namespace {
+
+// Resolves a managed handle to the animator driving that entity, or null.
+ps2ur::anim::Animator* animator_of(int32_t handle)
+{
+    const int32_t index = resolve(handle);
+    if (index < 0) {
+        return nullptr;
+    }
+    const int32_t slot = g_world->animator_for_entity(index);
+    return slot < 0 ? nullptr : &g_world->animator(static_cast<uint32_t>(slot));
+}
+
+// The controller bound to an entity's animator, for name lookups.
+int32_t controller_of(int32_t handle)
+{
+    const int32_t index = resolve(handle);
+    if (index < 0) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < g_world->skinned_renderer_count(); ++i) {
+        if (g_world->skinned_renderer(i).entity == index) {
+            return static_cast<int32_t>(g_world->skinned_renderer(i).controller);
+        }
+    }
+    return -1;
+}
+
+} // namespace
+
+extern "C" void ps2ur_anim_update(float dt)
+{
+    if (g_world != nullptr) {
+        g_world->update_animators(dt);
+    }
+}
+
+extern "C" int32_t ps2ur_animator_play(int32_t handle, uint32_t stateHash)
+{
+    ps2ur::anim::Animator* animator = animator_of(handle);
+    const int32_t controller = controller_of(handle);
+    if (animator == nullptr || controller < 0) {
+        return 0;
+    }
+    const int32_t state =
+        g_world->state_index(static_cast<uint32_t>(controller), stateHash);
+    if (state < 0) {
+        return 0;
+    }
+    animator->play(static_cast<uint32_t>(state));
+    return 1;
+}
+
+extern "C" int32_t ps2ur_animator_crossfade(int32_t handle, uint32_t stateHash,
+                                            float seconds)
+{
+    ps2ur::anim::Animator* animator = animator_of(handle);
+    const int32_t controller = controller_of(handle);
+    if (animator == nullptr || controller < 0) {
+        return 0;
+    }
+    const int32_t state =
+        g_world->state_index(static_cast<uint32_t>(controller), stateHash);
+    if (state < 0) {
+        return 0;
+    }
+    animator->crossfade(static_cast<uint32_t>(state), seconds);
+    return 1;
+}
+
+extern "C" void ps2ur_animator_set_trigger(int32_t handle, uint32_t paramHash)
+{
+    ps2ur::anim::Animator* animator = animator_of(handle);
+    if (animator != nullptr) {
+        animator->set_trigger(paramHash);
+    }
+}
+
+extern "C" void ps2ur_animator_set_float(int32_t handle, uint32_t paramHash,
+                                         float value)
+{
+    ps2ur::anim::Animator* animator = animator_of(handle);
+    if (animator != nullptr) {
+        animator->set_float(paramHash, value);
+    }
+}
+
+extern "C" int32_t ps2ur_animator_is_blending(int32_t handle)
+{
+    const ps2ur::anim::Animator* animator = animator_of(handle);
+    return animator != nullptr && animator->blending() ? 1 : 0;
+}
+
 extern "C" int32_t ps2ur_tf_get_child(int32_t handle, int32_t child_index)
 {
     const int32_t index = resolve(handle);
