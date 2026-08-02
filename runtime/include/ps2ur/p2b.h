@@ -82,5 +82,16 @@ private:
 // support files. Returns null on failure and reports the size in *out_size.
 const void* load_file(const char* path, Arena& arena, uint32_t* out_size);
 
+// Turns a bare file name ("level2.p2b") into a path that actually opens on
+// whatever media this build is running from, by trying each prefix in turn
+// and keeping the first that opens: "host:" (PCSX2 staging), the name as
+// given (host builds and mass:), then "cdrom0:\NAME;1" (a real disc, which
+// demands upper case and the version suffix).
+//
+// A name that already carries a device prefix is passed through untouched,
+// so callers that know exactly what they want are not second-guessed.
+// Returns false when nothing opens, leaving 'out' empty.
+bool resolve_media_path(const char* name, char* out, uint32_t capacity);
+
 } // namespace io
 } // namespace ps2ur

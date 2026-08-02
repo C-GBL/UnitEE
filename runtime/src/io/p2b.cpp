@@ -9,16 +9,46 @@
 namespace ps2ur {
 namespace io {
 
+namespace {
+
+// CRC32 (reflected, polynomial 0xEDB88320) one nibble at a time.
+//
+// This is on the scene-load critical path: parse() checksums every section,
+// so a bit-at-a-time loop costs eight shift-and-mask steps per byte. That
+// measured 149 ms to parse a 430 KB scene on the EE -- long enough to drain
+// the music ring and produce an audible dropout during an async load
+// (samples/20-scene-stream; verify-log M10). A nibble table is ~4x faster
+// and, unlike the 1 KB byte-wise table, costs 64 bytes of a very small data
+// cache that a bulk scan is already thrashing.
+//
+// constexpr so it lands in .rodata with no initialisation order to get
+// wrong. The values are identical to the bitwise loop's by construction.
+constexpr uint32_t crc_nibble(uint32_t n)
+{
+    uint32_t c = n;
+    for (int bit = 0; bit < 4; ++bit) {
+        c = (c & 1u) != 0u ? (c >> 1) ^ 0xEDB88320u : (c >> 1);
+    }
+    return c;
+}
+
+constexpr uint32_t kCrcTable[16] = {
+    crc_nibble(0),  crc_nibble(1),  crc_nibble(2),  crc_nibble(3),
+    crc_nibble(4),  crc_nibble(5),  crc_nibble(6),  crc_nibble(7),
+    crc_nibble(8),  crc_nibble(9),  crc_nibble(10), crc_nibble(11),
+    crc_nibble(12), crc_nibble(13), crc_nibble(14), crc_nibble(15),
+};
+
+} // namespace
+
 uint32_t crc32(const void* data, uint32_t size)
 {
     const uint8_t* p = static_cast<const uint8_t*>(data);
     uint32_t crc = 0xFFFFFFFFu;
     for (uint32_t i = 0; i < size; ++i) {
         crc ^= p[i];
-        for (int bit = 0; bit < 8; ++bit) {
-            const uint32_t mask = static_cast<uint32_t>(-(static_cast<int32_t>(crc) & 1));
-            crc = (crc >> 1) ^ (0xEDB88320u & mask);
-        }
+        crc = (crc >> 4) ^ kCrcTable[crc & 0x0Fu];
+        crc = (crc >> 4) ^ kCrcTable[crc & 0x0Fu];
     }
     return ~crc;
 }
@@ -245,6 +275,104 @@ const void* load_file(const char* path, Arena& arena, uint32_t* out_size)
 }
 
 #endif // PS2UR_PLATFORM_PS2
+
+// ---- media path resolution -------------------------------------------------
+
+namespace {
+
+// A device prefix is "word:" before any path separator: "host:", "cdrom0:",
+// "mass:", "mc0:". A bare name has none.
+bool has_device_prefix(const char* name)
+{
+    for (const char* p = name; *p != '\0'; ++p) {
+        if (*p == ':') {
+            return true;
+        }
+        if (*p == '/' || *p == '\\') {
+            return false;
+        }
+    }
+    return false;
+}
+
+bool append(char* out, uint32_t capacity, uint32_t& len, const char* text,
+            bool upper)
+{
+    for (const char* p = text; *p != '\0'; ++p) {
+        if (len + 1 >= capacity) {
+            return false;
+        }
+        char c = *p;
+        if (upper && c >= 'a' && c <= 'z') {
+            c = static_cast<char>(c - 'a' + 'A');
+        }
+        out[len++] = c;
+    }
+    out[len] = '\0';
+    return true;
+}
+
+bool can_open(const char* path)
+{
+#if defined(PS2UR_PLATFORM_PS2)
+    const int fd = fioOpen(path, 1 /*FIO_O_RDONLY*/);
+    if (fd < 0) {
+        return false;
+    }
+    fioClose(fd);
+    return true;
+#else
+    FILE* f = fopen(path, "rb");
+    if (f == nullptr) {
+        return false;
+    }
+    fclose(f);
+    return true;
+#endif
+}
+
+} // namespace
+
+bool resolve_media_path(const char* name, char* out, uint32_t capacity)
+{
+    if (name == nullptr || out == nullptr || capacity == 0) {
+        return false;
+    }
+    out[0] = '\0';
+    if (has_device_prefix(name)) {
+        uint32_t len = 0;
+        return append(out, capacity, len, name, false) && can_open(out);
+    }
+
+    // Ordered cheapest-and-likeliest first. cdrom0 is last because a disc
+    // seek costs real time and a dev build almost never wants it.
+    struct Candidate {
+        const char* prefix;
+        const char* suffix;
+        bool upper;
+    };
+    static const Candidate kCandidates[] = {
+        {"host:", "", false},
+        {"", "", false},
+        {"cdrom0:\\", ";1", true},
+    };
+
+    for (const Candidate& c : kCandidates) {
+        uint32_t len = 0;
+        // The prefix and the ;1 suffix keep their own case; only the file
+        // name is upper-cased for ISO 9660.
+        if (!append(out, capacity, len, c.prefix, false) ||
+            !append(out, capacity, len, name, c.upper) ||
+            !append(out, capacity, len, c.suffix, false)) {
+            continue;
+        }
+        if (can_open(out)) {
+            return true;
+        }
+    }
+    out[0] = '\0';
+    return false;
+}
 
 } // namespace io
 } // namespace ps2ur

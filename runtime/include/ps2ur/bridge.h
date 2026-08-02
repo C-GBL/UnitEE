@@ -36,6 +36,13 @@ bool initialized();
 void bind_world(scene::World* world);
 scene::World* world();
 
+// Where an async scene load puts the container it reads (M10 task 5). The
+// host program owns this memory because only it knows the memory budget;
+// the managed SceneManager has no way to allocate 4 MB of EE RAM and no
+// business deciding where it lives. Unbound, LoadSceneAsync fails cleanly
+// and says so, rather than reading into nothing.
+void bind_scene_buffer(void* buffer, unsigned int capacity);
+
 } // namespace bridge
 } // namespace ps2ur
 

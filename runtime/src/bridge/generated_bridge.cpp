@@ -25,6 +25,19 @@ const Ps2urBridgeEntry ps2ur_bridge_table[] = {
     { "ps2ur_animator_set_trigger", reinterpret_cast<const void*>(&ps2ur_animator_set_trigger) },
     { "ps2ur_animator_set_float", reinterpret_cast<const void*>(&ps2ur_animator_set_float) },
     { "ps2ur_animator_is_blending", reinterpret_cast<const void*>(&ps2ur_animator_is_blending) },
+    { "ps2ur_input_update", reinterpret_cast<const void*>(&ps2ur_input_update) },
+    { "ps2ur_input_button", reinterpret_cast<const void*>(&ps2ur_input_button) },
+    { "ps2ur_input_button_down", reinterpret_cast<const void*>(&ps2ur_input_button_down) },
+    { "ps2ur_input_button_up", reinterpret_cast<const void*>(&ps2ur_input_button_up) },
+    { "ps2ur_input_axis", reinterpret_cast<const void*>(&ps2ur_input_axis) },
+    { "ps2ur_input_pressure", reinterpret_cast<const void*>(&ps2ur_input_pressure) },
+    { "ps2ur_input_connected", reinterpret_cast<const void*>(&ps2ur_input_connected) },
+    { "ps2ur_input_set_rumble", reinterpret_cast<const void*>(&ps2ur_input_set_rumble) },
+    { "ps2ur_scene_load_begin", reinterpret_cast<const void*>(&ps2ur_scene_load_begin) },
+    { "ps2ur_scene_load_update", reinterpret_cast<const void*>(&ps2ur_scene_load_update) },
+    { "ps2ur_scene_load_progress", reinterpret_cast<const void*>(&ps2ur_scene_load_progress) },
+    { "ps2ur_scene_load_state", reinterpret_cast<const void*>(&ps2ur_scene_load_state) },
+    { "ps2ur_scene_load_set_allow_activation", reinterpret_cast<const void*>(&ps2ur_scene_load_set_allow_activation) },
 };
 
 const int ps2ur_bridge_table_count =

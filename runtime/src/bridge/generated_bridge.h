@@ -68,6 +68,29 @@ void ps2ur_animator_set_trigger(int32_t handle, uint32_t paramHash);
 void ps2ur_animator_set_float(int32_t handle, uint32_t paramHash, float value);
 // 1 while a crossfade is running on the entity's animator.
 int32_t ps2ur_animator_is_blending(int32_t handle);
+// Polls every pad. The managed dispatcher calls this once at the top of the frame, before any script runs.
+void ps2ur_input_update(void);
+// 1 while the button is held. 'button' is the ps2ur::input::Button ordinal.
+int32_t ps2ur_input_button(int32_t port, int32_t button);
+int32_t ps2ur_input_button_down(int32_t port, int32_t button);
+int32_t ps2ur_input_button_up(int32_t port, int32_t button);
+// Stick axis in -1..1 with the deadzone applied; Y is positive up.
+float ps2ur_input_axis(int32_t port, int32_t rightStick, int32_t vertical);
+// Analog button pressure, 0..255, or 0 when the pad does not report it.
+int32_t ps2ur_input_pressure(int32_t port, int32_t button);
+int32_t ps2ur_input_connected(int32_t port);
+// Small motor is on/off; large motor takes 0..255.
+void ps2ur_input_set_rumble(int32_t port, int32_t smallMotor, int32_t largeMotor);
+// Starts an async scene load into the host-provided scene buffer (bridge::bind_scene_buffer). additive != 0 appends to the running world instead of replacing it. Returns 1 when the load started. Only one load is in flight at a time; starting a second while one runs is refused.
+int32_t ps2ur_scene_load_begin(const char* path, int32_t additive);
+// Advances the load by at most byteBudget bytes and returns the LoadState ordinal (0 Idle, 1 Reading, 2 Parsing, 3 Ready, 4 Failed). A budget of 0 means one chunk.
+int32_t ps2ur_scene_load_update(int32_t byteBudget);
+// 0..1 across read and parse together -- what AsyncOperation.progress returns.
+float ps2ur_scene_load_progress(void);
+// The LoadState ordinal without advancing the load.
+int32_t ps2ur_scene_load_state(void);
+// AsyncOperation.allowSceneActivation. 0 parks a completed read at progress 0.9 without swapping the world; setting it back to 1 lets the next update finish. Defaults to 1 on every begin.
+void ps2ur_scene_load_set_allow_activation(int32_t allow);
 
 } // extern "C"
 

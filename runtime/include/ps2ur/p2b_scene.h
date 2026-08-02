@@ -150,6 +150,21 @@ public:
     // error() set on any structural problem -- offsets are validated against
     // section bounds before use, per the reader obligations in the spec.
     bool load(const io::P2bFile& file);
+
+    // Additive load (M10 task 5): merges a second container into a world
+    // that is already running, rebasing its entity, mesh and material
+    // indices onto what is already there. Every index inside a .p2b is
+    // file-relative precisely so this is possible.
+    //
+    // Entities, meshes, materials, scripts and the whole animation side
+    // (skeletons, clips, controllers, skinned meshes and their renderers)
+    // all come across with their indices rebased. What does NOT come across
+    // is the camera and the light: the running scene's own camera is what
+    // the player is looking through.
+    //
+    // All-or-nothing: if any table would overflow, nothing is merged.
+    bool append(const io::P2bFile& file);
+
     const char* error() const { return m_error; }
 
     // Recomputes world matrices for entities whose local TRS or ancestry

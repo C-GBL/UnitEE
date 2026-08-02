@@ -127,6 +127,16 @@ namespace UnityEngine.Internal
             s_FrameCount += 1;
             Time.Sync(s_Time, dt, s_Time, Time.fixedDeltaTime, s_FrameCount);
 
+            // Pads are polled before ANY script runs, so every callback in
+            // this frame -- Awake included -- reads one consistent snapshot
+            // and GetButtonDown fires in exactly one frame (M10 task 2).
+            Native.ps2ur_input_update();
+
+            // A scene load in flight advances by a bounded amount here, so
+            // it keeps making progress whether or not a coroutine is
+            // currently waiting on the AsyncOperation (M10 task 5).
+            SceneManagement.SceneManager.Pump();
+
             DrainPending();
 
             s_FixedAccumulator += dt;
@@ -241,6 +251,11 @@ namespace UnityEngine.Internal
                 }
                 if (!fixedStep && c.Routine.Current is CustomYieldInstruction wait &&
                     wait.keepWaiting)
+                    continue;
+                // yield return LoadSceneAsync(...) suspends until the load
+                // finishes, as in the Editor. SceneManager.Pump advanced it
+                // at the top of this frame.
+                if (!fixedStep && c.Routine.Current is AsyncOperation op && !op.isDone)
                     continue;
                 Advance(c);
                 if (c.Done)

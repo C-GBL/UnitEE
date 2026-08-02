@@ -27,3 +27,7 @@ unity-package/**/UserSettings/
 # the developer, not vendored. mkps2iso is needed from M12 (ISO packaging).
 # Delete this line if you decide to commit the binaries deliberately.
 /tools/mkps2iso/
+
+# Python bytecode from the tools/ scripts.
+__pycache__/
+*.pyc

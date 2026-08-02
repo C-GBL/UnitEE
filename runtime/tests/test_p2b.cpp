@@ -416,3 +416,59 @@ TEST(MathAdditions, TrsAndRigidInverse)
     EXPECT_NEAR(back.y, 0.0f, 1e-4f);
     EXPECT_NEAR(back.z, 0.0f, 1e-4f);
 }
+
+// ---- media path resolution (M10 task 5) ------------------------------------
+//
+// The managed SceneManager passes a bare file name; this is what turns it
+// into something that opens on whatever media the build is running from.
+
+TEST(MediaPath, ResolvesAFileThatExistsInTheWorkingDirectory)
+{
+    // Write a file the resolver can actually find, so the test covers the
+    // open attempt rather than just the string building.
+    const char* kName = "ps2ur_media_probe.bin";
+    {
+        std::FILE* f = std::fopen(kName, "wb");
+        ASSERT_NE(f, nullptr);
+        std::fputc('x', f);
+        std::fclose(f);
+    }
+    char out[96] = {};
+    EXPECT_TRUE(resolve_media_path(kName, out, sizeof(out)));
+    EXPECT_STREQ(out, kName);
+    std::remove(kName);
+}
+
+TEST(MediaPath, AMissingFileResolvesToNothingRatherThanAGuess)
+{
+    char out[96] = {'z'};
+    EXPECT_FALSE(resolve_media_path("no-such-file.p2b", out, sizeof(out)));
+    EXPECT_STREQ(out, "") << "a failed resolve must not leave a half-built path";
+}
+
+TEST(MediaPath, AnExplicitDevicePrefixIsNotSecondGuessed)
+{
+    // "host:" is a device the host build cannot open, so this must fail --
+    // and crucially it must NOT fall back to trying the bare name, because a
+    // caller that named a device meant it.
+    const char* kName = "ps2ur_media_probe2.bin";
+    {
+        std::FILE* f = std::fopen(kName, "wb");
+        ASSERT_NE(f, nullptr);
+        std::fputc('x', f);
+        std::fclose(f);
+    }
+    char out[96] = {};
+    EXPECT_FALSE(resolve_media_path("host:ps2ur_media_probe2.bin", out, sizeof(out)));
+    std::remove(kName);
+}
+
+TEST(MediaPath, RefusesRatherThanOverrunsATooSmallBuffer)
+{
+    char out[8] = {};
+    EXPECT_FALSE(resolve_media_path("a-name-far-longer-than-eight.p2b", out,
+                                    sizeof(out)));
+    EXPECT_STREQ(out, "");
+    EXPECT_FALSE(resolve_media_path("x", nullptr, 0));
+    EXPECT_FALSE(resolve_media_path(nullptr, out, sizeof(out)));
+}

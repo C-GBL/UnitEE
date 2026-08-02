@@ -49,6 +49,7 @@ set(PS2UR_SOURCES
     src/scene/scene.cpp
     src/scene/p2b_scene.cpp
     src/scene/scene_renderer.cpp
+    src/scene/scene_load.cpp
     src/gfx/render_queue.cpp
     src/anim/anim.cpp
     src/phys/phys.cpp

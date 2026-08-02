@@ -11,14 +11,20 @@
 //    world the same way it tolerates a dead handle.
 #include "ps2ur/bridge.h"
 
+#include "ps2ur/input.h"
 #include "ps2ur/log.h"
+#include "ps2ur/p2b.h"
 #include "ps2ur/p2b_scene.h"
+#include "ps2ur/scene_load.h"
 
 #include "generated_bridge.h"
 
 namespace {
 
 ps2ur::scene::World* g_world = nullptr;
+uint8_t* g_scene_buffer = nullptr;
+uint32_t g_scene_capacity = 0;
+ps2ur::scene::SceneLoader g_loader;
 
 // -1 when the handle (or the world) is gone.
 int32_t resolve(int32_t handle)
@@ -39,6 +45,12 @@ void bind_world(scene::World* world)
 scene::World* world()
 {
     return g_world;
+}
+
+void bind_scene_buffer(void* buffer, unsigned int capacity)
+{
+    g_scene_buffer = static_cast<uint8_t*>(buffer);
+    g_scene_capacity = static_cast<uint32_t>(capacity);
 }
 
 } // namespace bridge
@@ -180,6 +192,117 @@ extern "C" int32_t ps2ur_tf_child_count(int32_t handle)
         }
     }
     return count;
+}
+
+// ---- input (M10) -----------------------------------------------------------
+
+extern "C" void ps2ur_input_update()
+{
+    ps2ur::input::update();
+}
+
+extern "C" int32_t ps2ur_input_button(int32_t port, int32_t button)
+{
+    return ps2ur::input::button(static_cast<uint32_t>(port),
+                                static_cast<ps2ur::input::Button>(button))
+               ? 1
+               : 0;
+}
+
+extern "C" int32_t ps2ur_input_button_down(int32_t port, int32_t button)
+{
+    return ps2ur::input::button_down(static_cast<uint32_t>(port),
+                                     static_cast<ps2ur::input::Button>(button))
+               ? 1
+               : 0;
+}
+
+extern "C" int32_t ps2ur_input_button_up(int32_t port, int32_t button)
+{
+    return ps2ur::input::button_up(static_cast<uint32_t>(port),
+                                   static_cast<ps2ur::input::Button>(button))
+               ? 1
+               : 0;
+}
+
+extern "C" float ps2ur_input_axis(int32_t port, int32_t rightStick,
+                                  int32_t vertical)
+{
+    const uint32_t p = static_cast<uint32_t>(port);
+    return vertical != 0 ? ps2ur::input::axis_y(p, rightStick != 0)
+                         : ps2ur::input::axis_x(p, rightStick != 0);
+}
+
+extern "C" int32_t ps2ur_input_pressure(int32_t port, int32_t button)
+{
+    return ps2ur::input::pressure(static_cast<uint32_t>(port),
+                                  static_cast<ps2ur::input::Button>(button));
+}
+
+extern "C" int32_t ps2ur_input_connected(int32_t port)
+{
+    return ps2ur::input::connected(static_cast<uint32_t>(port)) ? 1 : 0;
+}
+
+extern "C" void ps2ur_input_set_rumble(int32_t port, int32_t smallMotor,
+                                       int32_t largeMotor)
+{
+    ps2ur::input::set_rumble(static_cast<uint32_t>(port), smallMotor != 0,
+                             static_cast<uint8_t>(largeMotor));
+}
+
+// ---- scene loading (M10 task 5) --------------------------------------------
+//
+// One load in flight at a time. That is not a simplification: the loader
+// writes into a single host-owned buffer and, on completion, mutates the
+// live world. Two concurrent loads would interleave both.
+
+extern "C" int32_t ps2ur_scene_load_begin(const char* path, int32_t additive)
+{
+    if (g_world == nullptr || g_scene_buffer == nullptr) {
+        PS2UR_LOG_ERROR("scene load: no world or no scene buffer bound (host "
+                        "must call bridge::bind_scene_buffer)");
+        return 0;
+    }
+    const ps2ur::scene::LoadState state = g_loader.state();
+    if (state == ps2ur::scene::LoadState::Reading ||
+        state == ps2ur::scene::LoadState::Parsing) {
+        PS2UR_LOG_ERROR("scene load: a load is already in flight");
+        return 0;
+    }
+    // The managed side names a scene file; which device it lives on is a
+    // platform question, answered here once rather than in every game.
+    static char resolved[96];
+    if (!ps2ur::io::resolve_media_path(path, resolved, sizeof(resolved))) {
+        PS2UR_LOG_ERROR("scene load: '%s' not found on any media", path);
+        return 0;
+    }
+    return g_loader.begin(resolved, g_scene_buffer, g_scene_capacity, g_world,
+                          additive != 0)
+               ? 1
+               : 0;
+}
+
+extern "C" int32_t ps2ur_scene_load_update(int32_t byteBudget)
+{
+    const uint32_t budget =
+        byteBudget < 0 ? 0u : static_cast<uint32_t>(byteBudget);
+    return static_cast<int32_t>(g_loader.update(budget));
+}
+
+extern "C" float ps2ur_scene_load_progress()
+{
+    return g_loader.progress();
+}
+
+extern "C" int32_t ps2ur_scene_load_state()
+{
+    return static_cast<int32_t>(g_loader.state());
+}
+
+extern "C" void ps2ur_scene_load_set_allow_activation(int32_t allow)
+{
+    g_loader.set_allow_activation(allow != 0);
 }
 
 // ---- animation (M9) --------------------------------------------------------

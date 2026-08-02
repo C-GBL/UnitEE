@@ -84,5 +84,54 @@ namespace UnityEngine.Internal
         // 1 while a crossfade is running on the entity's animator.
         [DllImport("__Internal")]
         internal static extern int ps2ur_animator_is_blending(int handle);
+
+        // Polls every pad. The managed dispatcher calls this once at the top of the frame, before any script runs.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_input_update();
+
+        // 1 while the button is held. 'button' is the ps2ur::input::Button ordinal.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_input_button(int port, int button);
+
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_input_button_down(int port, int button);
+
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_input_button_up(int port, int button);
+
+        // Stick axis in -1..1 with the deadzone applied; Y is positive up.
+        [DllImport("__Internal")]
+        internal static extern float ps2ur_input_axis(int port, int rightStick, int vertical);
+
+        // Analog button pressure, 0..255, or 0 when the pad does not report it.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_input_pressure(int port, int button);
+
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_input_connected(int port);
+
+        // Small motor is on/off; large motor takes 0..255.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_input_set_rumble(int port, int smallMotor, int largeMotor);
+
+        // Starts an async scene load into the host-provided scene buffer (bridge::bind_scene_buffer). additive != 0 appends to the running world instead of replacing it. Returns 1 when the load started. Only one load is in flight at a time; starting a second while one runs is refused.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_scene_load_begin(string path, int additive);
+
+        // Advances the load by at most byteBudget bytes and returns the LoadState ordinal (0 Idle, 1 Reading, 2 Parsing, 3 Ready, 4 Failed). A budget of 0 means one chunk.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_scene_load_update(int byteBudget);
+
+        // 0..1 across read and parse together -- what AsyncOperation.progress returns.
+        [DllImport("__Internal")]
+        internal static extern float ps2ur_scene_load_progress();
+
+        // The LoadState ordinal without advancing the load.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_scene_load_state();
+
+        // AsyncOperation.allowSceneActivation. 0 parks a completed read at progress 0.9 without swapping the world; setting it back to 1 lets the next update finish. Defaults to 1 on every begin.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_scene_load_set_allow_activation(int allow);
     }
 }

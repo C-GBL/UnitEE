@@ -20,10 +20,10 @@ presumed to be the explicit "not supported" list. TODO(spec missing: section
 | Animation | `Animation`-style clip playback with crossfade, additive blending, root motion; a simplified `Animator` supporting states + transitions authored in a restricted controller |
 | Physics | Raycast/spherecast against static geometry; `Rigidbody` with a simple integrator; `BoxCollider`, `SphereCollider`, `CapsuleCollider`, `MeshCollider` (static, convex-decomposed offline); `CharacterController`; trigger + collision callbacks |
 | Audio | `AudioSource` (2D + simple 3D pan/attenuation), `AudioClip` (streamed music, resident SFX), `AudioListener` |
-| Input | `Input.GetKey`/`GetAxis` mapped to DualShock 2, analog sticks, pressure buttons, rumble |
+| Input | `Input.GetAxis`/`GetAxisRaw`/`GetButton*` over Unity's default axis and button names, mapped to DualShock 2; `PS2Input` for per-button access, analog pressure, rumble and port 2 (deviations 11-12) |
 | UI | An immediate-mode-backed subset of uGUI: `Canvas` (screen space overlay), `Image`, `RawImage`, `Text` (bitmap fonts baked offline), `Button`, `Slider` |
 | Persistence | `PlayerPrefs`-equivalent on memory card, plus a save API with icon support |
-| Scene management | `SceneManager.LoadScene` (sync + async with a loading screen), additive loading |
+| Scene management | `SceneManager.LoadScene`/`LoadSceneAsync` by name, `AsyncOperation` (yieldable from a coroutine, with `progress` and `allowSceneActivation`), additive loading (deviations 13-14) |
 | Resources | An `Addressables`-like async load from a build-ordered disc layout |
 
 ## Material model (plan section 7.3)
@@ -78,5 +78,31 @@ These are listed prominently here and asserted in the conformance suite
    exported several times.
 10. SFX are downmixed to **mono** at export (22.05 kHz by default). Stereo
     content belongs on the streamed music path, which is stereo.
-6. Reflection is limited to what survives managed stripping; `link.xml` is
-   mandatory for any reflective code.
+11. **`Input.GetKey` and the Input Manager's configurable axes are absent.**
+    There is no keyboard to key off and no inspector in which to configure an
+    axis, so `Input` exposes `GetAxis`/`GetAxisRaw` and `GetButton*` over
+    Unity's default axis and button names only (`Horizontal`, `Vertical`,
+    `Mouse X`/`Y` -> the right stick, `Fire1`-`Fire3`, `Jump`, `Submit`,
+    `Cancel`). An unknown name returns 0/false, exactly as Unity does for an
+    unconfigured axis. Everything the DualShock 2 has and Unity cannot
+    describe -- per-button access, analog pressure, rumble, port 2 -- lives on
+    `PS2Input`.
+12. **`GetAxisRaw` and `GetAxis` return the same value.** Unity's `GetAxis`
+    applies an Input Manager smoothing filter; with no Input Manager there is
+    no filter to apply, and inventing one would make `GetAxisRaw` a lie.
+    Smooth in the game if you want smoothing.
+13. **`SceneManager` addresses scenes by name only, and there is no
+    `UnloadSceneAsync`.** There is no Build Settings scene list to index into
+    on a disc, so the build-index overloads are absent; a name maps to
+    `<name>.p2b`. Unloading is absent because an additively loaded scene's
+    meshes point straight into the container it was read from (zero copy), so
+    a single scene cannot be pulled back out of a merged world. Load
+    `LoadSceneMode.Single` to get back to one scene.
+14. **A scene's camera and light do not come across in an additive load.**
+    Everything else does -- entities, meshes, materials, scripts, skeletons,
+    clips, controllers and skinned characters, all with their indices
+    rebased -- but the running scene keeps the camera the player is looking
+    through. An additive load that would overflow any table is refused whole,
+    never applied halfway.
+15. Reflection is limited to what survives managed stripping; `link.xml` is
+    mandatory for any reflective code.

@@ -50,6 +50,18 @@ bool World::load(const io::P2bFile& file)
     m_script_count = 0;
     m_mesh_count = 0;
     m_material_count = 0;
+    // The animation tables must reset too. A World is not always fresh: a
+    // non-additive scene change loads into the running one, and append()
+    // parses into a reused scratch world. Leaving these set carried the
+    // previous scene's characters, skeletons and clips into the next load,
+    // which showed up as "additive scene does not fit: skinned renderers"
+    // on the THIRD load of a run -- not on the second, which is what made it
+    // survive M9 (M10, verify-log).
+    m_skinned_mesh_count = 0;
+    m_skinned_count = 0;
+    m_skeleton_count = 0;
+    m_clip_count = 0;
+    m_controller_count = 0;
     m_camera = Camera{};
     m_light = DirectionalLight{};
     m_error = "";
@@ -638,6 +650,154 @@ bool World::load(const io::P2bFile& file)
                                             m_clips, m_clip_count);
     }
 
+    update_world_matrices();
+    return true;
+}
+
+bool World::append(const io::P2bFile& file)
+{
+    // Load the incoming container into a scratch world, then rebase its
+    // indices onto ours. Parsing into a second World rather than merging
+    // in place means a malformed additive scene cannot corrupt the running
+    // one: it fails before anything is copied.
+    static World incoming;
+    if (!incoming.load(file)) {
+        m_error = incoming.error();
+        return false;
+    }
+
+    const uint32_t mesh_base = m_mesh_count;
+    const uint32_t material_base = m_material_count;
+    const uint32_t entity_base = m_entity_count;
+    const uint32_t script_base = m_script_count;
+    const uint32_t skinned_mesh_base = m_skinned_mesh_count;
+    const uint32_t skinned_base = m_skinned_count;
+    const uint32_t skeleton_base = m_skeleton_count;
+    const uint32_t clip_base = m_clip_count;
+    const uint32_t controller_base = m_controller_count;
+
+    // Every table has to fit BEFORE anything is copied, or a scene that
+    // overflows halfway leaves the running world half-merged. Naming the
+    // table that filled up is the difference between a five-minute fix and
+    // an afternoon: the caller has to know WHICH budget to raise.
+    m_error = "";
+    if (entity_base + incoming.m_entity_count > kMaxEntities) {
+        m_error = "additive scene does not fit: entities";
+    } else if (mesh_base + incoming.m_mesh_count > kMaxMeshes) {
+        m_error = "additive scene does not fit: meshes";
+    } else if (material_base + incoming.m_material_count > kMaxMaterials) {
+        m_error = "additive scene does not fit: materials";
+    } else if (script_base + incoming.m_script_count > kMaxScripts) {
+        m_error = "additive scene does not fit: scripts";
+    } else if (skinned_mesh_base + incoming.m_skinned_mesh_count >
+               kMaxSkinnedMeshes) {
+        m_error = "additive scene does not fit: skinned meshes";
+    } else if (skinned_base + incoming.m_skinned_count > kMaxSkinnedRenderers) {
+        m_error = "additive scene does not fit: skinned renderers";
+    } else if (skeleton_base + incoming.m_skeleton_count > kMaxSkeletons) {
+        m_error = "additive scene does not fit: skeletons";
+    } else if (clip_base + incoming.m_clip_count > anim::kMaxClips) {
+        m_error = "additive scene does not fit: clips";
+    } else if (controller_base + incoming.m_controller_count > kMaxControllers) {
+        m_error = "additive scene does not fit: controllers";
+    }
+    if (m_error[0] != '\0') {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < incoming.m_material_count; ++i) {
+        m_materials[material_base + i] = incoming.m_materials[i];
+    }
+    for (uint32_t i = 0; i < incoming.m_mesh_count; ++i) {
+        LoadedMesh mesh = incoming.m_meshes[i];
+        mesh.material_index += material_base;
+        m_meshes[mesh_base + i] = mesh;
+    }
+    for (uint32_t i = 0; i < incoming.m_entity_count; ++i) {
+        Entity entity = incoming.m_entities[i];
+        if (entity.parent >= 0) {
+            entity.parent += static_cast<int32_t>(entity_base);
+        }
+        if (entity.mesh >= 0) {
+            entity.mesh += static_cast<int32_t>(mesh_base);
+        }
+        if (entity.material >= 0) {
+            entity.material += static_cast<int32_t>(material_base);
+        }
+        entity.dirty = true;
+        m_entities[entity_base + i] = entity;
+        m_generation[entity_base + i] = 1;
+    }
+
+    // Scripts: the type name points into the INCOMING file's buffer, which
+    // the caller keeps alive for as long as the world (the same contract as
+    // a non-additive load).
+    for (uint32_t i = 0; i < incoming.m_script_count; ++i) {
+        ScriptRef script = incoming.m_scripts[i];
+        script.entity += static_cast<int32_t>(entity_base);
+        m_scripts[script_base + i] = script;
+    }
+
+    // Animation: skeletons and clips move across unchanged, but a
+    // controller's states name CLIP INDICES, so those rebase too. Getting
+    // this wrong would not crash -- the character would simply play some
+    // other scene's animation, which is exactly the sort of quiet wrongness
+    // worth spelling out.
+    for (uint32_t i = 0; i < incoming.m_skeleton_count; ++i) {
+        m_skeletons[skeleton_base + i] = incoming.m_skeletons[i];
+    }
+    for (uint32_t i = 0; i < incoming.m_clip_count; ++i) {
+        m_clips[clip_base + i] = incoming.m_clips[i];
+    }
+    for (uint32_t i = 0; i < incoming.m_controller_count; ++i) {
+        anim::Controller controller = incoming.m_controllers[i];
+        for (uint32_t s = 0; s < controller.state_count; ++s) {
+            controller.states[s].clip =
+                static_cast<uint16_t>(controller.states[s].clip + clip_base);
+        }
+        m_controllers[controller_base + i] = controller;
+    }
+    for (uint32_t i = 0; i < incoming.m_skinned_mesh_count; ++i) {
+        LoadedSkinnedMesh mesh = incoming.m_skinned_meshes[i];
+        mesh.material_index += material_base;
+        mesh.skeleton += skeleton_base;
+        m_skinned_meshes[skinned_mesh_base + i] = mesh;
+    }
+    for (uint32_t i = 0; i < incoming.m_skinned_count; ++i) {
+        SkinnedRenderer renderer = incoming.m_skinned[i];
+        renderer.entity += static_cast<int32_t>(entity_base);
+        renderer.mesh += static_cast<int32_t>(skinned_mesh_base);
+        if (renderer.material >= 0) {
+            renderer.material += static_cast<int32_t>(material_base);
+        }
+        renderer.skeleton += skeleton_base;
+        renderer.controller += controller_base;
+        renderer.animator += skinned_base;
+        m_skinned[skinned_base + i] = renderer;
+    }
+
+    m_material_count += incoming.m_material_count;
+    m_mesh_count += incoming.m_mesh_count;
+    m_entity_count += incoming.m_entity_count;
+    m_script_count += incoming.m_script_count;
+    m_skeleton_count += incoming.m_skeleton_count;
+    m_clip_count += incoming.m_clip_count;
+    m_controller_count += incoming.m_controller_count;
+    m_skinned_mesh_count += incoming.m_skinned_mesh_count;
+    m_skinned_count += incoming.m_skinned_count;
+
+    // Re-bind every animator, not just the new ones: the clip array is a
+    // single block and the incoming clips may have moved it, so an animator
+    // bound before the merge could be holding a stale base pointer.
+    for (uint32_t i = 0; i < m_skinned_count; ++i) {
+        const SkinnedRenderer& renderer = m_skinned[i];
+        m_animators[renderer.animator].bind(&m_skeletons[renderer.skeleton],
+                                            &m_controllers[renderer.controller],
+                                            m_clips, m_clip_count);
+    }
+
+    // The running scene keeps its own camera and light: the player is
+    // looking through them.
     update_world_matrices();
     return true;
 }

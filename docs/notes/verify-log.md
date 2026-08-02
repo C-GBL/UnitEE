@@ -213,13 +213,35 @@ traps and resolutions.
 | 2026-08-02 | A default enum value of "pending" made a queue look permanently full | `RequestState::Pending = 0` meant every freshly initialised slot read as an outstanding request, so `stream::request()` refused everything. Zero must mean IDLE. Caught immediately by the tests, which is the argument for writing them alongside the module rather than after it. |
 | 2026-08-02 | Pads on PCSX2: bring-up is testable, presses are not | Port 0 reaches STABLE and polls real (slightly drifting) stick values -- 120/123 rather than a clean 128 -- which is why a deadzone exists. Nothing presses buttons, so mapping, edges, deadzone and pressure are covered by `inject_frame` in the host tests instead; that entry point doubles as the replay hook for recorded input. |
 
+## Scene loading (M10 task 5)
+
+Acceptance run: `samples/20-scene-stream`, which loads a 430 KB scene
+additively while streamed music plays and asserts both.
+
+| Date | Finding | Detail |
+|---|---|---|
+| 2026-08-02 | **The parse, not the read, is what stalls an async load** | Measured on the acceptance run: read 5 ms across 7 frames, parse **149 ms in one frame**. Async loading as first built made the READ incremental and left the parse as a single blocking step, which is the half that actually hurts. The 149 ms drained audsrv's ring and produced one audible dropout -- caught only because the sample asserts `music_underruns() == 0` while a load is in flight. |
+| 2026-08-02 | **That 149 ms was `crc32`, not parsing** | `P2bFile::parse` checksums every section, and the checksum was the textbook bit-at-a-time loop: eight shift-and-mask steps per byte, ~3.4M inner iterations for a 430 KB scene. Switching to a 16-entry nibble table (64 bytes of .rodata, values identical by construction) took the parse to **64 ms** and the dropouts to zero. A 256-entry table would be faster still; 64 bytes was chosen because the EE's data cache is 8 KB and a bulk scan is already thrashing it. |
+| 2026-08-02 | **`World::load` reset the geometry counters but not the animation ones** | `m_skinned_count`, `m_skeleton_count`, `m_clip_count`, `m_controller_count` and `m_skinned_mesh_count` were left as they were. A World is not always fresh: a non-additive scene change loads into the running one, and `append()` parses into a reused scratch world. So every scene reload accumulated the previous scene's characters. It survived M9 because it needs THREE loads to show up -- the second inherits the first's tables, the third overflows them -- and no test or sample had ever loaded three scenes in one run. Surfaced as `additive scene does not fit`. |
+| 2026-08-02 | An overflow error that names no table costs an afternoon | The same failure originally read `additive scene does not fit`, with nine candidate tables. `append()` now names the one that filled up, which turned the diagnosis above from guesswork into one run. |
+| 2026-08-02 | Each additive load needs its OWN buffer | Meshes point straight into the container they were read from (zero copy), so reusing one scene buffer for a second additive load pulls the geometry out from under the scene already running. The sample keeps three. |
+| 2026-08-02 | PCSX2 cannot gate the 8 s scene-load budget | `host:` reads have no seek cost at all -- 430 KB arrived in 5 ms. The acceptance number (71 ms end to end) proves the interleaving and the parse cost, and says nothing about CDVD. Real timing is a hardware item. |
+
+## Disc layout planning (M10 task 4)
+
+| Date | Finding | Detail |
+|---|---|---|
+| 2026-08-02 | The planner has to read PCSX2's log, timestamps and all | `tools/disc/layout_planner.py` scrapes `M10_TRACE` lines from the emulator log, which carries a `[    1.6175] ` prefix on every line. An anchored regex silently found nothing and reported an empty trace. |
+| 2026-08-02 | A raw-dump fallback must not accept prose | With no `M10_TRACE` lines present the tool falls back to "one path per line", which happily turned `[m10] nothing happened` into a file name. Lines now have to look like a disc path (no spaces, an extension) to count. |
+| 2026-08-02 | Verified end to end | Planner -> `mkps2iso disc.xml` -> a 4,063,232-byte ISO with the six files packed in first-access order. Reported seek cost on that trace: 1021 sectors planned vs 1392 unplanned. |
+
 ## Still open
 
 | Item (plan ref) | Status |
 |---|---|
 | bdwgc `gcconfig.h` PS2 constants (`il2cpp-port/bdwgc/`) | RESOLVED at M6: stanza shipped in `il2cpp-port/patches/` per plan 11.4 (`ALIGNMENT 4`, `CPP_WORDSZ 32`, `DATASTART/DATAEND` from `_fdata`/`_end`, `STACKBOTTOM` captured in `main()`, GET_MEM over memalign, threads off). See the IRIX5 trap above; `gctest` on-EE remains a nice-to-have (il2cpp's own allocation suite exercised it instead). |
 | Offline builds | OPEN: `runtime/tests` fetches GoogleTest v1.14.0 over the network at configure time, and `install.ps1` fetches MSYS2 packages. Neither has a vendored/mirrored fallback. |
-| `mkps2iso` | OPEN: not part of the ps2dev distribution and not installed. Needed from M12 (ISO packaging). `doctor.sh` reports it as an optional absence. |
+| `mkps2iso` | RESOLVED at M10: installed locally at `tools/mkps2iso/` (gitignored -- it is a third-party binary, not ours to vendor) and proven end to end against `tools/disc/layout_planner.py`'s generated script. Still needed properly for M12 (ISO packaging); `doctor.sh` reports its absence as optional. |
 | Docker image + CI (M0 tasks 1, 7) | OPEN: Docker is not available on this machine and there is no CI runner. `tools/ci/README.md` tracks it. The plan's note that emulator tests need an out-of-band BIOS still stands -- never download one. |
 | Host SDL2 rasteriser stand-in (M1 task 4) | OPEN: deferred until M2 defines the `gfx::Device` interface it must stand in for. The rest of the host build (platform layer, allocators, math, tests) is done. |
 | Section 7.2 | OPEN: section 7 jumps from 7.1 to 7.3 in `ps2port.txt`; the "not supported" list appears to be missing. Sections 9-18 are now present. |

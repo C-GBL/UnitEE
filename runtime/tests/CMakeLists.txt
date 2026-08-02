@@ -30,6 +30,7 @@ add_executable(ps2ur_tests
     test_input.cpp
     test_memcard.cpp
     test_stream.cpp
+    test_scene_load.cpp
 )
 target_link_libraries(ps2ur_tests PRIVATE ps2ur GTest::gtest_main)
 
