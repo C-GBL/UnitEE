@@ -73,6 +73,18 @@ namespace Ps2.Editor
                 throw new PS2BuildException("No usable scenes resolved from the profile.");
 
             Directory.CreateDirectory(ctx.ContentDirectory);
+
+            // The content list is built HERE, not in the export step.
+            //
+            // Export is cacheable and skips itself when nothing changed, so a
+            // list populated inside its Run() is empty on every incremental
+            // build -- and Package then ships an ELF with no scene next to
+            // it. The output paths are a pure function of the scene paths, so
+            // deriving them in a step that always runs is both simpler and
+            // correct in the cached case.
+            ctx.ContentFiles.Clear();
+            foreach (string scenePath in ctx.ScenePaths)
+                ctx.ContentFiles.Add(PS2StepExportScenes.OutputFor(ctx, scenePath));
         }
     }
 
@@ -113,7 +125,6 @@ namespace Ps2.Editor
                 if (!File.Exists(output))
                     throw new PS2BuildException(
                         $"Exporting '{scenePath}' produced no output at '{output}'.");
-                ctx.ContentFiles.Add(output);
             }
             // Put the Editor back where it was; a build must not quietly
             // change which scene the user has open.
@@ -791,10 +802,47 @@ namespace Ps2.Editor
             File.Copy(elf, ctx.ElfPath, true);
             File.Copy(elf, Path.Combine(stage, ctx.Profile.bootElfName), true);
 
+            // The content goes to BOTH the ISO staging directory and next to
+            // game.elf.
+            //
+            // Next to the ELF matters more than it looks: PCSX2 derives the
+            // host: root from the ELF's own directory, so an ELF sitting
+            // alone in the output folder resolves host:scene.p2b to a file
+            // that is not there, reports the scene missing and parks. The
+            // symptom is a black screen with a frozen FPS counter -- which
+            // reads exactly like a crash, and is not one.
             foreach (string content in ctx.ContentFiles)
             {
-                if (File.Exists(content))
-                    File.Copy(content, Path.Combine(stage, Path.GetFileName(content)), true);
+                if (!File.Exists(content))
+                    continue;
+                string name = Path.GetFileName(content);
+                File.Copy(content, Path.Combine(stage, name), true);
+                File.Copy(content, Path.Combine(ctx.OutputDirectory, name), true);
+            }
+
+            // il2cpp's global-metadata.dat, which the managed runtime opens
+            // through the same host: root. Without it il2cpp_init fails after
+            // the scene has already loaded, which is a confusing place to
+            // find out the build was incomplete.
+            string metadataSource = Path.Combine(ctx.Il2cppOutputDirectory,
+                                                 "Data", "Metadata",
+                                                 "global-metadata.dat");
+            if (File.Exists(metadataSource))
+            {
+                foreach (string root in new[] { stage, ctx.OutputDirectory })
+                {
+                    string dir = Path.Combine(root, "Metadata");
+                    Directory.CreateDirectory(dir);
+                    File.Copy(metadataSource,
+                              Path.Combine(dir, "global-metadata.dat"), true);
+                }
+            }
+            else
+            {
+                ctx.Warn(
+                    "global-metadata.dat was not found in the IL2CPP output, so " +
+                    "the managed runtime will fail to start. Re-run the build " +
+                    "with Force Rebuild.");
             }
 
             string systemCnf = Path.Combine(stage, "SYSTEM.CNF");

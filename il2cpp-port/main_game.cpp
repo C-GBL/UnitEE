@@ -58,7 +58,22 @@ namespace {
 constexpr uint32_t kAddrUnlit = 0;
 constexpr uint32_t kAddrLit = 700;
 
-alignas(16) uint8_t g_file_arena_mem[PS2_GAME_ASSET_POOL_BYTES];
+// The scene arena.
+//
+// Deliberately NOT the profile's whole assetPoolMb. That budget covers every
+// resident asset across a session, but this is one static array in .bss and
+// it is claimed before il2cpp asks for anything. At the default 6 MB, on top
+// of an 11 MB development ELF, that is 17 MB of 32 committed before the
+// metadata (~1-2 MB) and the GC heap (4 MB) are allocated at all -- and
+// il2cpp's metadata loader writes through the null it gets back rather than
+// checking, so the symptom is stores to address 0x0 rather than an
+// out-of-memory message (verify-log M12).
+//
+// 2 MB is what M7 shipped and what a boot scene actually needs. Streaming
+// and additive loads take their memory from the platform heap at runtime,
+// which is where the rest of the asset budget belongs.
+constexpr uint32_t kBootSceneArenaBytes = 2 * 1024 * 1024;
+alignas(16) uint8_t g_file_arena_mem[kBootSceneArenaBytes];
 alignas(16) gfx::Qword g_constants[17];
 
 void set_float4(gfx::Qword& q, float x, float y, float z, float w)
