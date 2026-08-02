@@ -9,6 +9,7 @@
 
 #if defined(PS2UR_PLATFORM_PS2)
 
+#include <iopheap.h>
 #include <loadfile.h>
 #include <sifrpc.h>
 #include <stdio.h>
@@ -36,6 +37,11 @@ bool init()
     // in io_common.h forbidding direct fio use is the hint). Load our embedded
     // copies once.
     SifLoadFileInit();
+    // SifExecModuleBuffer has to allocate IOP RAM to hold the image, which
+    // needs the heap RPC bound. Small modules can slip through without it;
+    // a larger one (audsrv) hangs waiting for an allocation that never
+    // comes -- see verify-log, M10.
+    SifInitIopHeap();
     int mod_ret = 0;
     const int iomanx_id = SifExecModuleBuffer(
         iomanx_irx_start,

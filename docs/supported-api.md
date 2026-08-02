@@ -67,5 +67,16 @@ These are listed prominently here and asserted in the conformance suite
    `CrossFadeInFixedTime` (seconds) is provided and exact. A member that
    looked like Unity's but measured time differently would be worse than no
    member at all.
+8. **Audio has 24 voices and no preemption.** On the audsrv mixing model a
+   sounding voice cannot be stopped early, so `AudioSource.Stop` releases the
+   handle but the sample plays out, and a sound started while all 24 voices
+   are busy is dropped regardless of priority. Priority still decides which
+   voice *would* be sacrificed, and flips to real stealing when the custom
+   IRX lands (plan section 9, M10 task 1).
+9. Per-source audio **pitch** is not supported: audsrv fixes pitch on the
+   loaded sample, not the playback. A clip needed at several pitches must be
+   exported several times.
+10. SFX are downmixed to **mono** at export (22.05 kHz by default). Stereo
+    content belongs on the streamed music path, which is stereo.
 6. Reflection is limited to what survives managed stripping; `link.xml` is
    mandatory for any reflective code.

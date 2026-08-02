@@ -43,6 +43,10 @@ namespace Ps2.Editor
 
         internal static SkinPayload PendingSkin;
 
+        // Pre-built SND section (M10), supplied by the audio export
+        // entry point the same way PendingSkin supplies the rig.
+        internal static byte[] PendingSound;
+
         private sealed class MeshKey
         {
             public Mesh Mesh;
@@ -145,6 +149,11 @@ namespace Ps2.Editor
                 }
                 writer.AddSection(P2bWriter.SectionController, PendingSkin.Controller);
                 writer.AddSection(P2bWriter.SectionSkinnedMesh, PendingSkin.SkinnedMesh);
+            }
+
+            if (PendingSound != null)
+            {
+                writer.AddSection(P2bWriter.SectionSound, PendingSound);
             }
 
             writer.AddSection(P2bWriter.SectionScene, BuildScene(entities, scriptNames));

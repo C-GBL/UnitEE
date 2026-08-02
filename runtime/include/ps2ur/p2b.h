@@ -38,6 +38,8 @@ inline constexpr uint32_t kSectionSkeleton = fourcc('S', 'K', 'E', 'L');
 inline constexpr uint32_t kSectionClip = fourcc('A', 'N', 'I', 'M');
 inline constexpr uint32_t kSectionController = fourcc('C', 'T', 'R', 'L');
 inline constexpr uint32_t kSectionSkinnedMesh = fourcc('S', 'K', 'M', 'S');
+// Encoded SPU2 ADPCM clips (M10).
+inline constexpr uint32_t kSectionSound = fourcc('S', 'N', 'D', ' ');
 
 // Plain CRC-32 (reflected, poly 0xEDB88320), the same the writer uses.
 uint32_t crc32(const void* data, uint32_t size);
