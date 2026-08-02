@@ -48,5 +48,15 @@ uint64_t ticks_per_second()
     return 1000000000ull; // nanoseconds
 }
 
+int load_irx(const char* name, const void* blob, unsigned blob_size)
+{
+    // No IOP on the workstation. Reporting failure keeps callers on the
+    // same code path they take when a console cannot find a module.
+    (void)name;
+    (void)blob;
+    (void)blob_size;
+    return -1;
+}
+
 } // namespace platform
 } // namespace ps2ur

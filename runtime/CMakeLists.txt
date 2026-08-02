@@ -55,6 +55,8 @@ set(PS2UR_SOURCES
     src/audio/audio.cpp
     src/io/io.cpp
     src/io/p2b.cpp
+    src/io/memcard.cpp
+    src/io/stream.cpp
     src/input/input.cpp
     src/bridge/bridge.cpp
     src/bridge/bridge_impl.cpp

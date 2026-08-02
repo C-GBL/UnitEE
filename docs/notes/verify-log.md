@@ -200,6 +200,19 @@ traps and resolutions.
 | 2026-08-01 | The load-bearing audio assertion is that a voice RETIRES | Allocation bookkeeping can look perfect while the SPU2 plays silence. A 0.25 s clip whose voice frees itself ~500 ms later is only possible if the hardware really consumed the sample. |
 | 2026-08-01 | ADPCM encoder quality (exporter self-check) | Exhaustive search over 5 filters x 13 shifts per 28-sample block, scored by squared error against the decoder's own arithmetic. Measured SNR: blip 51.4 dB, tone 57.7 dB, sweep 40.1 dB (the sweep is hardest -- the waveform never settles). The exporter decodes its own output and FAILS THE EXPORT below 20 dB, because a badly encoded sample has no runtime validator: the SPU2 plays it regardless. Reference to diff against: ps2sdk's adpenc, whose .adp header this format matches ("APCM", version, channels, pitch = freq*4096/48000, sample count). |
 
+## Input, memory card, streaming (M10 tasks 2-4)
+
+| Date | Finding | Detail |
+|---|---|---|
+| 2026-08-02 | **padInit returns 1 on success, not 0** | Unlike most of ps2sdk. Checking `!= 0` rejects a perfectly good pad stack. |
+| 2026-08-02 | **libmc paths are RELATIVE TO THE CARD** | mcOpen/mcMkDir take the port and slot as arguments, so a "mc0:" prefix makes the driver look for a directory literally named `mc0:`. Writes then "succeed" into nowhere. Paths are `/DIR/FILE`. |
+| 2026-08-02 | **mcOpen takes FIO flags, NOT newlib's fcntl.h ones** | fio's read-only is 1; newlib's O_RDONLY is 0. Including `<fcntl.h>` therefore opens every file in mode 0 -- not a mode at all -- and the card answers with a permission error that reads as "card is write protected". The values are in ps2sdk common/include/io_common.h and the module now spells them out locally. |
+| 2026-08-02 | **A memory card will not short-read** | Asking mcRead for more bytes than the file holds fails the whole call rather than returning what is there. Seek to the end for the size, seek back, then read exactly that. |
+| 2026-08-02 | The real sceMcRes codes are worth reading, not guessing | -2 is NO FORMAT, -3 is FULL DEVICE, -4 is NO ENTRY, -5 is DENIED PERMIT (libmc-common.h). An invented mapping turned a permissions failure into "card is full" and sent the debugging in the wrong direction. |
+| 2026-08-02 | PCSX2's virtual cards start UNFORMATTED | Which is a genuine state a console can present, so the runtime handles it: `memcard::format()` exists, documented as destructive and gated behind player confirmation in a real game. Verified end to end -- format, save, load round trip (`level=7 volume=0.75 player='ASH'`), icon.sys present. |
+| 2026-08-02 | A default enum value of "pending" made a queue look permanently full | `RequestState::Pending = 0` meant every freshly initialised slot read as an outstanding request, so `stream::request()` refused everything. Zero must mean IDLE. Caught immediately by the tests, which is the argument for writing them alongside the module rather than after it. |
+| 2026-08-02 | Pads on PCSX2: bring-up is testable, presses are not | Port 0 reaches STABLE and polls real (slightly drifting) stick values -- 120/123 rather than a clean 128 -- which is why a deadzone exists. Nothing presses buttons, so mapping, edges, deadzone and pressure are covered by `inject_frame` in the host tests instead; that entry point doubles as the replay hook for recorded input. |
+
 ## Still open
 
 | Item (plan ref) | Status |

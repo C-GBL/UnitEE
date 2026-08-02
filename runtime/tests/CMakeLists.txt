@@ -27,6 +27,9 @@ add_executable(ps2ur_tests
     test_render_queue.cpp
     test_anim.cpp
     test_audio.cpp
+    test_input.cpp
+    test_memcard.cpp
+    test_stream.cpp
 )
 target_link_libraries(ps2ur_tests PRIVATE ps2ur GTest::gtest_main)
 

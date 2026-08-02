@@ -10,6 +10,7 @@
 #if defined(PS2UR_PLATFORM_PS2)
 
 #include <iopheap.h>
+#include <kernel.h>
 #include <loadfile.h>
 #include <sifrpc.h>
 #include <stdio.h>
@@ -59,6 +60,64 @@ bool init()
     // TODO(spec: section 9 later milestones): exception handlers, DMAC reset,
     // scratchpad reservation.
     return true;
+}
+
+namespace {
+
+// Appends src at 'at', uppercasing when asked, bounded by 'limit' so a long
+// name truncates rather than overruns. Returns the new cursor.
+int append_path(char* dest, int at, int limit, const char* src, bool upper)
+{
+    for (const char* p = src; *p != '\0' && at < limit; ++p) {
+        char c = *p;
+        if (upper && c >= 'a' && c <= 'z') {
+            c = static_cast<char>(c - 'a' + 'A');
+        }
+        dest[at++] = c;
+    }
+    return at;
+}
+
+} // namespace
+
+// Loads an IOP module: storage roots first, embedded blob as a last resort.
+int load_irx(const char* name, const void* blob, unsigned blob_size)
+{
+    // Try the storage roots a console might have, in the order a build
+    // actually uses them. cdrom0: wants the 8.3 uppercase form with the
+    // ISO9660 version suffix.
+    char path[64];
+    static const char* const kRoots[] = {"host:", "mass:"};
+    int module_result = 0;
+    for (unsigned i = 0; i < 2u; ++i) {
+        int at = append_path(path, 0, 48, kRoots[i], false);
+        at = append_path(path, at, 62, name, false);
+        path[at] = '\0';
+        const int id = SifLoadStartModule(path, 0, nullptr, &module_result);
+        if (id >= 0) {
+            return id;
+        }
+    }
+    // ISO9660 wants a backslash, an uppercase name and the ";1" version.
+    {
+        int at = append_path(path, 0, 48, "cdrom0:\\", false);
+        at = append_path(path, at, 58, name, true);
+        at = append_path(path, at, 62, ";1", false);
+        path[at] = '\0';
+        const int id = SifLoadStartModule(path, 0, nullptr, &module_result);
+        if (id >= 0) {
+            return id;
+        }
+    }
+    // Last resort: the embedded copy. Works for some modules and silently
+    // fails to START others (verify-log M10), so it is the fallback rather
+    // than the default.
+    if (blob != nullptr && blob_size > 0) {
+        FlushCache(0);
+        return SifExecModuleBuffer(const_cast<void*>(blob), blob_size, 0,
+                                   nullptr, &module_result);
+    }
+    return -1;
 }
 
 void shutdown()
