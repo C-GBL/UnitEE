@@ -2,6 +2,8 @@
 
 #include "ps2ur/log.h"
 
+#include "generated_bridge.h"
+
 namespace ps2ur {
 namespace bridge {
 
@@ -12,10 +14,19 @@ bool init()
     if (g_initialized) {
         return true;
     }
-    // TODO(spec missing: section 12): generated boundary functions from the
-    // binding generator (12.4) register/link here.
+    // The generated table references every boundary symbol: this loop both
+    // forces the linker to keep the implementations and proves at startup
+    // that none is missing -- a gap faults here with a name, not mid-frame.
+    for (int i = 0; i < ps2ur_bridge_table_count; ++i) {
+        if (ps2ur_bridge_table[i].fn == nullptr) {
+            log(LogLevel::Error, "bridge: symbol '%s' missing",
+                ps2ur_bridge_table[i].name);
+            return false;
+        }
+    }
     g_initialized = true;
-    log(LogLevel::Debug, "bridge: init (stub)");
+    log(LogLevel::Debug, "bridge: init, %d boundary functions",
+        ps2ur_bridge_table_count);
     return true;
 }
 

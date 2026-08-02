@@ -22,6 +22,7 @@ namespace Ps2.Editor
             public Camera Camera;
             public bool IsLight;
             public Light Light;
+            public List<string> Scripts; // managed type names, or null
         }
 
         private sealed class MeshKey
@@ -79,11 +80,33 @@ namespace Ps2.Editor
                                   P2bTextureExporter.Export(t), t.name);
             }
 
-            writer.AddSection(P2bWriter.SectionScene, BuildScene(entities));
+            // SCRP: deduplicated NUL-terminated script type names; SCEN
+            // script components store offsets into it.
+            var scriptNames = new Dictionary<string, uint>();
+            var scrp = new ByteBuffer();
+            int scriptComponents = 0;
+            foreach (var e in entities)
+            {
+                if (e.Scripts == null) continue;
+                foreach (string s in e.Scripts)
+                {
+                    scriptComponents++;
+                    if (scriptNames.ContainsKey(s)) continue;
+                    scriptNames[s] = (uint)scrp.Position;
+                    foreach (char c in s) scrp.U8((byte)c); // ASCII by contract
+                    scrp.U8(0);
+                }
+            }
+            if (scrp.Position > 0)
+            {
+                writer.AddSection(P2bWriter.SectionScripts, scrp.ToArray());
+            }
+
+            writer.AddSection(P2bWriter.SectionScene, BuildScene(entities, scriptNames));
             writer.Write(path);
             Debug.Log($"[PS2] exported '{path}': {entities.Count} entities, " +
                       $"{meshes.Count} meshes, {textures.Count} textures, " +
-                      $"{materials.Count} materials");
+                      $"{materials.Count} materials, {scriptComponents} scripts");
         }
 
         private static void Walk(Transform t, int parent,
@@ -172,6 +195,21 @@ namespace Ps2.Editor
                 record.Light = light;
             }
 
+            // User scripts (M7): every MonoBehaviour from the user's script
+            // assemblies rides along as a type reference. The PS2 build
+            // recompiles those sources against the shim into an assembly of
+            // the SAME name, so "Full.Name, Assembly-CSharp" resolves via
+            // Type.GetType on target. Package/editor scripts never export.
+            foreach (var mb in t.GetComponents<MonoBehaviour>())
+            {
+                if (mb == null) continue; // missing-script placeholder
+                var type = mb.GetType();
+                string assembly = type.Assembly.GetName().Name;
+                if (!assembly.StartsWith("Assembly-CSharp")) continue;
+                record.Scripts ??= new List<string>();
+                record.Scripts.Add(type.FullName + ", " + assembly);
+            }
+
             int myIndex = entities.Count;
             entities.Add(record);
             foreach (Transform child in t)
@@ -181,7 +219,8 @@ namespace Ps2.Editor
             }
         }
 
-        private static byte[] BuildScene(List<EntityRecord> entities)
+        private static byte[] BuildScene(List<EntityRecord> entities,
+                                         Dictionary<string, uint> scriptNames)
         {
             // Components are laid out entity-by-entity, so component_first is
             // sequential. Payloads follow the ref table.
@@ -216,6 +255,15 @@ namespace Ps2.Editor
                     p.F32(e.Light.color.g * e.Light.intensity);
                     p.F32(e.Light.color.b * e.Light.intensity);
                     comps.Add((3, p.ToArray()));
+                }
+                if (e.Scripts != null)
+                {
+                    foreach (string s in e.Scripts)
+                    {
+                        var p = new ByteBuffer();
+                        p.U32(scriptNames[s]); // offset into SCRP
+                        comps.Add((4, p.ToArray()));
+                    }
                 }
                 perEntity.Add((first, comps.Count - first));
             }
@@ -403,6 +451,120 @@ namespace Ps2.Editor
                 go.transform.position = new Vector3(0, -2.5f, 3.0f);
                 go.transform.localScale = new Vector3(18.0f, 0.3f, 12.0f);
             }
+        }
+
+        // ---- M7 acceptance: the Spin scene + Editor golden trace -----------
+        //
+        // Batch entry:
+        //   Unity -batchmode -quit -executeMethod Ps2.Editor.PS2ExportMenu.ExportSpinScene -ps2Output <scene.p2b>
+        //
+        // Builds a cube carrying the user's Spin + SpinParityCheck scripts
+        // (which must exist in Assets/ -- they are USER code), exports the
+        // scene, and generates Assets/PS2Scripts/SpinGolden.cs: 300 frames of
+        // the cube's localToWorldMatrix as REAL Unity computes it, with the
+        // same fixed dt the PS2 main loop uses. The golden is compiled into
+        // the game assembly, so the on-target parity check needs no file I/O.
+        public static void ExportSpinScene()
+        {
+            string output = "spin-scene.p2b";
+            string[] args = System.Environment.GetCommandLineArgs();
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "-ps2Output")
+                {
+                    output = args[i + 1];
+                }
+            }
+
+            const float dt = 1.0f / 30.0f;
+            const int frames = 300;
+            Vector3 cubePosition = new Vector3(0, 0.5f, 3.0f);
+
+            // Golden first (independent simulation object, real Unity math).
+            var sim = new GameObject("golden-sim");
+            sim.transform.position = cubePosition;
+            var sb = new System.Text.StringBuilder(64 * 1024);
+            sb.Append("// GENERATED by PS2ExportMenu.ExportSpinScene -- 300 frames of\n");
+            sb.Append("// localToWorldMatrix from Unity's own Transform, dt = 1/30.\n");
+            sb.Append("// The on-target parity check compares the shim against this.\n");
+            sb.Append("public static class SpinGolden\n{\n");
+            sb.Append("    public static readonly float[] Data = new float[]\n    {\n");
+            for (int f = 0; f < frames; f++)
+            {
+                sim.transform.Rotate(0f, 90f * dt, 0f);
+                Matrix4x4 m = sim.transform.localToWorldMatrix;
+                sb.Append("        ");
+                for (int i = 0; i < 16; i++)
+                {
+                    sb.Append(m[i].ToString("R",
+                        System.Globalization.CultureInfo.InvariantCulture));
+                    sb.Append("f, ");
+                }
+                sb.Append("\n");
+            }
+            sb.Append("    };\n}\n");
+            Object.DestroyImmediate(sim);
+
+            string goldenPath = System.IO.Path.Combine(
+                Application.dataPath, "PS2Scripts", "SpinGolden.cs");
+            System.IO.Directory.CreateDirectory(
+                System.IO.Path.GetDirectoryName(goldenPath));
+            System.IO.File.WriteAllText(goldenPath, sb.ToString());
+            AssetDatabase.Refresh();
+
+            // Scene: camera at origin looking +z, one lit backdrop, the cube.
+            var scene = SceneManager.GetActiveScene();
+            foreach (GameObject root in scene.GetRootGameObjects())
+            {
+                Object.DestroyImmediate(root);
+            }
+
+            var camGo = new GameObject("Camera");
+            var cam = camGo.AddComponent<Camera>();
+            cam.fieldOfView = 60.0f;
+            cam.nearClipPlane = 0.5f;
+            cam.farClipPlane = 100.0f;
+            camGo.transform.position = Vector3.zero;
+
+            var lightGo = new GameObject("Sun");
+            var light = lightGo.AddComponent<Light>();
+            light.type = LightType.Directional;
+            light.color = Color.white;
+            light.intensity = 0.9f;
+            lightGo.transform.rotation = Quaternion.Euler(50.0f, -30.0f, 0);
+
+            var cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            cube.name = "spincube";
+            var cubeMat = new Material(Shader.Find("Unlit/Color"));
+            cubeMat.color = new Color(0.9f, 0.6f, 0.2f, 1.0f);
+            cube.GetComponent<MeshRenderer>().sharedMaterial = cubeMat;
+            cube.transform.position = cubePosition;
+
+            var spinType = FindUserType("Spin");
+            var parityType = FindUserType("SpinParityCheck");
+            if (spinType == null || parityType == null)
+            {
+                Debug.LogError("[PS2] Spin/SpinParityCheck not found in " +
+                               "Assembly-CSharp; are the scripts in Assets/?");
+                EditorApplication.Exit(1);
+                return;
+            }
+            cube.AddComponent(spinType);
+            cube.AddComponent(parityType);
+
+            P2bSceneExporter.ExportActiveScene(output);
+            Debug.Log("[PS2] spin scene exported to " + output);
+        }
+
+        private static System.Type FindUserType(string name)
+        {
+            foreach (var asm in System.AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (!asm.GetName().Name.StartsWith("Assembly-CSharp")) continue;
+                var t = asm.GetType(name);
+                if (t != null) return t;
+            }
+            return null;
         }
     }
 }

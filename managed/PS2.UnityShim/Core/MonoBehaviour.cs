@@ -1,34 +1,28 @@
-using System;
 using System.Collections;
+using UnityEngine.Internal;
 
 namespace UnityEngine
 {
     // Base class for user scripts. Lifecycle methods (Awake, Start, Update,
     // FixedUpdate, LateUpdate, OnEnable, OnDisable, OnDestroy - plan 7.1) are
-    // discovered and dispatched by the runtime scheduler, not declared here,
-    // exactly like real Unity.
+    // discovered and dispatched by UnityEngine.Internal.Runtime, not declared
+    // here, exactly like real Unity. Coroutines run on the managed scheduler
+    // (plan M7 task 5), never on native threads.
     public class MonoBehaviour : Behaviour
     {
-        // TODO(native-backing): the coroutine scheduler lives in the ps2ur
-        // frame loop (plan section 6) / the Editor stand-in. Surface only.
         public Coroutine StartCoroutine(IEnumerator routine)
         {
-            throw new NotImplementedException("TODO(native-backing): coroutine scheduler not available yet.");
+            return Runtime.StartCoroutine(this, routine);
         }
 
         public void StopCoroutine(Coroutine routine)
         {
-            throw new NotImplementedException("TODO(native-backing): coroutine scheduler not available yet.");
-        }
-
-        public void StopCoroutine(IEnumerator routine)
-        {
-            throw new NotImplementedException("TODO(native-backing): coroutine scheduler not available yet.");
+            Runtime.StopCoroutine(routine);
         }
 
         public void StopAllCoroutines()
         {
-            throw new NotImplementedException("TODO(native-backing): coroutine scheduler not available yet.");
+            Runtime.StopAllCoroutines(this);
         }
 
         public static void print(object message) => Debug.Log(message);

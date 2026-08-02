@@ -15,6 +15,7 @@ namespace Ps2.Editor
         public const uint SectionTex = 0x20584554;      // 'TEX '
         public const uint SectionScene = 0x4E454353;    // 'SCEN'
         public const uint SectionMaterial = 0x4C54414D; // 'MATL'
+        public const uint SectionScripts = 0x50524353;  // 'SCRP' (M7)
 
         private struct Section
         {
@@ -119,6 +120,7 @@ namespace Ps2.Editor
         public ByteBuffer() { m_writer = new BinaryWriter(m_stream); }
 
         public long Position => m_stream.Position;
+        public void U8(byte v) => m_writer.Write(v);
         public void U16(ushort v) => m_writer.Write(v);
         public void U32(uint v) => m_writer.Write(v);
         public void I32(int v) => m_writer.Write(v);

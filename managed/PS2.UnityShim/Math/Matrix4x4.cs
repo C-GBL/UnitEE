@@ -15,6 +15,43 @@ namespace UnityEngine
 
         public static Matrix4x4 zero => default;
 
+        // Unity's linear indexer: index = row + column * 4, matching the
+        // column-major field order above.
+        public float this[int index]
+        {
+            get => this[index % 4, index / 4];
+            set => this[index % 4, index / 4] = value;
+        }
+
+        public float this[int row, int column]
+        {
+            get
+            {
+                Vector4 c = GetColumn(column);
+                switch (row)
+                {
+                    case 0: return c.x;
+                    case 1: return c.y;
+                    case 2: return c.z;
+                    case 3: return c.w;
+                    default: throw new IndexOutOfRangeException("Invalid matrix row " + row);
+                }
+            }
+            set
+            {
+                Vector4 c = GetColumn(column);
+                switch (row)
+                {
+                    case 0: c.x = value; break;
+                    case 1: c.y = value; break;
+                    case 2: c.z = value; break;
+                    case 3: c.w = value; break;
+                    default: throw new IndexOutOfRangeException("Invalid matrix row " + row);
+                }
+                SetColumn(column, c);
+            }
+        }
+
         public static Matrix4x4 identity
         {
             get

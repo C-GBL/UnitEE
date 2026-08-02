@@ -13,6 +13,22 @@ set_property(CACHE PS2UR_PLATFORM PROPERTY STRINGS host ps2)
 
 option(PS2UR_BUILD_TESTS "Build host unit tests (host platform only)" ON)
 
+# The bridge surface is generated from bridge-api.json (ADR-002). A stale
+# generated file is a days-to-find class of bug on hardware, so drift fails
+# the configure, not a code review.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    execute_process(
+        COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../tools/bindgen/bindgen.py" check
+        RESULT_VARIABLE PS2UR_BINDGEN_CHECK)
+    if(NOT PS2UR_BINDGEN_CHECK EQUAL 0)
+        message(FATAL_ERROR "bindgen outputs are stale -- run: python tools/bindgen/bindgen.py gen-all")
+    endif()
+else()
+    message(WARNING "python3 not found; skipping bindgen freshness check")
+endif()
+
 set(PS2UR_SOURCES
     src/core/log.cpp
     src/core/assert.cpp
@@ -39,6 +55,8 @@ set(PS2UR_SOURCES
     src/io/p2b.cpp
     src/input/input.cpp
     src/bridge/bridge.cpp
+    src/bridge/bridge_impl.cpp
+    src/bridge/generated_bridge.cpp
 )
 
 if(PS2UR_PLATFORM STREQUAL "host")

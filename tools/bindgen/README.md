@@ -1,13 +1,11 @@
 # bindgen — managed <-> native binding generator
 
 Generates both sides of the P/Invoke boundary between the managed shim
-(`managed/PS2.UnityShim`) and the native runtime (`runtime/src/bridge`).
-
-> TODO(spec missing: section 12.4): the plan references a full binding
-> generator specification in section 12.4, which is not present in
-> `ps2port.txt` (the document ends at section 8). Everything below is derived
-> from ADR-002 (plan section 5) and the repository layout (plan section 8).
-> `bindgen.py` is a CLI skeleton until section 12.4 is recovered or rewritten.
+(`managed/PS2.UnityShim`) and the native runtime (`runtime/src/bridge`),
+per plan section 12.4 and ADR-002. The api-def
+(`runtime/src/bridge/bridge-api.json`) is the single source of truth;
+generated files are committed and `bindgen.py check` (run at runtime
+configure time and in CI) fails when they drift.
 
 ## The contract (ADR-002)
 
@@ -55,20 +53,27 @@ functions:
     params: []
 ```
 
-Primitive type vocabulary: `void`, `bool` (marshalled as `u8`), `u8`, `i8`,
-`u16`, `i16`, `u32`, `i32`, `u64`, `i64`, `f32`, `f64`. A declared struct
-name may be used by value or, with a trailing `*`, as a pointer. `f64`
-crossings are flagged with a warning (soft-float on the EE, plan section
-3.1). Anything else is a generator error — the validator exists so that a
-non-blittable signature fails the build on the workstation, not on the
-console.
+Primitive type vocabulary: `void`, `u8`, `i8`, `u16`, `i16`, `u32`, `i32`,
+`u64`, `i64`, `f32`, `f64`, plus input-only `cstr`. `bool` is rejected with
+an explanation (1-byte C++ bool vs 4-byte marshalled BOOL; use `i32`). A
+declared struct name may be used by value or, with a trailing `*`, as a
+pointer (`dir: out|ref` selects the C# modifier; structs may carry a `cs`
+name mapping, e.g. `P2Vec3` -> `UnityEngine.Vector3`). `f64` crossings are
+flagged with a warning (soft-float on the EE, plan section 3.1). Anything
+else is a generator error — the validator exists so that a non-blittable
+signature fails the build on the workstation, not on the console.
 
 ## CLI
 
 ```
-python tools/bindgen/bindgen.py gen-cs  <api-def> -o <out-dir>   # C# externs
-python tools/bindgen/bindgen.py gen-cpp <api-def> -o <out-dir>   # C++ headers + symbol table
+python tools/bindgen/bindgen.py gen-all      # regenerate everything in place
+python tools/bindgen/bindgen.py check        # CI freshness gate (exit 1 = stale)
+python tools/bindgen/bindgen.py gen-cs  <api-def> -o <dir>
+python tools/bindgen/bindgen.py gen-cpp <api-def> -o <dir>
+python tools/bindgen/bindgen.py gen-docs <api-def> -o <dir>
 ```
 
-Both subcommands currently parse and validate the api-def, then exit with
-status 2 and "not implemented" (see the TODO above).
+Outputs: `managed/PS2.UnityShim/Internal/Native.g.cs`,
+`runtime/src/bridge/generated_bridge.{h,cpp}` (prototypes, layout
+static_asserts, and the startup registration table `bridge::init()`
+verifies), and `docs/bridge-surface.md`.

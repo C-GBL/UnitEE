@@ -41,7 +41,7 @@ port_hits=$(printf '%s\n' "$staged" | grep -E '^il2cpp-port/' || true)
 if [ -n "$port_hits" ]; then
     bad=$(printf '%s\n' "$port_hits" | grep -vE \
         -e '^il2cpp-port/[^/]+\.(md|py)$' \
-        -e '^il2cpp-port/(CMakeLists\.txt|main_ee\.cpp|keep-eh\.ld)$' \
+        -e '^il2cpp-port/(CMakeLists\.txt|main_[a-z0-9]+\.cpp|keep-eh\.ld)$' \
         -e '^il2cpp-port/patches/[^/]+\.(patch|md)$' \
         -e '^il2cpp-port/os/ps2/.+$' \
         -e '^il2cpp-port/bdwgc/.+$' \

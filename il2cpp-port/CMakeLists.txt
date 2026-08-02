@@ -24,6 +24,13 @@ if(NOT EXISTS "${M6_GENERATED}")
     message(FATAL_ERROR "M6_GENERATED not set or missing: '${M6_GENERATED}'")
 endif()
 
+# Host program for the ELF. main_ee.cpp is the M6 gate program (pure managed
+# hello); main_m7.cpp drives the managed facade against the ps2ur renderer
+# and needs PS2UR_RUNTIME pointing at a ps2-platform build of the runtime
+# (its libps2ur.a carries the VU microprograms as linkable blobs).
+set(M6_MAIN "main_ee.cpp" CACHE STRING "host program source")
+set(PS2UR_RUNTIME "" CACHE PATH "ps2 runtime build dir containing libps2ur.a (optional)")
+
 # Platform-neutral libil2cpp sources; per-platform subdirectories are excluded
 # wholesale (their guards would no-op them anyway, but excluding is faster and
 # keeps the error surface small).
@@ -61,8 +68,18 @@ add_executable(m6-hello
     ${LIB_SOURCES}
     ${GEN_SOURCES}
     "${BDWGC}/extra/gc.c"
-    main_ee.cpp
+    "${M6_MAIN}"
 )
+
+if(PS2UR_RUNTIME)
+    target_include_directories(m6-hello PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/include")
+    # Same ps2sdk library set the samples use; the runtime's GS/DMA/VU code
+    # sits on top of them.
+    target_link_libraries(m6-hello PRIVATE
+        "${PS2UR_RUNTIME}/libps2ur.a"
+        draw graph math3d packet packet2 dma)
+endif()
 
 set_source_files_properties("${BDWGC}/extra/gc.c" PROPERTIES COMPILE_DEFINITIONS
     "GC_GCJ_SUPPORT=1;IGNORE_DYNAMIC_LOADING=1;GC_DONT_REGISTER_MAIN_STATIC_DATA=1;ALL_INTERIOR_POINTERS=1")
@@ -138,8 +155,12 @@ set_source_files_properties(
 # Split optimization (measured, docs/m6-report.md): -Os on the USER assembly
 # costs 17x on the Vector3 benchmark (27 ms -> 468 ms, past the 250 ms gate)
 # because the hot struct calls stop inlining. BCL and runtime stay -Os for
-# size; user-assembly translation units get -O2 (appended last, so it wins).
-file(GLOB M6_USER_ASSEMBLY_SOURCES "${M6_GENERATED}/HelloEE*.cpp")
+# size; user-assembly and shim translation units get -O2 (appended last, so
+# it wins) -- script code and Transform property plumbing are the hot side.
+file(GLOB M6_USER_ASSEMBLY_SOURCES
+    "${M6_GENERATED}/HelloEE*.cpp"
+    "${M6_GENERATED}/Assembly-CSharp*.cpp"
+    "${M6_GENERATED}/PS2.UnityShim*.cpp")
 set_source_files_properties(${M6_USER_ASSEMBLY_SOURCES}
     PROPERTIES COMPILE_OPTIONS "-O2")
 

@@ -1,0 +1,178 @@
+{
+  "module": "ps2ur",
+  "version": 0,
+  "_comment": [
+    "Single source of truth for the managed<->native boundary (ADR-002,",
+    "plan 12.4). tools/bindgen/bindgen.py gen-all regenerates:",
+    "  managed/PS2.UnityShim/Internal/Native.g.cs",
+    "  runtime/src/bridge/generated_bridge.h / generated_bridge.cpp",
+    "  docs/bridge-surface.md",
+    "Hand-edits to those files are forbidden; implementations of the",
+    "prototypes live in runtime/src/bridge/bridge_impl.cpp.",
+    "Handles are {index+1, generation} packed in an i32; 0 is never valid.",
+    "Setters take scalar floats (no struct-by-value ABI questions); getters",
+    "fill a caller-owned out struct."
+  ],
+  "types": [
+    {
+      "name": "P2Vec3",
+      "cs": "UnityEngine.Vector3",
+      "fields": [
+        { "name": "x", "type": "f32" },
+        { "name": "y", "type": "f32" },
+        { "name": "z", "type": "f32" }
+      ]
+    },
+    {
+      "name": "P2Quat",
+      "cs": "UnityEngine.Quaternion",
+      "fields": [
+        { "name": "x", "type": "f32" },
+        { "name": "y", "type": "f32" },
+        { "name": "z", "type": "f32" },
+        { "name": "w", "type": "f32" }
+      ]
+    }
+  ],
+  "functions": [
+    {
+      "name": "ps2ur_debug_log",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "UTF-8 message to the EE console at Info level. Diagnostic path; the per-call string copy is accepted (ADR-002 cstr rules).",
+      "returns": "void",
+      "params": [ { "name": "message", "type": "cstr" } ]
+    },
+    {
+      "name": "ps2ur_entity_create",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "Creates a root entity (parentHandle 0) or a child. Returns the new handle, or 0 if the entity table is full.",
+      "returns": "i32",
+      "params": [ { "name": "parentHandle", "type": "i32" } ]
+    },
+    {
+      "name": "ps2ur_entity_destroy",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "Destroys the entity and its children. The handle's generation is retired: stale handles fail alive() forever after.",
+      "returns": "void",
+      "params": [ { "name": "handle", "type": "i32" } ]
+    },
+    {
+      "name": "ps2ur_entity_alive",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "1 if the handle refers to a live entity, else 0. This is the native truth behind Unity's destroyed-compares-null semantics.",
+      "returns": "i32",
+      "params": [ { "name": "handle", "type": "i32" } ]
+    },
+    {
+      "name": "ps2ur_entity_set_active",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "GameObject.SetActive: the renderer skips inactive subtrees.",
+      "returns": "void",
+      "params": [
+        { "name": "handle", "type": "i32" },
+        { "name": "active", "type": "i32" }
+      ]
+    },
+    {
+      "name": "ps2ur_entity_get_active",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "activeSelf (not the inherited activeInHierarchy).",
+      "returns": "i32",
+      "params": [ { "name": "handle", "type": "i32" } ]
+    },
+    {
+      "name": "ps2ur_tf_get_local_position",
+      "cs_class": "UnityEngine.Internal.Native",
+      "returns": "void",
+      "params": [
+        { "name": "handle", "type": "i32" },
+        { "name": "value", "type": "P2Vec3*", "dir": "out" }
+      ]
+    },
+    {
+      "name": "ps2ur_tf_set_local_position",
+      "cs_class": "UnityEngine.Internal.Native",
+      "returns": "void",
+      "params": [
+        { "name": "handle", "type": "i32" },
+        { "name": "x", "type": "f32" },
+        { "name": "y", "type": "f32" },
+        { "name": "z", "type": "f32" }
+      ]
+    },
+    {
+      "name": "ps2ur_tf_get_local_rotation",
+      "cs_class": "UnityEngine.Internal.Native",
+      "returns": "void",
+      "params": [
+        { "name": "handle", "type": "i32" },
+        { "name": "value", "type": "P2Quat*", "dir": "out" }
+      ]
+    },
+    {
+      "name": "ps2ur_tf_set_local_rotation",
+      "cs_class": "UnityEngine.Internal.Native",
+      "returns": "void",
+      "params": [
+        { "name": "handle", "type": "i32" },
+        { "name": "x", "type": "f32" },
+        { "name": "y", "type": "f32" },
+        { "name": "z", "type": "f32" },
+        { "name": "w", "type": "f32" }
+      ]
+    },
+    {
+      "name": "ps2ur_tf_get_local_scale",
+      "cs_class": "UnityEngine.Internal.Native",
+      "returns": "void",
+      "params": [
+        { "name": "handle", "type": "i32" },
+        { "name": "value", "type": "P2Vec3*", "dir": "out" }
+      ]
+    },
+    {
+      "name": "ps2ur_tf_set_local_scale",
+      "cs_class": "UnityEngine.Internal.Native",
+      "returns": "void",
+      "params": [
+        { "name": "handle", "type": "i32" },
+        { "name": "x", "type": "f32" },
+        { "name": "y", "type": "f32" },
+        { "name": "z", "type": "f32" }
+      ]
+    },
+    {
+      "name": "ps2ur_tf_get_parent",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "Parent handle, or 0 for a root entity.",
+      "returns": "i32",
+      "params": [ { "name": "handle", "type": "i32" } ]
+    },
+    {
+      "name": "ps2ur_tf_set_parent",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "Reparents (parentHandle 0 = make root). Local TRS is NOT adjusted here; Transform.SetParent(worldPositionStays) does that math on the managed side where Unity's semantics live.",
+      "returns": "void",
+      "params": [
+        { "name": "handle", "type": "i32" },
+        { "name": "parentHandle", "type": "i32" }
+      ]
+    },
+    {
+      "name": "ps2ur_tf_child_count",
+      "cs_class": "UnityEngine.Internal.Native",
+      "returns": "i32",
+      "params": [ { "name": "handle", "type": "i32" } ]
+    },
+    {
+      "name": "ps2ur_tf_get_child",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "Child handle by index, or 0 if out of range.",
+      "returns": "i32",
+      "params": [
+        { "name": "handle", "type": "i32" },
+        { "name": "index", "type": "i32" }
+      ]
+    }
+  ]
+}

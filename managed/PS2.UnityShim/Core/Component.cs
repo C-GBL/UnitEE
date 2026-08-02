@@ -4,10 +4,26 @@ namespace UnityEngine
     {
         private GameObject m_GameObject;
 
-        public GameObject gameObject => m_GameObject;
-        public Transform transform => m_GameObject != null ? m_GameObject.transform : null;
+        public GameObject gameObject =>
+            m_GameObject != null && !m_GameObject.IsDestroyedInternal ? m_GameObject : null;
 
-        // TODO(native-backing): attachment will mirror the native entity table.
+        // The unfiltered owner, for internals that must work mid-destruction
+        // (Transform needs its handle while OnDestroy runs).
+        internal GameObject RawGameObject => m_GameObject;
+
+        public Transform transform
+        {
+            get
+            {
+                GameObject go = m_GameObject;
+                return go != null ? go.transform : null;
+            }
+        }
+
+        internal override bool IsDestroyedInternal =>
+            base.IsDestroyedInternal ||
+            (m_GameObject != null && m_GameObject.IsDestroyedInternal);
+
         internal void Attach(GameObject go)
         {
             m_GameObject = go;

@@ -27,6 +27,9 @@ inline constexpr uint32_t kSectionMesh = fourcc('M', 'E', 'S', 'H');
 inline constexpr uint32_t kSectionTex = fourcc('T', 'E', 'X', ' ');
 inline constexpr uint32_t kSectionScene = fourcc('S', 'C', 'E', 'N');
 inline constexpr uint32_t kSectionMaterial = fourcc('M', 'A', 'T', 'L');
+// Packed NUL-terminated managed type names referenced by script components
+// (M7). Offsets in component payloads index into this section.
+inline constexpr uint32_t kSectionScripts = fourcc('S', 'C', 'R', 'P');
 
 // Plain CRC-32 (reflected, poly 0xEDB88320), the same the writer uses.
 uint32_t crc32(const void* data, uint32_t size);

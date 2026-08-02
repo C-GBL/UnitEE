@@ -23,6 +23,7 @@ add_executable(ps2ur_tests
     test_texcache.cpp
     test_batch.cpp
     test_p2b.cpp
+    test_world_handles.cpp
 )
 target_link_libraries(ps2ur_tests PRIVATE ps2ur GTest::gtest_main)
 

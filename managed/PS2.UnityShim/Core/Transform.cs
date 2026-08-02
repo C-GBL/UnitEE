@@ -1,58 +1,82 @@
-using System.Collections.Generic;
+using UnityEngine.Internal;
 
 namespace UnityEngine
 {
-    // TODO(native-backing): plain managed fields for now, chosen deliberately
-    // so the Editor play-mode stand-in can reuse this implementation as-is.
-    // On target these become views over the native scene data owned by ps2ur
-    // (plan section 6); the switch happens behind these same properties.
-    // TODO(spec missing: section 12): the managed shim spec defines the exact
-    // native-view mechanism.
+    // Native-backed transform (plan section 12.2): local TRS and the
+    // hierarchy live in ps2ur's entity table; every property here is a view
+    // through the bridge. World-space math is composed on the MANAGED side
+    // from the local values, exactly the algorithms Unity uses -- that is
+    // what the M7 golden-trace parity test measures. The renderer consumes
+    // the native world-matrix pass computed from the same local values.
     public class Transform : Component
     {
-        private Vector3 m_LocalPosition = Vector3.zero;
-        private Quaternion m_LocalRotation = Quaternion.identity;
-        private Vector3 m_LocalScale = Vector3.one;
-        private Transform m_Parent;
-        private readonly List<Transform> m_Children = new List<Transform>();
+        internal Transform(GameObject owner)
+        {
+            Attach(owner);
+        }
 
-        // Created only by GameObject; Unity forbids AddComponent<Transform>.
-        internal Transform() { }
+        internal int Handle => gameObjectInternal.Handle;
+
+        // gameObject is null-semantics-filtered; the transform itself needs
+        // the raw owner for handle access even mid-destruction.
+        private GameObject gameObjectInternal => base.RawGameObject;
 
         public Vector3 localPosition
         {
-            get => m_LocalPosition;
-            set => m_LocalPosition = value;
+            get { Native.ps2ur_tf_get_local_position(Handle, out Vector3 v); return v; }
+            set => Native.ps2ur_tf_set_local_position(Handle, value.x, value.y, value.z);
         }
 
         public Quaternion localRotation
         {
-            get => m_LocalRotation;
-            set => m_LocalRotation = value;
+            get { Native.ps2ur_tf_get_local_rotation(Handle, out Quaternion q); return q; }
+            set => Native.ps2ur_tf_set_local_rotation(Handle, value.x, value.y, value.z, value.w);
         }
 
         public Vector3 localScale
         {
-            get => m_LocalScale;
-            set => m_LocalScale = value;
+            get { Native.ps2ur_tf_get_local_scale(Handle, out Vector3 v); return v; }
+            set => Native.ps2ur_tf_set_local_scale(Handle, value.x, value.y, value.z);
         }
 
         public Vector3 position
         {
-            get => m_Parent == null ? m_LocalPosition : m_Parent.TransformPoint(m_LocalPosition);
-            set => m_LocalPosition = m_Parent == null ? value : m_Parent.InverseTransformPoint(value);
+            get
+            {
+                Transform p = parent;
+                return p == null ? localPosition : p.TransformPoint(localPosition);
+            }
+            set
+            {
+                Transform p = parent;
+                localPosition = p == null ? value : p.InverseTransformPoint(value);
+            }
         }
 
         public Quaternion rotation
         {
-            get => m_Parent == null ? m_LocalRotation : m_Parent.rotation * m_LocalRotation;
-            set => m_LocalRotation = m_Parent == null ? value : Quaternion.Inverse(m_Parent.rotation) * value;
+            get
+            {
+                Transform p = parent;
+                return p == null ? localRotation : p.rotation * localRotation;
+            }
+            set
+            {
+                Transform p = parent;
+                localRotation = p == null ? value : Quaternion.Inverse(p.rotation) * value;
+            }
         }
 
         // NOTE: componentwise product up the chain; like Unity's lossyScale it
         // is not meaningful under rotated non-uniform scale in a hierarchy.
-        public Vector3 lossyScale =>
-            m_Parent == null ? m_LocalScale : Vector3.Scale(m_Parent.lossyScale, m_LocalScale);
+        public Vector3 lossyScale
+        {
+            get
+            {
+                Transform p = parent;
+                return p == null ? localScale : Vector3.Scale(p.lossyScale, localScale);
+            }
+        }
 
         public Vector3 forward => rotation * Vector3.forward;
         public Vector3 right => rotation * Vector3.right;
@@ -60,7 +84,14 @@ namespace UnityEngine
 
         public Transform parent
         {
-            get => m_Parent;
+            get
+            {
+                int parentHandle = Native.ps2ur_tf_get_parent(Handle);
+                if (parentHandle == 0)
+                    return null;
+                GameObject go = Runtime.GetOrCreateWrapper(parentHandle);
+                return go != null ? go.transform : null;
+            }
             set => SetParent(value, true);
         }
 
@@ -68,9 +99,10 @@ namespace UnityEngine
 
         public void SetParent(Transform newParent, bool worldPositionStays)
         {
-            if (ReferenceEquals(newParent, m_Parent)) return;
-            // TODO(native-backing): cycle detection deferred to the native
-            // scene graph, which owns hierarchy validity on target.
+            Transform current = parent;
+            if (ReferenceEquals(newParent, current)) return;
+            if (newParent != null && ReferenceEquals(newParent, this)) return;
+
             Vector3 keepPos = default;
             Quaternion keepRot = default;
             if (worldPositionStays)
@@ -78,9 +110,7 @@ namespace UnityEngine
                 keepPos = position;
                 keepRot = rotation;
             }
-            if (m_Parent != null) m_Parent.m_Children.Remove(this);
-            m_Parent = newParent;
-            if (m_Parent != null) m_Parent.m_Children.Add(this);
+            Native.ps2ur_tf_set_parent(Handle, newParent != null ? newParent.Handle : 0);
             if (worldPositionStays)
             {
                 position = keepPos;
@@ -88,26 +118,63 @@ namespace UnityEngine
             }
         }
 
-        public int childCount => m_Children.Count;
+        public int childCount => Native.ps2ur_tf_child_count(Handle);
 
-        public Transform GetChild(int index) => m_Children[index];
+        public Transform GetChild(int index)
+        {
+            int childHandle = Native.ps2ur_tf_get_child(Handle, index);
+            if (childHandle == 0)
+                return null;
+            GameObject go = Runtime.GetOrCreateWrapper(childHandle);
+            return go != null ? go.transform : null;
+        }
 
-        public Transform root => m_Parent == null ? this : m_Parent.root;
+        public Transform root
+        {
+            get
+            {
+                Transform t = this;
+                for (Transform p = t.parent; p != null; p = t.parent)
+                    t = p;
+                return t;
+            }
+        }
+
+        // Rotates by Euler angles. Space.Self (the default in Unity) composes
+        // on the right of the LOCAL rotation.
+        public void Rotate(float xAngle, float yAngle, float zAngle)
+        {
+            localRotation = localRotation * Quaternion.Euler(xAngle, yAngle, zAngle);
+        }
+
+        public void Rotate(Vector3 eulers) => Rotate(eulers.x, eulers.y, eulers.z);
+
+        public void Translate(Vector3 translation)
+        {
+            // Space.Self: the translation is in local orientation.
+            position += rotation * translation;
+        }
+
+        public void Translate(float x, float y, float z) => Translate(new Vector3(x, y, z));
 
         // Local space of this transform -> world space.
         public Vector3 TransformPoint(Vector3 point)
         {
-            Vector3 p = new Vector3(point.x * m_LocalScale.x, point.y * m_LocalScale.y, point.z * m_LocalScale.z);
-            p = m_LocalRotation * p + m_LocalPosition;
-            return m_Parent == null ? p : m_Parent.TransformPoint(p);
+            Vector3 s = localScale;
+            Vector3 p = new Vector3(point.x * s.x, point.y * s.y, point.z * s.z);
+            p = localRotation * p + localPosition;
+            Transform par = parent;
+            return par == null ? p : par.TransformPoint(p);
         }
 
         // World space -> local space of this transform.
         public Vector3 InverseTransformPoint(Vector3 point)
         {
-            Vector3 p = m_Parent == null ? point : m_Parent.InverseTransformPoint(point);
-            p = Quaternion.Inverse(m_LocalRotation) * (p - m_LocalPosition);
-            return new Vector3(SafeDiv(p.x, m_LocalScale.x), SafeDiv(p.y, m_LocalScale.y), SafeDiv(p.z, m_LocalScale.z));
+            Transform par = parent;
+            Vector3 p = par == null ? point : par.InverseTransformPoint(point);
+            p = Quaternion.Inverse(localRotation) * (p - localPosition);
+            Vector3 s = localScale;
+            return new Vector3(SafeDiv(p.x, s.x), SafeDiv(p.y, s.y), SafeDiv(p.z, s.z));
         }
 
         // Direction transforms are rotation-only (Unity semantics).
@@ -118,8 +185,9 @@ namespace UnityEngine
         {
             get
             {
-                Matrix4x4 local = Matrix4x4.TRS(m_LocalPosition, m_LocalRotation, m_LocalScale);
-                return m_Parent == null ? local : m_Parent.localToWorldMatrix * local;
+                Matrix4x4 local = Matrix4x4.TRS(localPosition, localRotation, localScale);
+                Transform par = parent;
+                return par == null ? local : par.localToWorldMatrix * local;
             }
         }
 
