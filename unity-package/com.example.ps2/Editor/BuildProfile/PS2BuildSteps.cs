@@ -911,6 +911,30 @@ namespace Ps2.Editor
                 return;
             }
 
+            // Delete the previous image OURSELVES, for two reasons that
+            // compounded in the field (verify-log M12.5): mkps2iso asks
+            // "overwrite? <Y/n>" on an existing file, a question nothing can
+            // answer in a headless pipeline -- and when PCSX2 is still
+            // running with the previous build's ISO mounted, Windows holds a
+            // lock and the write fails with a message that names neither
+            // cause. Deleting first turns both into one actionable error.
+            string isoPath = ctx.IsoPath;
+            if (File.Exists(isoPath))
+            {
+                try
+                {
+                    File.Delete(isoPath);
+                }
+                catch (IOException)
+                {
+                    throw new PS2BuildException(
+                        $"'{isoPath}' is open in another program, almost " +
+                        "certainly PCSX2 with the previous build's disc still " +
+                        "mounted. Close PCSX2 (or eject the disc in it) and " +
+                        "build again.");
+                }
+            }
+
             string script = Path.Combine(ctx.IntermediateDirectory, "disc.xml");
             WriteIsoScript(ctx, stage, script);
 
