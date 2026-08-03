@@ -50,6 +50,13 @@ public:
     // Flat screen-space rectangle (M8 task 8: the uGUI Image primitive).
     // PS2 alpha: a < 0x80 blends, 0x80 is opaque. Depth test is off, like
     // all overlay drawing.
+    // A textured sprite over whatever texture the caller bound (uGUI
+    // Image/RawImage, M12.5 task 5). Full texture stretched to the rect;
+    // colour is the tint, alpha in the PS2 0..0x80 range.
+    void textured_rect(GsDevice& device, int32_t x, int32_t y, int32_t w,
+                       int32_t h, uint32_t tex_w, uint32_t tex_h, uint8_t r,
+                       uint8_t g, uint8_t b, uint8_t a);
+
     void fill_rect(GsDevice& device, int32_t x, int32_t y, int32_t w,
                    int32_t h, uint8_t r, uint8_t g, uint8_t b,
                    uint8_t a = 0x80);

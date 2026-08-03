@@ -145,7 +145,7 @@ ComponentRef[component_count] {
                             // 4 Script (M7), 5 SkinnedMeshRenderer (M9),
                             // 6 Rigidbody (M11), 7 Animator (M12.5),
                             // 8 AudioSource, 9 AudioListener,
-                            // 10 PS2ParticleSystem (M12.5)
+                            // 10 PS2ParticleSystem, 11 UIElement (M12.5)
     u16 pad
     u32 data_offset         // from the start of this section
 }
@@ -196,6 +196,21 @@ PS2ParticleSystem (M12.5, 64B, ADR-011) {
                    u32 colour_start, colour_end;  // RGBA8
                    f32 gravity;              // multiplier of 9.81 down
                    u32 max_particles }       // clamped to the runtime's 128
+UIElement (M12.5 task 5, 88B) {
+                   u32 kind;                 // low8: 0 rect, 1 image, 2 text;
+                                             // bits 8-15 managed kind
+                                             // (Image/RawImage/Text);
+                                             // bits 16+ role (1 button,
+                                             // 2 slider)
+                   f32 x, y, w, h;           // screen px, top-left, BAKED
+                                             // RectTransform resolution
+                   u32 colour;               // RGBA8, alpha 0..0x80
+                   u32 texture;              // TEX index; -1 untextured
+                   i32 link;                 // slider: fill element index
+                   u32 text_scale;           // baked-font integer scale
+                   u8  text[48] }            // NUL text; for a slider these
+                                             // carry f32 value, f32 max fill
+                                             // width instead
 ```
 
 Readers accept the 12-byte camera and default the M8 tail (old runtimes

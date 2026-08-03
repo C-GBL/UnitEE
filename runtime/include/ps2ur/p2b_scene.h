@@ -56,6 +56,13 @@ inline constexpr uint16_t kComponentAnimator = 7;
 inline constexpr uint16_t kComponentAudioSource = 8;
 inline constexpr uint16_t kComponentAudioListener = 9;
 inline constexpr uint16_t kComponentParticleSystem = 10;
+inline constexpr uint16_t kComponentUIElement = 11;
+
+// uGUI subset (M12.5 task 5). Layout is BAKED at export -- real
+// RectTransform anchor math resolved against the framebuffer resolution --
+// so the runtime holds finished screen rects that scripts may still move.
+inline constexpr uint32_t kMaxUIElements = 32;
+inline constexpr uint32_t kMaxUITextLength = 48;
 
 // Particles (M12.5 task 4, ADR-011). Budgeted, not unbounded: the pool is
 // the contract, and an emitter cannot exceed it.
@@ -230,6 +237,23 @@ struct ParticleSystemState {
     Particle particles[kMaxParticlesPerSystem];
 };
 
+// One drawable uGUI element (M12.5 task 5): a colour rect, a textured
+// sprite, or a run of baked-font text, in hierarchy (painter's) order.
+// role marks what the managed side builds on top: a Button's target
+// graphic, or a Slider's background (link = its fill element).
+struct UIElement {
+    int32_t entity = -1;
+    uint16_t kind = 0;   // 0 rect, 1 image, 2 text
+    uint16_t role = 0;   // 0 none, 1 button, 2 slider background
+    float x = 0, y = 0, w = 0, h = 0; // screen pixels, top-left origin
+    uint32_t colour = 0x80FFFFFFu;    // RGBA8, alpha already in PS2 0..0x80
+    uint32_t texture = 0xFFFFFFFFu;   // TEX index; -1 = untextured
+    int32_t link = -1;                // slider: fill element index
+    uint32_t text_scale = 1;
+    bool visible = true;
+    char text[kMaxUITextLength] = {};
+};
+
 // A skinned mesh (M9). Batches are zero-copy blobs like rigid meshes, but
 // each carries the bone table its vertices' local slots index.
 struct LoadedSkinnedMesh {
@@ -356,6 +380,17 @@ public:
     // The system on an entity, or -1; how the bridge addresses them.
     int32_t particle_system_for_entity(int32_t entity_index) const;
 
+    // ---- M12.5 task 5: uGUI ----------------------------------------------
+
+    uint32_t ui_element_count() const { return m_ui_count; }
+    const UIElement& ui_element(uint32_t i) const { return m_ui[i]; }
+    int32_t ui_element_for_entity(int32_t entity_index) const;
+    // Script-facing mutation, addressed by element index (the bridge).
+    void ui_set_rect(uint32_t i, float x, float y, float w, float h);
+    void ui_set_colour(uint32_t i, uint32_t rgba);
+    void ui_set_text(uint32_t i, const char* text);
+    void ui_set_visible(uint32_t i, bool visible);
+
     // Steps every playing system: emission, integration, expiry. Call with
     // world matrices CURRENT -- world-space systems spawn from the entity's
     // world transform.
@@ -436,6 +471,9 @@ private:
     ParticleEmitter m_particle_emitters[kMaxParticleSystems];
     ParticleSystemState m_particle_states[kMaxParticleSystems];
     uint32_t m_particle_count = 0;
+
+    UIElement m_ui[kMaxUIElements];
+    uint32_t m_ui_count = 0;
 
     AnimatorRef m_animator_refs[kMaxAnimators];
     uint32_t m_animator_ref_count = 0;

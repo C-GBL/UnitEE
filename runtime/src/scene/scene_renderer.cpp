@@ -74,6 +74,12 @@ inline gfx::Qword qword4f(float x, float y, float z, float w)
 
 } // namespace
 
+bool SceneRenderer::init_ui(gfx::GsDevice& device)
+{
+    m_ui_ready = m_ui_overlay.init(device);
+    return m_ui_ready;
+}
+
 bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
                            World& world, const RendererPrograms& programs,
                            BindTextureFn bind_texture, void* bind_user,
@@ -568,6 +574,57 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
             local.kicks += 1;
         }
         device.set_material_state(0, 0, false, true); // restore opaque
+    }
+
+    // --- uGUI canvas (M12.5 task 5) -----------------------------------------
+    //
+    // A SECOND frame packet, after every 3D kick has completed, so the
+    // canvas is genuinely on top -- the M8 debug overlay rides the CLEAR
+    // packet and 3D draws over it, which is fine for a stats readout and
+    // wrong for a menu. Elements draw in table order, which the exporter
+    // wrote in hierarchy order: painter's algorithm, exactly like uGUI.
+    if (m_ui_ready && world.ui_element_count() > 0) {
+        device.begin_frame();
+        for (uint32_t i = 0; i < world.ui_element_count(); ++i) {
+            const UIElement& ui = world.ui_element(i);
+            if (!ui.visible || ui.w <= 0.0f || ui.h <= 0.0f) {
+                continue;
+            }
+            const uint8_t r = static_cast<uint8_t>(ui.colour & 0xFFu);
+            const uint8_t g = static_cast<uint8_t>((ui.colour >> 8) & 0xFFu);
+            const uint8_t b = static_cast<uint8_t>((ui.colour >> 16) & 0xFFu);
+            const uint8_t a = static_cast<uint8_t>((ui.colour >> 24) & 0xFFu);
+            const int32_t x = static_cast<int32_t>(ui.x);
+            const int32_t y = static_cast<int32_t>(ui.y);
+            const int32_t w = static_cast<int32_t>(ui.w);
+            const int32_t h = static_cast<int32_t>(ui.h);
+            switch (ui.kind) {
+                case 1: // image
+                    if (ui.texture != 0xFFFFFFFFu && bind_texture != nullptr) {
+                        bind_texture(bind_user, ui.texture);
+                        // The bind callback cannot say the texture's size;
+                        // 256x256 is the profile ceiling and UV clamps make
+                        // smaller textures stretch correctly via their own
+                        // TEX0 dimensions -- the bind sets those.
+                        m_ui_overlay.textured_rect(device, x, y, w, h, 256,
+                                                   256, r, g, b, a);
+                        break;
+                    }
+                    // An image with no texture is Unity's white sprite: a
+                    // tinted rect.
+                    m_ui_overlay.fill_rect(device, x, y, w, h, r, g, b, a);
+                    break;
+                case 2: // text
+                    m_ui_overlay.set_colour(r, g, b);
+                    m_ui_overlay.set_scale(ui.text_scale);
+                    m_ui_overlay.draw_text(device, x, y, ui.text);
+                    break;
+                default: // rect
+                    m_ui_overlay.fill_rect(device, x, y, w, h, r, g, b, a);
+                    break;
+            }
+        }
+        device.end_frame(/*flip=*/false);
     }
 
     if (stats != nullptr) {

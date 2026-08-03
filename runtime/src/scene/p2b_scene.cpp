@@ -71,6 +71,7 @@ bool World::load(const io::P2bFile& file)
     m_audio_source_count = 0;
     m_listener_entity = -1;
     m_particle_count = 0;
+    m_ui_count = 0;
     m_camera = Camera{};
     m_light = DirectionalLight{};
     m_error = "";
@@ -735,6 +736,39 @@ bool World::load(const io::P2bFile& file)
                     fresh.pending_emit = fx.burst_count;
                 }
                 ++m_particle_count;
+            } else if (type == kComponentUIElement) {
+                // 88 bytes; UIElement in declaration order, text inline.
+                if (!v.ok(data_off, 88u)) {
+                    m_error = "ui element payload truncated";
+                    return false;
+                }
+                if (m_ui_count >= kMaxUIElements) {
+                    m_error = "too many ui elements";
+                    return false;
+                }
+                UIElement& ui = m_ui[m_ui_count];
+                ui = UIElement{};
+                ui.entity = static_cast<int32_t>(i);
+                const uint32_t kind_role = v.u32(data_off + 0);
+                ui.kind = static_cast<uint16_t>(kind_role & 0xFFFFu);
+                ui.role = static_cast<uint16_t>(kind_role >> 16);
+                ui.x = v.f32(data_off + 4);
+                ui.y = v.f32(data_off + 8);
+                ui.w = v.f32(data_off + 12);
+                ui.h = v.f32(data_off + 16);
+                ui.colour = v.u32(data_off + 20);
+                ui.texture = v.u32(data_off + 24);
+                ui.link = v.i32(data_off + 28);
+                ui.text_scale = v.u32(data_off + 32);
+                if (ui.text_scale < 1u) {
+                    ui.text_scale = 1u;
+                }
+                for (uint32_t b = 0; b < kMaxUITextLength; ++b) {
+                    ui.text[b] =
+                        static_cast<char>(v.data[data_off + 36u + b]);
+                }
+                ui.text[kMaxUITextLength - 1] = ' ';
+                ++m_ui_count;
             } else if (type == kComponentAnimator) {
                 // 8 bytes: controller index and the layer count baked.
                 if (!v.ok(data_off, 8u)) {
@@ -908,6 +942,8 @@ bool World::append(const io::P2bFile& file)
     } else if (m_particle_count + incoming.m_particle_count >
                kMaxParticleSystems) {
         m_error = "additive scene does not fit: particle systems";
+    } else if (m_ui_count + incoming.m_ui_count > kMaxUIElements) {
+        m_error = "additive scene does not fit: ui elements";
     } else if (animator_ref_base + incoming.m_animator_ref_count >
                kMaxAnimators) {
         m_error = "additive scene does not fit: animators";
@@ -1004,6 +1040,16 @@ bool World::append(const io::P2bFile& file)
         m_particle_emitters[m_particle_count] = fx;
         m_particle_states[m_particle_count] = incoming.m_particle_states[i];
         ++m_particle_count;
+    }
+
+    const uint32_t ui_base = m_ui_count;
+    for (uint32_t i = 0; i < incoming.m_ui_count; ++i) {
+        UIElement ui = incoming.m_ui[i];
+        ui.entity += static_cast<int32_t>(entity_base);
+        if (ui.link >= 0) {
+            ui.link += static_cast<int32_t>(ui_base);
+        }
+        m_ui[m_ui_count++] = ui;
     }
 
     for (uint32_t i = 0; i < incoming.m_rigidbody_count; ++i) {
@@ -1375,6 +1421,53 @@ bool World::entity_visible(int32_t index) const
         index = e.parent;
     }
     return true;
+}
+
+
+int32_t World::ui_element_for_entity(int32_t entity_index) const
+{
+    for (uint32_t i = 0; i < m_ui_count; ++i) {
+        if (m_ui[i].entity == entity_index) {
+            return static_cast<int32_t>(i);
+        }
+    }
+    return -1;
+}
+
+void World::ui_set_rect(uint32_t i, float x, float y, float w, float h)
+{
+    if (i < m_ui_count) {
+        m_ui[i].x = x;
+        m_ui[i].y = y;
+        m_ui[i].w = w;
+        m_ui[i].h = h;
+    }
+}
+
+void World::ui_set_colour(uint32_t i, uint32_t rgba)
+{
+    if (i < m_ui_count) {
+        m_ui[i].colour = rgba;
+    }
+}
+
+void World::ui_set_text(uint32_t i, const char* text)
+{
+    if (i >= m_ui_count || text == nullptr) {
+        return;
+    }
+    uint32_t b = 0;
+    for (; b + 1 < kMaxUITextLength && text[b] != ' '; ++b) {
+        m_ui[i].text[b] = text[b];
+    }
+    m_ui[i].text[b] = ' ';
+}
+
+void World::ui_set_visible(uint32_t i, bool visible)
+{
+    if (i < m_ui_count) {
+        m_ui[i].visible = visible;
+    }
 }
 
 } // namespace scene

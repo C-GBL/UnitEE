@@ -187,6 +187,41 @@ void DebugOverlay::fill_rect(GsDevice& device, int32_t x, int32_t y,
     packet.add_ad(GsReg::TEST_1, gs_test(false, 0, 0, 0, false, 0, true, 2));
 }
 
+void DebugOverlay::textured_rect(GsDevice& device, int32_t x, int32_t y,
+                                 int32_t w, int32_t h, uint32_t tex_w,
+                                 uint32_t tex_h, uint8_t r, uint8_t g,
+                                 uint8_t b, uint8_t a)
+{
+    // One textured sprite over whatever texture the CALLER just bound --
+    // uGUI Image/RawImage (M12.5 task 5). UV addressing (texel fixed point),
+    // full texture stretched to the rect; RGBAQ modulates, so the colour is
+    // Unity's tint. Alpha blend is always on: UI art leans on its alpha.
+    if (!m_initialized || w <= 0 || h <= 0) {
+        return;
+    }
+    GsPacket& packet = device.packet();
+    packet.begin_packed_ad(3);
+    packet.add_ad(GsReg::TEST_1, gs_test(false, 0, 0, 0, false, 0, false, 1));
+    packet.add_ad(GsReg::ALPHA_1, gs_alpha(0, 1, 0, 1));
+    packet.add_ad(GsReg::PRMODECONT, 1);
+
+    const uint64_t prim = gs_prim(GsPrim::Sprite, false, /*textured=*/true,
+                                  false, /*blend=*/true, false, /*FST*/ true,
+                                  0, false);
+    packet.begin_packed(2, 3, gs_reglist(GsReg::RGBAQ, GsReg::UV, GsReg::XYZ2),
+                        false, true, prim);
+    packet.add_qword(gs_packed_rgbaq(r, g, b, a));
+    packet.add_qword(gs_packed_uv(0, 0));
+    packet.add_qword(gs_packed_xyz(gs_coord(x), gs_coord(y), 0));
+    packet.add_qword(gs_packed_rgbaq(r, g, b, a));
+    packet.add_qword(gs_packed_uv(tex_w << 4, tex_h << 4));
+    packet.add_qword(gs_packed_xyz(gs_coord(x + w), gs_coord(y + h), 0));
+
+    // Restore the depth test for whatever draws next.
+    packet.begin_packed_ad(1);
+    packet.add_ad(GsReg::TEST_1, gs_test(false, 0, 0, 0, false, 0, true, 2));
+}
+
 void DebugOverlay::printf_at(GsDevice& device, int32_t x, int32_t y,
                              const char* fmt, ...)
 {

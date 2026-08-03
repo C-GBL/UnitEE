@@ -18,6 +18,7 @@
 #include "ps2ur/dma_chain.h"
 #include "ps2ur/gs_device.h"
 #include "ps2ur/p2b_scene.h"
+#include "ps2ur/gs_overlay.h"
 #include "ps2ur/render_queue.h"
 
 #include <cstdint>
@@ -57,6 +58,11 @@ public:
     // (overlay text, HUD sprites) rides the same PATH3 packet as the clear.
     typedef void (*OverlayFn)(void* user);
 
+    // Uploads the baked font atlas and enables the uGUI pass (M12.5 task
+    // 5). Optional: without it, scenes with UI elements render everything
+    // else and skip the canvas.
+    bool init_ui(gfx::GsDevice& device);
+
     // Renders one frame: clear per camera flags, cull, sort, emit. The
     // world's matrices must be current (call update_world_matrices first).
     // Returns false on chain overflow/kick failure.
@@ -67,6 +73,8 @@ public:
 
 private:
     gfx::RenderQueue m_queue;
+    gfx::DebugOverlay m_ui_overlay;
+    bool m_ui_ready = false;
 };
 
 } // namespace scene

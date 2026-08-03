@@ -424,3 +424,25 @@ qwords = 234, under the 255-qword VIF NUM ceiling) in a static scratch
 reused after each per-system kick+wait. Bursts are QUEUED at load and fired
 on the first update -- spawning at parse time would read world matrices
 that do not exist yet.
+
+## uGUI subset (M12.5 task 5, 2026-08-03)
+
+Retained draw table in the World (component 11), rects BAKED at export by
+real RectTransform anchor math against the framebuffer, drawn by the
+renderer in a SECOND frame packet after every 3D kick -- the M8 debug
+overlay rides the CLEAR packet and 3D draws over it, fine for stats, wrong
+for a menu. Interaction is entirely managed: PS2UINavigation moves D-pad
+focus in hierarchy order, Cross submits, Left/Right step sliders; the
+Slider writes its fill element's rect through the same bridge setter
+scripts use. Deviations 30-31.
+
+And the "intermittent golden flake" is DEAD, with a diagnosis that changes
+its meaning: check.sh told the emulator runner to wait for "GOLDEN_TILE",
+so the runner declared success on the FIRST tile line and killed the
+emulator mid-emission -- the capture was a PREFIX of the image (64 or 116
+of 02-scene-graph's 512 tiles, depending on flush timing). Single-burst
+samples usually survived the race; 02's eight poses spread over 300 frames
+usually did not. The runner now waits for the sample's COMPLETION token
+(PS2UR_TOKEN_*), and 02 passes 512/512 three runs straight. A retry-once
+guard remains in check.sh and now exists to catch the next NEW flake, with
+its message saying a real regression fails twice.

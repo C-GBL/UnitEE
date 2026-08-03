@@ -2,7 +2,8 @@
     "name": "com.example.ps2.Editor",
     "rootNamespace": "Ps2.Editor",
     "references": [
-        "com.example.ps2.Runtime"
+        "com.example.ps2.Runtime",
+        "UnityEngine.UI"
     ],
     "includePlatforms": [
         "Editor"

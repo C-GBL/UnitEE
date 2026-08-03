@@ -314,5 +314,25 @@ namespace UnityEngine.Internal
         // Live particles right now; PS2ParticleSystem.particleCount.
         [DllImport("__Internal")]
         internal static extern int ps2ur_particles_count(int entity_handle);
+
+        // The uGUI draw-table index for an entity, or -1. Elements are flat-table indexed like colliders; managed UI components hold this for their setters.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_ui_element_for_entity(int entity_handle);
+
+        // Moves/resizes an element in screen pixels, top-left origin. Layout was baked at export; this is how scripts (and the Slider fill) animate it.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_ui_set_rect(int element, float x, float y, float w, float h);
+
+        // Tint, RGBA8 with alpha already in the PS2 0..0x80 range. Graphic.color and the navigation focus highlight write through this.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_ui_set_colour(int element, uint rgba);
+
+        // Replaces a text element's string (48-byte cap, baked 8x8 font). cstr on a set-on-change path, not per frame.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_ui_set_text(int element, string text);
+
+        // Shows/hides an element; Behaviour.enabled on the managed graphics.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_ui_set_visible(int element, int visible);
     }
 }

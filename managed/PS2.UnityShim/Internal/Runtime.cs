@@ -227,6 +227,75 @@ namespace UnityEngine.Internal
             go.RegisterComponent(system);
         }
 
+        // uGUI (M12.5 task 5). One graphic per element; Button/Slider ride
+        // the same GameObjects and register with the pad navigator in call
+        // order, which is export order, which is hierarchy order.
+        internal static void CreateUIGraphic(int entityHandle, int element,
+                                             int kind)
+        {
+            GameObject go = GetOrCreateWrapper(entityHandle);
+            if (go == null)
+            {
+                Debug.LogError("CreateUIGraphic: dead entity handle");
+                return;
+            }
+            UI.Graphic graphic;
+            if (kind == 2)
+            {
+                graphic = new UI.Text();
+            }
+            else if (kind == 1)
+            {
+                graphic = new UI.RawImage();
+            }
+            else
+            {
+                graphic = new UI.Image();
+            }
+            graphic.Element = element;
+            graphic.Attach(go);
+            go.RegisterComponent(graphic);
+        }
+
+        internal static void CreateUIButton(int entityHandle, int element)
+        {
+            GameObject go = GetOrCreateWrapper(entityHandle);
+            if (go == null)
+            {
+                Debug.LogError("CreateUIButton: dead entity handle");
+                return;
+            }
+            var button = new UI.Button();
+            button.Attach(go);
+            button.SetTarget(go.GetComponent<UI.Graphic>());
+            go.RegisterComponent(button);
+            PS2UINavigation.Register(button);
+        }
+
+        internal static void CreateUISlider(int entityHandle, int fillElement,
+                                            float fillX, float fillY,
+                                            float fillW, float fillH,
+                                            float initialValue)
+        {
+            GameObject go = GetOrCreateWrapper(entityHandle);
+            if (go == null)
+            {
+                Debug.LogError("CreateUISlider: dead entity handle");
+                return;
+            }
+            var slider = new UI.Slider();
+            slider.Attach(go);
+            slider.FillElement = fillElement;
+            slider.FillX = fillX;
+            slider.FillY = fillY;
+            slider.FillMaxW = fillW;
+            slider.FillH = fillH;
+            slider.SetTarget(go.GetComponent<UI.Graphic>());
+            slider.Bootstrap(initialValue);
+            go.RegisterComponent(slider);
+            PS2UINavigation.Register(slider);
+        }
+
         internal static void CreateAudioListener(int entityHandle)
         {
             GameObject go = GetOrCreateWrapper(entityHandle);
@@ -252,6 +321,9 @@ namespace UnityEngine.Internal
         // coroutine resume, LateUpdate, then end-of-frame destruction.
         internal static void Tick(float dt)
         {
+            // Pad-driven UI focus, before behaviours -- the order Unity's
+            // EventSystem runs relative to script Update (M12.5 task 5).
+            PS2UINavigation.Update();
             s_Time += dt;
             s_FrameCount += 1;
             Time.Sync(s_Time, dt, s_Time, Time.fixedDeltaTime, s_FrameCount);

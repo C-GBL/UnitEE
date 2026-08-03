@@ -1432,6 +1432,94 @@
           "type": "i32"
         }
       ]
+    },
+    {
+      "name": "ps2ur_ui_element_for_entity",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "The uGUI draw-table index for an entity, or -1. Elements are flat-table indexed like colliders; managed UI components hold this for their setters.",
+      "returns": "i32",
+      "params": [
+        {
+          "name": "entity_handle",
+          "type": "i32"
+        }
+      ]
+    },
+    {
+      "name": "ps2ur_ui_set_rect",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "Moves/resizes an element in screen pixels, top-left origin. Layout was baked at export; this is how scripts (and the Slider fill) animate it.",
+      "returns": "void",
+      "params": [
+        {
+          "name": "element",
+          "type": "i32"
+        },
+        {
+          "name": "x",
+          "type": "f32"
+        },
+        {
+          "name": "y",
+          "type": "f32"
+        },
+        {
+          "name": "w",
+          "type": "f32"
+        },
+        {
+          "name": "h",
+          "type": "f32"
+        }
+      ]
+    },
+    {
+      "name": "ps2ur_ui_set_colour",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "Tint, RGBA8 with alpha already in the PS2 0..0x80 range. Graphic.color and the navigation focus highlight write through this.",
+      "returns": "void",
+      "params": [
+        {
+          "name": "element",
+          "type": "i32"
+        },
+        {
+          "name": "rgba",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "ps2ur_ui_set_text",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "Replaces a text element's string (48-byte cap, baked 8x8 font). cstr on a set-on-change path, not per frame.",
+      "returns": "void",
+      "params": [
+        {
+          "name": "element",
+          "type": "i32"
+        },
+        {
+          "name": "text",
+          "type": "cstr"
+        }
+      ]
+    },
+    {
+      "name": "ps2ur_ui_set_visible",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "Shows/hides an element; Behaviour.enabled on the managed graphics.",
+      "returns": "void",
+      "params": [
+        {
+          "name": "element",
+          "type": "i32"
+        },
+        {
+          "name": "visible",
+          "type": "i32"
+        }
+      ]
     }
   ]
 }

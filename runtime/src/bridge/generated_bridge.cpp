@@ -84,6 +84,11 @@ const Ps2urBridgeEntry ps2ur_bridge_table[] = {
     { "ps2ur_particles_emit", reinterpret_cast<const void*>(&ps2ur_particles_emit) },
     { "ps2ur_particles_is_playing", reinterpret_cast<const void*>(&ps2ur_particles_is_playing) },
     { "ps2ur_particles_count", reinterpret_cast<const void*>(&ps2ur_particles_count) },
+    { "ps2ur_ui_element_for_entity", reinterpret_cast<const void*>(&ps2ur_ui_element_for_entity) },
+    { "ps2ur_ui_set_rect", reinterpret_cast<const void*>(&ps2ur_ui_set_rect) },
+    { "ps2ur_ui_set_colour", reinterpret_cast<const void*>(&ps2ur_ui_set_colour) },
+    { "ps2ur_ui_set_text", reinterpret_cast<const void*>(&ps2ur_ui_set_text) },
+    { "ps2ur_ui_set_visible", reinterpret_cast<const void*>(&ps2ur_ui_set_visible) },
 };
 
 const int ps2ur_bridge_table_count =

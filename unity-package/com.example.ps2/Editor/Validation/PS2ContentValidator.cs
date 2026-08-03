@@ -61,6 +61,10 @@ namespace Ps2.Editor
             // M12.5: task 1 (both rig kinds) and task 2.
             "SkinnedMeshRenderer", "Animator", "AudioSource", "AudioListener",
             "PS2ParticleSystem",
+            // M12.5 task 5: the uGUI subset, plus the harness components a
+            // canvas drags in that export as nothing and harm nothing.
+            "Canvas", "CanvasRenderer", "Image", "RawImage", "Text",
+            "Button", "Slider", "CanvasScaler", "GraphicRaycaster",
         };
 
         /// <summary>
@@ -72,6 +76,15 @@ namespace Ps2.Editor
         private static readonly Dictionary<string, string> DropReasons =
             new Dictionary<string, string>
             {
+                ["EventSystem"] =
+                    "there is no pointer on a DualShock 2. Focus moves with " +
+                    "the D-pad through PS2UINavigation (automatic for " +
+                    "exported Buttons and Sliders); the EventSystem object " +
+                    "is simply not needed and does nothing on target.",
+                ["StandaloneInputModule"] =
+                    "rides EventSystem; PS2UINavigation replaces both.",
+                ["InputSystemUIInputModule"] =
+                    "rides EventSystem; PS2UINavigation replaces both.",
                 ["ParticleSystem"] =
                     "Unity's ParticleSystem (curves, sub-emitters, GPU sim) " +
                     "has no PS2 equivalent. Use the PS2ParticleSystem " +

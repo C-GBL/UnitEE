@@ -29,6 +29,7 @@ namespace Ps2.Editor
             public AudioSource Audio;           // M12.5 task 2, or null
             public bool Listener;               // has an AudioListener
             public Ps2.Runtime.PS2ParticleSystem Particles; // task 4, or null
+            public UIRecord Ui;                 // task 5, or null
         }
 
         // The rig sections. Normally baked from the scene's own assets by
@@ -81,6 +82,24 @@ namespace Ps2.Editor
         // Pre-built SND section (M10), supplied by the audio export
         // entry point the same way PendingSkin supplies the rig.
         internal static byte[] PendingSound;
+
+        // One uGUI element (M12.5 task 5), captured during the walk with its
+        // screen rect already resolved -- real RectTransform anchor math
+        // against the profile framebuffer, baked at export (deviation 30).
+        internal sealed class UIRecord
+        {
+            public int DrawKind;      // 0 rect, 1 image, 2 text
+            public int ManagedKind;   // 0 Image, 1 RawImage, 2 Text
+            public float X, Y, W, H;  // screen px, top-left origin
+            public Color Colour = Color.white;
+            public Texture2D Texture;
+            public string Text = "";
+            public int TextScale = 1;
+            public int Role;          // 0 none, 1 button, 2 slider
+            public Transform SliderFill;
+            public float SliderValue;
+            public float SliderMaxW;
+        }
 
         private sealed class MeshKey
         {
@@ -172,6 +191,12 @@ namespace Ps2.Editor
                 {
                     textureLookup[fx] = textures.Count;
                     textures.Add(fx);
+                }
+                Texture2D ui = e.Ui != null ? e.Ui.Texture : null;
+                if (ui != null && !textureLookup.ContainsKey(ui))
+                {
+                    textureLookup[ui] = textures.Count;
+                    textures.Add(ui);
                 }
             }
 
@@ -465,6 +490,7 @@ namespace Ps2.Editor
             record.Audio = t.GetComponent<AudioSource>();
             record.Listener = t.GetComponent<AudioListener>() != null;
             record.Particles = t.GetComponent<Ps2.Runtime.PS2ParticleSystem>();
+            record.Ui = CaptureUI(t);
 
             var camera = t.GetComponent<Camera>();
             if (camera != null)
@@ -541,6 +567,129 @@ namespace Ps2.Editor
             return 0;
         }
 
+        // Resolves a RectTransform chain to screen pixels against the
+        // framebuffer -- the real anchor/offset math, so authored layouts
+        // survive exactly; only the CanvasScaler is ignored (deviation 30:
+        // the reference resolution IS the framebuffer).
+        private static Rect ResolveScreenRect(RectTransform rt, float screenW,
+                                              float screenH)
+        {
+            var chain = new List<RectTransform>();
+            for (RectTransform r = rt; r != null; r = r.parent as RectTransform)
+            {
+                if (r.GetComponent<Canvas>() != null)
+                    break;
+                chain.Add(r);
+            }
+            var rect = new Rect(0, 0, screenW, screenH);
+            for (int i = chain.Count - 1; i >= 0; i--)
+            {
+                RectTransform r = chain[i];
+                float xMin = rect.xMin + r.anchorMin.x * rect.width + r.offsetMin.x;
+                float xMax = rect.xMin + r.anchorMax.x * rect.width + r.offsetMax.x;
+                float yMin = rect.yMin + r.anchorMin.y * rect.height + r.offsetMin.y;
+                float yMax = rect.yMin + r.anchorMax.y * rect.height + r.offsetMax.y;
+                rect = new Rect(xMin, yMin, xMax - xMin, yMax - yMin);
+            }
+            return rect;
+        }
+
+        private static UIRecord CaptureUI(Transform t)
+        {
+            if (t.GetComponentInParent<Canvas>() == null)
+                return null;
+            var rt = t as RectTransform;
+
+            float screenW = 512f, screenH = 448f; // PS2 framebuffer default
+            var record = new UIRecord();
+            bool drawable = false;
+
+            var text = t.GetComponent<UnityEngine.UI.Text>();
+            var image = t.GetComponent<UnityEngine.UI.Image>();
+            var raw = t.GetComponent<UnityEngine.UI.RawImage>();
+            if (text != null)
+            {
+                record.DrawKind = 2;
+                record.ManagedKind = 2;
+                record.Colour = text.color;
+                record.Text = text.text ?? "";
+                if (record.Text.Length > 47)
+                {
+                    Debug.LogWarning(
+                        "[PS2] Text on '" + t.name + "' is over the 48-byte " +
+                        "card of the baked font path and was truncated. " +
+                        "Deviation 30 in docs/supported-api.md.");
+                    record.Text = record.Text.Substring(0, 47);
+                }
+                record.TextScale =
+                    Mathf.Clamp(Mathf.RoundToInt(text.fontSize / 8f), 1, 4);
+                drawable = true;
+            }
+            else if (image != null)
+            {
+                record.Colour = image.color;
+                record.Texture =
+                    image.sprite != null ? image.sprite.texture : null;
+                record.DrawKind = record.Texture != null ? 1 : 0;
+                record.ManagedKind = 0;
+                drawable = true;
+            }
+            else if (raw != null)
+            {
+                record.Colour = raw.color;
+                record.Texture = raw.texture as Texture2D;
+                record.DrawKind = record.Texture != null ? 1 : 0;
+                record.ManagedKind = 1;
+                drawable = true;
+            }
+
+            var button = t.GetComponent<UnityEngine.UI.Button>();
+            var slider = t.GetComponent<UnityEngine.UI.Slider>();
+            if (!drawable && button == null && slider == null)
+                return null;
+
+            if (rt != null)
+            {
+                Rect r = ResolveScreenRect(rt, screenW, screenH);
+                record.X = r.xMin;
+                record.Y = screenH - r.yMax; // GS is top-left, y down
+                record.W = r.width;
+                record.H = r.height;
+            }
+            if (!drawable)
+            {
+                // A Button/Slider with no graphic of its own: a zero-size
+                // role-only record that never draws.
+                record.W = 0;
+                record.H = 0;
+            }
+            if (button != null)
+            {
+                record.Role = 1;
+            }
+            else if (slider != null)
+            {
+                record.Role = 2;
+                record.SliderFill =
+                    slider.fillRect != null ? slider.fillRect.transform : null;
+                record.SliderValue =
+                    slider.maxValue > slider.minValue
+                        ? (slider.value - slider.minValue) /
+                              (slider.maxValue - slider.minValue)
+                        : 0f;
+                if (record.SliderFill != null)
+                {
+                    Rect fr = ResolveScreenRect(
+                        (RectTransform)record.SliderFill, screenW, screenH);
+                    record.SliderMaxW =
+                        record.SliderValue > 0.01f
+                            ? fr.width / record.SliderValue
+                            : fr.width;
+                }
+            }
+            return record;
+        }
+
         private static uint PackColour(Color c)
         {
             uint r = (uint)Mathf.Clamp(Mathf.RoundToInt(c.r * 255f), 0, 255);
@@ -574,6 +723,15 @@ namespace Ps2.Editor
                                          Dictionary<string, int> audioClipIndex,
                                          Dictionary<Texture2D, int> textureLookup)
         {
+            // uGUI element indices in entity (hierarchy) order -- the draw
+            // order -- assigned up front so a Slider can name its fill.
+            var uiIndexOf = new Dictionary<Transform, int>();
+            foreach (var e in entities)
+            {
+                if (e.Ui != null)
+                    uiIndexOf[e.Transform] = uiIndexOf.Count;
+            }
+
             // Components are laid out entity-by-entity, so component_first is
             // sequential. Payloads follow the ref table.
             var comps = new List<(ushort type, byte[] payload)>();
@@ -745,6 +903,52 @@ namespace Ps2.Editor
                     p.F32(fx.gravityModifier);
                     p.U32((uint)Mathf.Clamp(fx.maxParticles, 1, 128));
                     comps.Add((10, p.ToArray()));
+                }
+                if (e.Ui != null)
+                {
+                    // 88 bytes (M12.5 task 5): kind|managed<<8 in the low
+                    // u16, role in the high u16, baked screen rect, tint
+                    // (alpha in the PS2 0..0x80 range), texture, slider fill
+                    // link, text scale, then 48 bytes of text -- which for a
+                    // slider carry (f32 value, f32 max fill width) instead.
+                    UIRecord ui = e.Ui;
+                    var p = new ByteBuffer();
+                    p.U32((uint)(ui.DrawKind | (ui.ManagedKind << 8) |
+                                 (ui.Role << 16)));
+                    p.F32(ui.X);
+                    p.F32(ui.Y);
+                    p.F32(ui.W);
+                    p.F32(ui.H);
+                    uint cr = (uint)Mathf.Clamp(Mathf.RoundToInt(ui.Colour.r * 255f), 0, 255);
+                    uint cg = (uint)Mathf.Clamp(Mathf.RoundToInt(ui.Colour.g * 255f), 0, 255);
+                    uint cb = (uint)Mathf.Clamp(Mathf.RoundToInt(ui.Colour.b * 255f), 0, 255);
+                    uint ca = (uint)Mathf.Clamp(Mathf.RoundToInt(ui.Colour.a * 128f), 0, 128);
+                    p.U32(cr | (cg << 8) | (cb << 16) | (ca << 24));
+                    uint uiTex = 0xFFFFFFFF;
+                    if (ui.Texture != null &&
+                        textureLookup.TryGetValue(ui.Texture, out int uti))
+                        uiTex = (uint)uti;
+                    p.U32(uiTex);
+                    int link = -1;
+                    if (ui.SliderFill != null &&
+                        uiIndexOf.TryGetValue(ui.SliderFill, out int fi))
+                        link = fi;
+                    p.U32((uint)link);
+                    p.U32((uint)ui.TextScale);
+                    if (ui.Role == 2)
+                    {
+                        p.F32(ui.SliderValue);
+                        p.F32(ui.SliderMaxW);
+                        for (int tb = 8; tb < 48; tb++) p.U8(0);
+                    }
+                    else
+                    {
+                        var bytes = System.Text.Encoding.ASCII.GetBytes(ui.Text ?? "");
+                        for (int tb = 0; tb < 48; tb++)
+                            p.U8(tb < bytes.Length && tb < 47 ? bytes[tb]
+                                                              : (byte)0);
+                    }
+                    comps.Add((11, p.ToArray()));
                 }
                 if (e.Scripts != null)
                 {

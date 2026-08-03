@@ -194,3 +194,17 @@ These are listed prominently here and asserted in the conformance suite
     anything but Ok, and values survive a power cycle only after a Save
     that reported Ok. There is no auto-save on quit: a PS2 game has no
     quit.
+30. **uGUI layout is baked at export.** RectTransform anchors, pivots and
+    offsets are resolved against the profile's framebuffer (the CanvasScaler
+    is ignored: the reference resolution IS the framebuffer), and the runtime
+    holds finished screen rects. Scripts move elements in pixels; anchors do
+    not exist at runtime. Text uses one baked 8x8 bitmap font (fontSize maps
+    to an integer scale 1..4) with a 48-byte cap per element; Image supports
+    Simple stretch only, no 9-slice.
+31. **`PS2UINavigation` replaces `EventSystem`.** A DualShock 2 has no
+    pointer, so focus moves with the D-pad in hierarchy order, Cross submits
+    the focused Button, Left/Right step the focused Slider by a tenth of its
+    range. Exported Buttons and Sliders register automatically; EventSystem
+    and its input modules export as nothing and are reported as such.
+    `onClick`/`onValueChanged` take listeners IN CODE -- Inspector-serialised
+    persistent listeners do not exist on this platform.

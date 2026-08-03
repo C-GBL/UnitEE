@@ -38,6 +38,7 @@
 #include <ps2ur/vu_program.h>
 
 #include <kernel.h>
+#include <cstring>
 #include <malloc.h>
 #include <stdio.h>
 
@@ -365,11 +366,18 @@ int main(void)
         find_runtime_method("CreateAudioListener", 1);
     const MethodInfo* create_particles =
         find_runtime_method("CreatePS2ParticleSystem", 1);
+    const MethodInfo* create_ui_graphic =
+        find_runtime_method("CreateUIGraphic", 3);
+    const MethodInfo* create_ui_button = find_runtime_method("CreateUIButton", 2);
+    const MethodInfo* create_ui_slider =
+        find_runtime_method("CreateUISlider", 7);
     const MethodInfo* tick = find_runtime_method("Tick", 1);
     if (create_script == nullptr || tick == nullptr ||
         create_rigidbody == nullptr || bind_colliders == nullptr ||
         create_animator == nullptr || create_audio_source == nullptr ||
-        create_audio_listener == nullptr || create_particles == nullptr) {
+        create_audio_listener == nullptr || create_particles == nullptr ||
+        create_ui_graphic == nullptr || create_ui_button == nullptr ||
+        create_ui_slider == nullptr) {
         // Almost always a stripping problem: the dispatcher is reached by
         // reflection, so it needs a link.xml entry to survive.
         printf("[game] UnityEngine.Internal.Runtime was not found. It is "
@@ -590,6 +598,9 @@ int main(void)
     // fog and the skinned pass -- all of it built and verified in M8 and M9,
     // and all of it unreachable from a Unity build until now.
     scene::SceneRenderer renderer;
+    if (!renderer.init_ui(device)) {
+        printf("[game] ui overlay init failed; the canvas will not draw.\n");
+    }
     scene::RendererPrograms programs; // 0 / 300 / 700 / 1000 / 1300
     BindContext bind_ctx{&device, textures, tex_count};
 
