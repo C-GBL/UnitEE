@@ -119,7 +119,15 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
     if (overlay != nullptr) {
         overlay(overlay_user);
     }
-    device.end_frame();
+    // NO flip here. The geometry below goes through the caller's DmaChain,
+    // so this buffer is not complete until the last kick has been waited on;
+    // flipping now would put a cleared buffer on screen and draw into it
+    // live -- per-object flicker. This is the rule gs_device.h states, the
+    // one main_game.cpp learned in M12, and the one this renderer broke for
+    // every sample since M8: the goldens never caught it because readback
+    // happens after the frame completes, and DISPLAY timing is invisible to
+    // a CRC (a golden pins determinism, not correctness -- fifth instance).
+    device.end_frame(/*flip=*/false);
 
     // --- Cull + queue (M8 tasks 3/4) ----------------------------------------
     m_queue.clear();
@@ -385,6 +393,8 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
     if (stats != nullptr) {
         *stats = local;
     }
+    // Every kick has been waited on: the buffer is complete. Show it.
+    device.present();
     return true;
 }
 

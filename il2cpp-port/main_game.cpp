@@ -514,8 +514,9 @@ int main(void)
             return 1;
         }
 
-        // The frame is complete: now show it.
-        device.present();
+        // render() presents when its last kick has completed; a second
+        // present here would flip the buffer twice per frame, alternating a
+        // finished image with a half-drawn one (verify-log M12.5).
 
         // A liveness marker the emulator harness can assert on, and a sign of
         // life in a log when someone is debugging a black screen. Once a
