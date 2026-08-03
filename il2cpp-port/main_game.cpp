@@ -301,6 +301,30 @@ int main(void)
     }
     if (!audio::init()) {
         printf("[game] audio failed to initialise; the game will run silent.\n");
+    } else {
+        // SND clips into SPU2 memory (M12.5 task 2). The blobs are used in
+        // place, which is one of the reasons the scene arena outlives boot.
+        const io::P2bSection* snd = file.find(io::kSectionSound);
+        if (snd != nullptr && snd->size >= 16u) {
+            const uint32_t snd_clips = rd_u32(snd->data);
+            uint32_t loaded = 0;
+            for (uint32_t c = 0; c < snd_clips; ++c) {
+                const uint8_t* record = snd->data + 16u + c * 16u;
+                const uint32_t offset = rd_u32(record + 4);
+                const uint32_t bytes = rd_u32(record + 8);
+                if (offset + bytes > snd->size ||
+                    audio::load_clip(snd->data + offset, bytes) < 0) {
+                    printf("[game] SND clip %u did not load; sources naming "
+                           "it stay silent.\n",
+                           static_cast<unsigned>(c));
+                    continue;
+                }
+                ++loaded;
+            }
+            printf("[game] audio: %u of %u clips in SPU2 memory\n",
+                   static_cast<unsigned>(loaded),
+                   static_cast<unsigned>(snd_clips));
+        }
     }
 
     // --- Managed runtime ----------------------------------------------------
@@ -313,10 +337,15 @@ int main(void)
     const MethodInfo* create_rigidbody = find_runtime_method("CreateRigidbody", 5);
     const MethodInfo* bind_colliders = find_runtime_method("BindColliders", 0);
     const MethodInfo* create_animator = find_runtime_method("CreateAnimator", 1);
+    const MethodInfo* create_audio_source =
+        find_runtime_method("CreateAudioSource", 7);
+    const MethodInfo* create_audio_listener =
+        find_runtime_method("CreateAudioListener", 1);
     const MethodInfo* tick = find_runtime_method("Tick", 1);
     if (create_script == nullptr || tick == nullptr ||
         create_rigidbody == nullptr || bind_colliders == nullptr ||
-        create_animator == nullptr) {
+        create_animator == nullptr || create_audio_source == nullptr ||
+        create_audio_listener == nullptr) {
         // Almost always a stripping problem: the dispatcher is reached by
         // reflection, so it needs a link.xml entry to survive.
         printf("[game] UnityEngine.Internal.Runtime was not found. It is "
@@ -357,6 +386,45 @@ int main(void)
             return 1;
         }
     }
+    // --- Audio components (M12.5 task 2) ------------------------------------
+    // The listener drives the mixer's pose natively every frame; each
+    // AudioSource becomes a managed component carrying the Editor's values,
+    // and playOnAwake fires inside CreateAudioSource, before the first Tick.
+    if (world.listener_entity() >= 0) {
+        bridge::audio_set_listener_handle(
+            world.handle_of(world.listener_entity()));
+        int32_t handle = world.handle_of(world.listener_entity());
+        void* args[1] = {&handle};
+        if (!invoke_checked(create_audio_listener, args,
+                            "CreateAudioListener")) {
+            fatal("CreateAudioListener");
+            return 1;
+        }
+    }
+    for (uint32_t s = 0; s < world.audio_source_count(); ++s) {
+        const scene::AudioSourceRef& src = world.audio_source(s);
+        int32_t handle = world.handle_of(src.entity);
+        int32_t clip = src.clip == 0xFFFFFFFFu
+                           ? -1
+                           : static_cast<int32_t>(src.clip);
+        float volume = src.volume;
+        int32_t flags = static_cast<int32_t>(src.flags);
+        float min_d = src.min_distance;
+        float max_d = src.max_distance;
+        int32_t priority = src.priority;
+        void* args[7] = {&handle, &clip,  &volume, &flags,
+                         &min_d,  &max_d, &priority};
+        if (!invoke_checked(create_audio_source, args, "CreateAudioSource")) {
+            fatal("CreateAudioSource");
+            return 1;
+        }
+    }
+    if (world.audio_source_count() > 0 || world.listener_entity() >= 0) {
+        printf("[game] %u audio sources, listener on entity %d\n",
+               static_cast<unsigned>(world.audio_source_count()),
+               world.listener_entity());
+    }
+
     if (world.animator_ref_count() > 0 || world.skinned_renderer_count() > 0) {
         printf("[game] %u animator components, %u skinned renderers over %u "
                "meshes, %u skeletons, %u clips, %u animators\n",
@@ -512,6 +580,8 @@ int main(void)
         // this, so a scene's animators advanced by nothing at all.
         world.update_animators(dt);
         world.update_world_matrices();
+        // With the frame's final transforms: listener pose + spatial voices.
+        bridge::audio_frame_update();
 
         scene::RenderStats stats;
         if (!renderer.render(device, chain, world, programs, bind_texture,

@@ -62,6 +62,12 @@ const Ps2urBridgeEntry ps2ur_bridge_table[] = {
     { "ps2ur_phys_add_character", reinterpret_cast<const void*>(&ps2ur_phys_add_character) },
     { "ps2ur_phys_move_character", reinterpret_cast<const void*>(&ps2ur_phys_move_character) },
     { "ps2ur_phys_character_grounded", reinterpret_cast<const void*>(&ps2ur_phys_character_grounded) },
+    { "ps2ur_audio_play", reinterpret_cast<const void*>(&ps2ur_audio_play) },
+    { "ps2ur_audio_stop", reinterpret_cast<const void*>(&ps2ur_audio_stop) },
+    { "ps2ur_audio_is_playing", reinterpret_cast<const void*>(&ps2ur_audio_is_playing) },
+    { "ps2ur_audio_set_volume", reinterpret_cast<const void*>(&ps2ur_audio_set_volume) },
+    { "ps2ur_audio_clip_count", reinterpret_cast<const void*>(&ps2ur_audio_clip_count) },
+    { "ps2ur_audio_clip_seconds", reinterpret_cast<const void*>(&ps2ur_audio_clip_seconds) },
 };
 
 const int ps2ur_bridge_table_count =

@@ -153,15 +153,32 @@ These are listed prominently here and asserted in the conformance suite
     falls. Here it cannot, so `Rigidbody.Bind` logs an error naming the
     object, and the build validator reports it before the build runs.
 24. **Components carried into the build are a smaller set than components
-    the runtime supports.** `MeshFilter`/`MeshRenderer`, `Camera`, a
-    Directional `Light`, `Rigidbody` and the four collider types are
-    exported from the scene. `SkinnedMeshRenderer` and `Animator` need a
-    baked rig; `AudioSource` needs the separate SND export; `Animation`,
-    `AudioListener` and an Editor-placed `CharacterController` are not
-    carried at all. The build validator reports each with what happens on
-    target, because "supported" and "exported" being different sets is
-    exactly how a `GetComponent` came to return null on the console while
-    every individual piece looked present.
+    the runtime supports.** Exported from the scene: `MeshFilter`/
+    `MeshRenderer`, `Camera`, a Directional `Light`, `Rigidbody`, the four
+    collider types, and (M12.5) `SkinnedMeshRenderer`, `Animator` -- both
+    skinned and rigid-bound models, the latter binding bones to entities BY
+    NAME, so renaming a bone after export breaks it -- plus `AudioSource`
+    and `AudioListener`. `Animation` (legacy) and an Editor-placed
+    `CharacterController` are still not carried. The build validator reports
+    each dropped component with what happens on target, because "supported"
+    and "exported" being different sets is exactly how a `GetComponent`
+    came to return null on the console while every individual piece looked
+    present.
 25. **Only Directional lights are exported.** Vertex lighting on VU1 takes a
     direction and a colour; a point or spot light has no equivalent, so an
     object lit only by one renders unlit.
+26. **`AudioSource.loop` cannot change at runtime.** SPU2 ADPCM loop points
+    are baked into the sample stream when the clip is encoded at export, so
+    looping is a property of the CLIP on this hardware. The exporter encodes
+    a clip looped when the source that references it loops (one asset used
+    both ways is encoded twice). Assigning a different value to `loop` at
+    runtime logs an error naming this deviation instead of silently playing
+    the other behaviour. `pitch` is absent for the same class of reason:
+    audsrv offers no per-voice repitch.
+27. **`AudioSource.isPlaying` tracks the voice `Play()` started.** Unity
+    counts live one-shots too; here `PlayOneShot` is fire-and-forget on the
+    mixer and never tracked, so `isPlaying` can read false while a one-shot
+    still sounds. Note also that a sound can be DROPPED outright when all 24
+    voices are busy with higher-priority audio -- `Play()` then leaves
+    `isPlaying` false, which is the platform behaving as designed (M10), not
+    an error.

@@ -53,11 +53,16 @@ inline constexpr uint16_t kComponentScript = 4;
 inline constexpr uint16_t kComponentSkinnedMeshRenderer = 5;
 inline constexpr uint16_t kComponentRigidbody = 6;
 inline constexpr uint16_t kComponentAnimator = 7;
+inline constexpr uint16_t kComponentAudioSource = 8;
+inline constexpr uint16_t kComponentAudioListener = 9;
 
 // A Rigidbody at most per entity, so the table is bounded by kMaxEntities;
 // this is the far smaller number a scene realistically simulates, and
 // overflowing it is a loud load failure rather than a silent drop.
 inline constexpr uint32_t kMaxRigidbodies = 64;
+// AudioSources are bounded by voices, not entities: the SPU2 mixer runs 24
+// (M10), so more components than that can exist but not all sound at once.
+inline constexpr uint32_t kMaxAudioSources = 24;
 
 // Material kinds (plan section 7.3). The VALUE is the sort-key field too.
 inline constexpr uint32_t kMaterialUnlit = 0;
@@ -164,6 +169,20 @@ struct RigidbodyRef {
     uint32_t flags = 1u; // bit0 use_gravity, bit1 kinematic, bit2 freeze rotation
 };
 
+// An AudioSource component (M12.5 task 2): the Editor-authored state the
+// managed AudioSource is constructed from at load. Clip indexes the SND
+// section's records; priority is already on the NATIVE scale (higher wins --
+// the exporter flipped Unity's lower-wins 0..255).
+struct AudioSourceRef {
+    int32_t entity = -1;
+    uint32_t clip = 0xFFFFFFFFu; // none
+    float volume = 1.0f;
+    uint32_t flags = 0;          // bit0 playOnAwake, bit1 loop, bit2 spatial
+    float min_distance = 1.0f;
+    float max_distance = 30.0f;
+    int32_t priority = 128;
+};
+
 // A skinned mesh (M9). Batches are zero-copy blobs like rigid meshes, but
 // each carries the bone table its vertices' local slots index.
 struct LoadedSkinnedMesh {
@@ -266,6 +285,16 @@ public:
     uint32_t animator_ref_count() const { return m_animator_ref_count; }
     const AnimatorRef& animator_ref(uint32_t i) const { return m_animator_refs[i]; }
 
+    uint32_t audio_source_count() const { return m_audio_source_count; }
+    const AudioSourceRef& audio_source(uint32_t i) const
+    {
+        return m_audio_sources[i];
+    }
+    // The entity carrying the AudioListener, or -1. Exactly one per scene is
+    // the Unity rule; the validator enforces it at build and the loader keeps
+    // the first if a scene ships more anyway.
+    int32_t listener_entity() const { return m_listener_entity; }
+
     // ---- M9: skinning + animation ---------------------------------------
 
     uint32_t skinned_mesh_count() const { return m_skinned_mesh_count; }
@@ -330,6 +359,10 @@ private:
 
     RigidbodyRef m_rigidbodies[kMaxRigidbodies];
     uint32_t m_rigidbody_count = 0;
+
+    AudioSourceRef m_audio_sources[kMaxAudioSources];
+    uint32_t m_audio_source_count = 0;
+    int32_t m_listener_entity = -1;
 
     AnimatorRef m_animator_refs[kMaxAnimators];
     uint32_t m_animator_ref_count = 0;

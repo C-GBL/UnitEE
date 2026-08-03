@@ -58,6 +58,8 @@ namespace Ps2.Editor
             "Transform", "RectTransform", "MeshFilter", "MeshRenderer",
             "Camera", "Light", "Rigidbody",
             "BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider",
+            // M12.5: task 1 (both rig kinds) and task 2.
+            "SkinnedMeshRenderer", "Animator", "AudioSource", "AudioListener",
         };
 
         /// <summary>
@@ -69,14 +71,6 @@ namespace Ps2.Editor
         private static readonly Dictionary<string, string> DropReasons =
             new Dictionary<string, string>
             {
-                ["SkinnedMeshRenderer"] =
-                    "skinned meshes need a baked rig (skeleton + clips + " +
-                    "controller), which the scene exporter does not produce on " +
-                    "its own. The character will not be drawn.",
-                ["Animator"] =
-                    "the Animator is bound to a baked controller, which the " +
-                    "scene exporter does not produce on its own. " +
-                    "GetComponent<Animator>() returns null.",
                 ["Animation"] =
                     "the legacy Animation component is not implemented; the " +
                     "runtime animates through Animator and baked clips only.",
@@ -114,6 +108,21 @@ namespace Ps2.Editor
                 foreach (GameObject root in scene.GetRootGameObjects())
                     WalkObject(root, scenePath, ctx, findings);
                 ValidateSceneBudget(scene, scenePath, ctx, findings);
+
+                // Exactly one AudioListener, as Unity itself warns: the mixer
+                // has one listener pose, and the loader keeps the FIRST it
+                // meets, so a second is authored confusion, not variety.
+                var listeners = UnityEngine.Object.FindObjectsByType<AudioListener>(
+                    FindObjectsSortMode.None);
+                if (listeners.Length > 1)
+                {
+                    findings.Add(Error(
+                        $"{scenePath}: {listeners.Length} AudioListeners " +
+                        $"('{PathOf(listeners[0].gameObject)}' and " +
+                        $"'{PathOf(listeners[1].gameObject)}'). A scene has ONE; " +
+                        "the loader keeps the first and the others do nothing.",
+                        listeners[1]));
+                }
             }
 
             if (!string.IsNullOrEmpty(active) && File.Exists(active))

@@ -226,5 +226,29 @@ namespace UnityEngine.Internal
         // CharacterController.isGrounded.
         [DllImport("__Internal")]
         internal static extern int ps2ur_phys_character_grounded(int index);
+
+        // Starts a clip on the mixer and returns its voice handle, or 0 when every voice is busy with something more important -- a dropped sound is normal, never an error. Looping is baked into the clip at encode. When 'spatial' is nonzero the voice registers for per-frame pan/attenuation against the entity named by 'entity_handle' (M12.5 task 2).
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_audio_play(int entity_handle, int clip, float volume, int priority, int spatial, float min_distance, float max_distance);
+
+        // Stops a voice. 0 and stale handles are no-ops.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_audio_stop(int voice);
+
+        // 1 while the voice is sounding. AudioSource.isPlaying reads this.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_audio_is_playing(int voice);
+
+        // Live volume change on a sounding voice. A spatial voice keeps its per-frame pan; a 2D voice sits centred.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_audio_set_volume(int voice, float volume);
+
+        // Clips loaded from the SND section.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_audio_clip_count();
+
+        // A clip's duration in seconds, from its sample count and pitch. AudioClip.length reads this.
+        [DllImport("__Internal")]
+        internal static extern float ps2ur_audio_clip_seconds(int clip);
     }
 }

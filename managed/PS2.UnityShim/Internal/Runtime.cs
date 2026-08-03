@@ -186,6 +186,47 @@ namespace UnityEngine.Internal
             go.RegisterComponent(animator);
         }
 
+        // One call per AudioSource component at scene load (M12.5 task 2),
+        // carrying the Editor-authored state. flags: bit0 playOnAwake,
+        // bit1 loop, bit2 spatial; priority arrives on the NATIVE
+        // higher-wins scale. playOnAwake fires here -- before the first
+        // Update, which is when Unity starts such a source.
+        internal static void CreateAudioSource(int entityHandle, int clip,
+                                               float volume, int flags,
+                                               float minDistance,
+                                               float maxDistance, int priority)
+        {
+            GameObject go = GetOrCreateWrapper(entityHandle);
+            if (go == null)
+            {
+                Debug.LogError("CreateAudioSource: dead entity handle");
+                return;
+            }
+            var source = new AudioSource();
+            source.Attach(go);
+            source.Configure(clip >= 0 ? new AudioClip(clip) : null, volume,
+                             (flags & 2) != 0, (flags & 4) != 0, minDistance,
+                             maxDistance, priority);
+            go.RegisterComponent(source);
+            if ((flags & 1) != 0)
+            {
+                source.Play();
+            }
+        }
+
+        internal static void CreateAudioListener(int entityHandle)
+        {
+            GameObject go = GetOrCreateWrapper(entityHandle);
+            if (go == null)
+            {
+                Debug.LogError("CreateAudioListener: dead entity handle");
+                return;
+            }
+            var listener = new AudioListener();
+            listener.Attach(go);
+            go.RegisterComponent(listener);
+        }
+
         internal static void Register(MonoBehaviour behaviour)
         {
             BehaviourState state = Bind(behaviour);

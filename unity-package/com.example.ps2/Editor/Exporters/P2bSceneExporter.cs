@@ -26,6 +26,8 @@ namespace Ps2.Editor
             public SkinnedMeshRenderer Skinned; // M9, or null
             public Rigidbody Body;              // M11, or null
             public Animator Animator;           // M12.5, or null
+            public AudioSource Audio;           // M12.5 task 2, or null
+            public bool Listener;               // has an AudioListener
         }
 
         // The rig sections. Normally baked from the scene's own assets by
@@ -70,6 +72,10 @@ namespace Ps2.Editor
         // 512x448 the framebuffers leave about 1.4 MB of VRAM, so one
         // 1024x1024 PSMT8 texture would not fit on its own.
         internal static int MaxTextureSize = 256;
+
+        // The profile's audio sample rate, set by the build step. 22050 is
+        // the plan's SFX rate and the profile default.
+        internal static int AudioSampleRate = 22050;
 
         // Pre-built SND section (M10), supplied by the audio export
         // entry point the same way PendingSkin supplies the rig.
@@ -154,6 +160,60 @@ namespace Ps2.Editor
             {
                 Walk(root.transform, -1, entities, meshes, meshLookup, textures,
                      textureLookup, materials, materialLookup);
+            }
+
+            // AudioClips referenced by the scene's AudioSources -> SND (M12.5
+            // task 2). A clip is encoded LOOPED when its source loops: SPU2
+            // loop points live in the ADPCM stream itself, so looping is a
+            // clip property here, and one asset used both ways is simply
+            // encoded twice.
+            var audioClipIndex = new Dictionary<string, int>();
+            bool autoBakedSound = false;
+            if (PendingSound == null)
+            {
+                var encodedClips = new List<P2bAudioExporter.EncodedClip>();
+                foreach (var e in entities)
+                {
+                    AudioSource source = e.Audio;
+                    if (source == null || source.clip == null)
+                        continue;
+                    string key = source.clip.GetInstanceID() + ":" + source.loop;
+                    if (audioClipIndex.ContainsKey(key))
+                        continue;
+                    try
+                    {
+                        encodedClips.Add(P2bAudioExporter.Encode(
+                            source.clip, source.loop, AudioSampleRate));
+                        audioClipIndex[key] = encodedClips.Count - 1;
+                    }
+                    catch (System.Exception ex)
+                    {
+                        Debug.LogWarning(
+                            "[PS2] AudioClip '" + source.clip.name + "' could not " +
+                            "be encoded (" + ex.Message + "). Set its Load Type " +
+                            "to Decompress On Load; the source exports with no " +
+                            "clip until then.");
+                    }
+                }
+                if (encodedClips.Count > 0)
+                {
+                    PendingSound = P2bAudioExporter.BuildSection(encodedClips);
+                    autoBakedSound = true;
+                }
+            }
+            else
+            {
+                foreach (var e in entities)
+                {
+                    if (e.Audio != null && e.Audio.clip != null)
+                    {
+                        Debug.LogWarning(
+                            "[PS2] the SND section was supplied by an export menu, " +
+                            "so scene AudioSources cannot index into it; their " +
+                            "clips are dropped for this export.");
+                        break;
+                    }
+                }
             }
 
             var writer = new P2bWriter();
@@ -276,7 +336,7 @@ namespace Ps2.Editor
                 writer.AddSection(P2bWriter.SectionPhysics, phys.Payload);
             }
 
-            writer.AddSection(P2bWriter.SectionScene, BuildScene(entities, scriptNames));
+            writer.AddSection(P2bWriter.SectionScene, BuildScene(entities, scriptNames, audioClipIndex));
             writer.Write(path);
 
             // A rig this call baked belongs to THIS scene. PendingSkin is
@@ -287,6 +347,8 @@ namespace Ps2.Editor
             // clear, and PS2SkinExportMenu does.
             if (autoBakedRig)
                 PendingSkin = null;
+            if (autoBakedSound)
+                PendingSound = null;
             int bodies = 0;
             foreach (var e in entities)
             {
@@ -386,6 +448,8 @@ namespace Ps2.Editor
             // until now, is the same indirection that made Rigidbody
             // unreachable from GetComponent.
             record.Animator = t.GetComponent<Animator>();
+            record.Audio = t.GetComponent<AudioSource>();
+            record.Listener = t.GetComponent<AudioListener>() != null;
 
             var camera = t.GetComponent<Camera>();
             if (camera != null)
@@ -482,7 +546,8 @@ namespace Ps2.Editor
         }
 
         private static byte[] BuildScene(List<EntityRecord> entities,
-                                         Dictionary<string, uint> scriptNames)
+                                         Dictionary<string, uint> scriptNames,
+                                         Dictionary<string, int> audioClipIndex)
         {
             // Components are laid out entity-by-entity, so component_first is
             // sequential. Payloads follow the ref table.
@@ -591,6 +656,38 @@ namespace Ps2.Editor
                     if (e.Body.freezeRotation) flags |= 4u;
                     p.U32(flags);
                     comps.Add((6, p.ToArray()));
+                }
+                if (e.Audio != null)
+                {
+                    // 24 bytes: clip, volume, flags, min/max distance,
+                    // priority. Priority crosses to the mixer's higher-wins
+                    // scale here, once, so neither side ever guesses.
+                    AudioSource src = e.Audio;
+                    uint clipIndex = 0xFFFFFFFF;
+                    if (src.clip != null)
+                    {
+                        string key = src.clip.GetInstanceID() + ":" + src.loop;
+                        if (audioClipIndex.TryGetValue(key, out int ci))
+                            clipIndex = (uint)ci;
+                    }
+                    var p = new ByteBuffer();
+                    p.U32(clipIndex);
+                    p.F32(src.volume);
+                    uint f = 0;
+                    if (src.playOnAwake) f |= 1;
+                    if (src.loop) f |= 2;
+                    if (src.spatialBlend > 0.5f) f |= 4;
+                    p.U32(f);
+                    p.F32(src.minDistance);
+                    p.F32(src.maxDistance);
+                    p.U32((uint)Mathf.Clamp(256 - src.priority, 0, 256));
+                    comps.Add((8, p.ToArray()));
+                }
+                if (e.Listener)
+                {
+                    var p = new ByteBuffer();
+                    p.U32(0); // 4 bytes, all pad
+                    comps.Add((9, p.ToArray()));
                 }
                 if (e.Scripts != null)
                 {

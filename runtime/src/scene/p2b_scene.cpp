@@ -68,6 +68,8 @@ bool World::load(const io::P2bFile& file)
     for (uint32_t i = 0; i < kMaxAnimators; ++i) {
         m_animator_drives_entities[i] = false;
     }
+    m_audio_source_count = 0;
+    m_listener_entity = -1;
     m_camera = Camera{};
     m_light = DirectionalLight{};
     m_error = "";
@@ -659,6 +661,37 @@ bool World::load(const io::P2bFile& file)
                 rb.angular_damping = v.f32(data_off + 8);
                 rb.flags = v.u32(data_off + 12);
                 ++m_rigidbody_count;
+            } else if (type == kComponentAudioSource) {
+                // 24 bytes: clip, volume, flags, min/max distance, priority.
+                if (!v.ok(data_off, 24u)) {
+                    m_error = "audio source payload truncated";
+                    return false;
+                }
+                if (m_audio_source_count >= kMaxAudioSources) {
+                    m_error = "too many audio sources";
+                    return false;
+                }
+                AudioSourceRef& snd = m_audio_sources[m_audio_source_count];
+                snd.entity = static_cast<int32_t>(i);
+                snd.clip = v.u32(data_off + 0);
+                snd.volume = v.f32(data_off + 4);
+                snd.flags = v.u32(data_off + 8);
+                snd.min_distance = v.f32(data_off + 12);
+                snd.max_distance = v.f32(data_off + 16);
+                snd.priority = static_cast<int32_t>(v.u32(data_off + 20));
+                ++m_audio_source_count;
+            } else if (type == kComponentAudioListener) {
+                // 4 bytes, all pad. Unity's rule is one listener; the
+                // validator errors on a second at build time, and a scene
+                // that ships one anyway keeps the FIRST here rather than
+                // failing a load over an authoring slip.
+                if (!v.ok(data_off, 4u)) {
+                    m_error = "audio listener payload truncated";
+                    return false;
+                }
+                if (m_listener_entity < 0) {
+                    m_listener_entity = static_cast<int32_t>(i);
+                }
             } else if (type == kComponentAnimator) {
                 // 8 bytes: controller index and the layer count baked.
                 if (!v.ok(data_off, 8u)) {
@@ -826,6 +859,9 @@ bool World::append(const io::P2bFile& file)
         m_error = "additive scene does not fit: scripts";
     } else if (rigidbody_base + incoming.m_rigidbody_count > kMaxRigidbodies) {
         m_error = "additive scene does not fit: rigidbodies";
+    } else if (m_audio_source_count + incoming.m_audio_source_count >
+               kMaxAudioSources) {
+        m_error = "additive scene does not fit: audio sources";
     } else if (animator_ref_base + incoming.m_animator_ref_count >
                kMaxAnimators) {
         m_error = "additive scene does not fit: animators";
@@ -904,6 +940,16 @@ bool World::append(const io::P2bFile& file)
             m_bone_entity[dst][b] =
                 e >= 0 ? static_cast<int16_t>(e + entity_base) : int16_t(-1);
         }
+    }
+
+    // Audio sources rebase their entity only. Their clip indices refer to
+    // the BOOT scene's SND section -- an additive scene's own sounds are not
+    // merged (nothing reloads SND clips mid-run yet), which the exporter
+    // warns about rather than letting indices silently alias.
+    for (uint32_t i = 0; i < incoming.m_audio_source_count; ++i) {
+        AudioSourceRef snd = incoming.m_audio_sources[i];
+        snd.entity += static_cast<int32_t>(entity_base);
+        m_audio_sources[m_audio_source_count++] = snd;
     }
 
     for (uint32_t i = 0; i < incoming.m_rigidbody_count; ++i) {

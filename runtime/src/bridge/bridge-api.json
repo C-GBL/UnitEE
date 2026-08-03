@@ -1127,6 +1127,101 @@
           "type": "i32"
         }
       ]
+    },
+    {
+      "name": "ps2ur_audio_play",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "Starts a clip on the mixer and returns its voice handle, or 0 when every voice is busy with something more important -- a dropped sound is normal, never an error. Looping is baked into the clip at encode. When 'spatial' is nonzero the voice registers for per-frame pan/attenuation against the entity named by 'entity_handle' (M12.5 task 2).",
+      "returns": "i32",
+      "params": [
+        {
+          "name": "entity_handle",
+          "type": "i32"
+        },
+        {
+          "name": "clip",
+          "type": "i32"
+        },
+        {
+          "name": "volume",
+          "type": "f32"
+        },
+        {
+          "name": "priority",
+          "type": "i32"
+        },
+        {
+          "name": "spatial",
+          "type": "i32"
+        },
+        {
+          "name": "min_distance",
+          "type": "f32"
+        },
+        {
+          "name": "max_distance",
+          "type": "f32"
+        }
+      ]
+    },
+    {
+      "name": "ps2ur_audio_stop",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "Stops a voice. 0 and stale handles are no-ops.",
+      "returns": "void",
+      "params": [
+        {
+          "name": "voice",
+          "type": "i32"
+        }
+      ]
+    },
+    {
+      "name": "ps2ur_audio_is_playing",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "1 while the voice is sounding. AudioSource.isPlaying reads this.",
+      "returns": "i32",
+      "params": [
+        {
+          "name": "voice",
+          "type": "i32"
+        }
+      ]
+    },
+    {
+      "name": "ps2ur_audio_set_volume",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "Live volume change on a sounding voice. A spatial voice keeps its per-frame pan; a 2D voice sits centred.",
+      "returns": "void",
+      "params": [
+        {
+          "name": "voice",
+          "type": "i32"
+        },
+        {
+          "name": "volume",
+          "type": "f32"
+        }
+      ]
+    },
+    {
+      "name": "ps2ur_audio_clip_count",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "Clips loaded from the SND section.",
+      "returns": "i32",
+      "params": []
+    },
+    {
+      "name": "ps2ur_audio_clip_seconds",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "A clip's duration in seconds, from its sample count and pitch. AudioClip.length reads this.",
+      "returns": "f32",
+      "params": [
+        {
+          "name": "clip",
+          "type": "i32"
+        }
+      ]
     }
   ]
 }

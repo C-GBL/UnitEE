@@ -36,6 +36,14 @@ bool initialized();
 void bind_world(scene::World* world);
 scene::World* world();
 
+// Audio (M12.5 task 2). The host names the AudioListener's entity once at
+// boot, and calls audio_frame_update() once per frame AFTER the managed
+// tick: it poses the listener from that entity's world matrix and re-pans
+// every live spatial voice from its entity -- natively, because doing it
+// through the boundary would be one interop call per source per frame.
+void audio_set_listener_handle(int entity_handle);
+void audio_frame_update();
+
 // Where an async scene load puts the container it reads (M10 task 5). The
 // host program owns this memory because only it knows the memory budget;
 // the managed SceneManager has no way to allocate 4 MB of EE RAM and no

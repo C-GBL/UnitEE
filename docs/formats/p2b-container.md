@@ -143,7 +143,8 @@ Entity[entity_count] {
 ComponentRef[component_count] {
     u16 type_id             // 1 MeshRenderer, 2 Camera, 3 DirectionalLight,
                             // 4 Script (M7), 5 SkinnedMeshRenderer (M9),
-                            // 6 Rigidbody (M11), 7 Animator (M12.5)
+                            // 6 Rigidbody (M11), 7 Animator (M12.5),
+                            // 8 AudioSource, 9 AudioListener (M12.5)
     u16 pad
     u32 data_offset         // from the start of this section
 }
@@ -173,6 +174,16 @@ Rigidbody (M11, 16B) {
                                              // bit2 freeze rotation
 Animator (M12.5, 8B) {
                    u32 controller_index; u32 layers_baked }
+AudioSource (M12.5, 24B) {
+                   u32 clip;                 // SND record index; -1 none
+                   f32 volume;
+                   u32 flags;                // bit0 playOnAwake, bit1 loop,
+                                             // bit2 spatial (3D pan+atten)
+                   f32 min_distance; f32 max_distance;
+                   u32 priority }            // NATIVE scale, higher wins:
+                                             // the exporter wrote 256-unity
+AudioListener (M12.5, 4B) { u32 pad }        // one per scene; loader keeps
+                                             // the first
 ```
 
 Readers accept the 12-byte camera and default the M8 tail (old runtimes

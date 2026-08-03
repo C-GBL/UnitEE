@@ -186,6 +186,18 @@ int32_t ps2ur_phys_add_character(int32_t handle, float radius, float height, flo
 int32_t ps2ur_phys_move_character(int32_t index, int32_t handle, float x, float y, float z);
 // CharacterController.isGrounded.
 int32_t ps2ur_phys_character_grounded(int32_t index);
+// Starts a clip on the mixer and returns its voice handle, or 0 when every voice is busy with something more important -- a dropped sound is normal, never an error. Looping is baked into the clip at encode. When 'spatial' is nonzero the voice registers for per-frame pan/attenuation against the entity named by 'entity_handle' (M12.5 task 2).
+int32_t ps2ur_audio_play(int32_t entity_handle, int32_t clip, float volume, int32_t priority, int32_t spatial, float min_distance, float max_distance);
+// Stops a voice. 0 and stale handles are no-ops.
+void ps2ur_audio_stop(int32_t voice);
+// 1 while the voice is sounding. AudioSource.isPlaying reads this.
+int32_t ps2ur_audio_is_playing(int32_t voice);
+// Live volume change on a sounding voice. A spatial voice keeps its per-frame pan; a 2D voice sits centred.
+void ps2ur_audio_set_volume(int32_t voice, float volume);
+// Clips loaded from the SND section.
+int32_t ps2ur_audio_clip_count(void);
+// A clip's duration in seconds, from its sample count and pitch. AudioClip.length reads this.
+float ps2ur_audio_clip_seconds(int32_t clip);
 
 } // extern "C"
 
