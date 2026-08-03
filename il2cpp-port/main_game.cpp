@@ -30,6 +30,7 @@
 #include <ps2ur/math.h>
 #include <ps2ur/p2b.h>
 #include <ps2ur/p2b_scene.h>
+#include <ps2ur/scene_renderer.h>
 #include <ps2ur/phys.h>
 #include <ps2ur/phys_bake.h>
 #include <ps2ur/platform.h>
@@ -51,6 +52,12 @@ using namespace ps2ur;
 
 extern "C" u32 VuUnlit_CodeStart __attribute__((section(".vudata")));
 extern "C" u32 VuUnlit_CodeEnd __attribute__((section(".vudata")));
+extern "C" u32 VuUnlitTex_CodeStart __attribute__((section(".vudata")));
+extern "C" u32 VuUnlitTex_CodeEnd __attribute__((section(".vudata")));
+extern "C" u32 VuLitFog_CodeStart __attribute__((section(".vudata")));
+extern "C" u32 VuLitFog_CodeEnd __attribute__((section(".vudata")));
+extern "C" u32 VuSkin_CodeStart __attribute__((section(".vudata")));
+extern "C" u32 VuSkin_CodeEnd __attribute__((section(".vudata")));
 extern "C" u32 VuLit_CodeStart __attribute__((section(".vudata")));
 extern "C" u32 VuLit_CodeEnd __attribute__((section(".vudata")));
 
@@ -59,8 +66,46 @@ extern "C" char* ps2ur_gc_stack_bottom;
 
 namespace {
 
+// The addresses scene::RendererPrograms defaults to; keep them in step.
 constexpr uint32_t kAddrUnlit = 0;
+constexpr uint32_t kAddrTex = 300;
 constexpr uint32_t kAddrLit = 700;
+constexpr uint32_t kAddrLitFog = 1000;
+constexpr uint32_t kAddrSkin = 1300;
+
+// VRAM holds the two colour buffers and the depth buffer, so what is left is
+// what textures get. Eight 256x256 PSMT8 pages plus CLUTs fits comfortably.
+constexpr uint32_t kMaxGpuTextures = 8;
+
+struct GpuTexture {
+    gfx::VramAlloc tex;
+    gfx::VramAlloc clut;
+    uint32_t w = 0, h = 0;
+};
+
+struct BindContext {
+    gfx::GsDevice* device;
+    GpuTexture* textures;
+    uint32_t count;
+};
+
+void bind_texture(void* user, uint32_t index)
+{
+    BindContext* ctx = static_cast<BindContext*>(user);
+    if (index >= ctx->count) {
+        return;
+    }
+    GpuTexture& t = ctx->textures[index];
+    ctx->device->set_texture_indexed(t.tex, t.w, t.h, gfx::PixelFormat::PSMT8,
+                                     t.clut, 256);
+}
+
+uint32_t rd_u32(const uint8_t* p)
+{
+    return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+           (static_cast<uint32_t>(p[2]) << 16) |
+           (static_cast<uint32_t>(p[3]) << 24);
+}
 
 // The scene arena.
 //
@@ -309,9 +354,15 @@ int main(void)
             return 1;
         }
     }
-    if (world.animator_ref_count() > 0) {
-        printf("[game] %u animators\n",
-               static_cast<unsigned>(world.animator_ref_count()));
+    if (world.animator_ref_count() > 0 || world.skinned_renderer_count() > 0) {
+        printf("[game] %u animator components, %u skinned renderers over %u "
+               "meshes, %u skeletons, %u clips, %u animators\n",
+               static_cast<unsigned>(world.animator_ref_count()),
+               static_cast<unsigned>(world.skinned_renderer_count()),
+               static_cast<unsigned>(world.skinned_mesh_count()),
+               static_cast<unsigned>(world.skeleton_count()),
+               static_cast<unsigned>(world.clip_count()),
+               static_cast<unsigned>(world.animator_count()));
     }
     if (world.rigidbody_count() > 0) {
         printf("[game] %u rigidbodies\n",
@@ -332,11 +383,58 @@ int main(void)
         }
     }
 
+    // --- Textures -----------------------------------------------------------
+    //
+    // The host used to skip this entirely, so every TEX section a build
+    // produced was dead weight on the disc and every textured material drew
+    // with whatever happened to be in VRAM (verify-log M12.5).
+    static GpuTexture textures[kMaxGpuTextures];
+    uint32_t tex_count = file.count_of(io::kSectionTex);
+    if (tex_count > kMaxGpuTextures) {
+        printf("[game] %u textures, only %u fit in VRAM; the rest will not "
+               "be bound.\n",
+               static_cast<unsigned>(tex_count),
+               static_cast<unsigned>(kMaxGpuTextures));
+        tex_count = kMaxGpuTextures;
+    }
+    device.begin_frame();
+    device.clear(0, 0, 0);
+    for (uint32_t t = 0; t < tex_count; ++t) {
+        const io::P2bSection* sec = file.find(io::kSectionTex, t);
+        const uint8_t* p = sec->data;
+        GpuTexture& gt = textures[t];
+        gt.w = rd_u32(p + 0);
+        gt.h = rd_u32(p + 4);
+        gt.tex = device.vram().alloc_buffer(gt.w, gt.h, gfx::PixelFormat::PSMT8,
+                                            "game-tex");
+        gt.clut = device.vram().alloc_buffer(16, 16, gfx::PixelFormat::PSMCT32,
+                                             "game-clut");
+        if (!gt.tex.valid() || !gt.clut.valid() ||
+            !device.upload_texture(p + 16u + 1024u, gt.tex, gt.w, gt.h,
+                                   gfx::PixelFormat::PSMT8) ||
+            !device.upload_clut(reinterpret_cast<const uint32_t*>(p + 16u),
+                                gt.clut, 256)) {
+            printf("[game] texture %u did not fit in VRAM.\n",
+                   static_cast<unsigned>(t));
+            fatal("texture upload");
+            return 1;
+        }
+    }
+    device.end_frame();
+
     // --- VU programs + DMA chain -------------------------------------------
-    vu::MicroProgram prog_unlit, prog_lit;
+    //
+    // All FIVE, at the addresses scene::RendererPrograms defaults to. Only
+    // unlit and lit were uploaded before, which silently ruled out every
+    // textured, fogged and skinned material a build could contain.
+    vu::MicroProgram prog_unlit, prog_tex, prog_lit, prog_fog, prog_skin;
     prog_unlit.set_blob(&VuUnlit_CodeStart, &VuUnlit_CodeEnd, kAddrUnlit);
+    prog_tex.set_blob(&VuUnlitTex_CodeStart, &VuUnlitTex_CodeEnd, kAddrTex);
     prog_lit.set_blob(&VuLit_CodeStart, &VuLit_CodeEnd, kAddrLit);
-    if (!prog_unlit.upload() || !prog_lit.upload()) {
+    prog_fog.set_blob(&VuLitFog_CodeStart, &VuLitFog_CodeEnd, kAddrLitFog);
+    prog_skin.set_blob(&VuSkin_CodeStart, &VuSkin_CodeEnd, kAddrSkin);
+    if (!prog_unlit.upload() || !prog_tex.upload() || !prog_lit.upload() ||
+        !prog_fog.upload() || !prog_skin.upload()) {
         fatal("vu programs");
         return 1;
     }
@@ -351,20 +449,16 @@ int main(void)
         fatal("no camera");
         return 1;
     }
-    const scene::Camera& cam = world.camera();
-    const float aspect = static_cast<float>(PS2_GAME_SCREEN_WIDTH) /
-                         static_cast<float>(PS2_GAME_SCREEN_HEIGHT);
-    const Mat4 proj = mat4_perspective(cam.fov, aspect, cam.znear, cam.zfar);
-    Mat4 flipz = mat4_identity();
-    flipz.m[10] = -1.0f;
-
-    const float sx = static_cast<float>(PS2_GAME_SCREEN_WIDTH) * 0.5f;
-    const float sy = -static_cast<float>(PS2_GAME_SCREEN_HEIGHT) * 0.5f;
-    const float zmax = 8388607.0f;
-    const float szf = -zmax * 0.5f / 16.0f;
-    const float ozf = zmax * 0.5f / 16.0f;
-    float vscale[3] = {sx, sy, szf};
-    float voffset[3] = {sx + 2048.0f, -sy + 2048.0f, ozf};
+    // The M8/M9 frame path, rather than the hand-rolled loop this host used
+    // to carry. That loop walked entities with a rigid mesh and nothing else,
+    // so a scene's skinned characters were loaded, animated and never drawn,
+    // and its textures never bound (verify-log M12.5). SceneRenderer already
+    // does culling, the sorted opaque/transparent passes, material state,
+    // fog and the skinned pass -- all of it built and verified in M8 and M9,
+    // and all of it unreachable from a Unity build until now.
+    scene::SceneRenderer renderer;
+    scene::RendererPrograms programs; // 0 / 300 / 700 / 1000 / 1300
+    BindContext bind_ctx{&device, textures, tex_count};
 
     // --- Frame loop ---------------------------------------------------------
     //
@@ -385,76 +479,18 @@ int main(void)
             return 1;
         }
 
+        // Animation runs between Update and LateUpdate, which is the
+        // ordering Unity users rely on (M9 task 4). The host never called
+        // this, so a scene's animators advanced by nothing at all.
+        world.update_animators(dt);
         world.update_world_matrices();
-        const Mat4 view = mat4_rigid_inverse(
-            world.world_matrix(static_cast<uint32_t>(world.camera().entity)));
-        const Mat4 viewproj = mat4_mul(proj, mat4_mul(flipz, view));
 
-        // Clear WITHOUT flipping: the geometry below goes through a
-        // separate DmaChain, so the buffer is only complete once that chain
-        // has been kicked. Flipping here would put a cleared buffer on
-        // screen and then draw into it live -- visible as heavy per-object
-        // flicker.
-        device.begin_frame();
-        device.clear(cam.clear_r, cam.clear_g, cam.clear_b);
-        device.end_frame(/*flip=*/false);
-
-        chain.begin();
-        bool ok = true;
-        for (uint32_t e = 0; e < world.entity_count() && ok; ++e) {
-            const scene::Entity& ent = world.entity(e);
-            if (ent.mesh < 0 || !ent.alive ||
-                !world.entity_visible(static_cast<int32_t>(e))) {
-                continue;
-            }
-            const scene::LoadedMesh& mesh =
-                world.mesh(static_cast<uint32_t>(ent.mesh));
-            const scene::LoadedMaterial& mat = world.material(mesh.material_index);
-            const Mat4 mvp = mat4_mul(viewproj, world.world_matrix(e));
-
-            if (mat.kind == scene::kMaterialVertexLit && world.has_light()) {
-                const Mat4& w = world.world_matrix(e);
-                const Vec3 ld = world.light().dir;
-                const Vec3 obj = normalize(Vec3{
-                    -(w.m[0] * ld.x + w.m[1] * ld.y + w.m[2] * ld.z),
-                    -(w.m[4] * ld.x + w.m[5] * ld.y + w.m[6] * ld.z),
-                    -(w.m[8] * ld.x + w.m[9] * ld.y + w.m[10] * ld.z)});
-                const Vec3 lc = world.light().colour;
-
-                gfx::BatchBuilder::build_unlit_constants(mvp.m, vscale, voffset,
-                                                         4095.0f, cam.znear,
-                                                         g_constants);
-                set_float4(g_constants[7], 0, 0, 0, 0);
-                set_float4(g_constants[8], 0, 0, 0, 0);
-                set_float4(g_constants[9], obj.x, 0, 0, 0);
-                set_float4(g_constants[10], obj.y, 0, 0, 0);
-                set_float4(g_constants[11], obj.z, 0, 0, 0);
-                // 12..14 are the colours of lights 0..2 as (r,g,b,0), not a
-                // per-channel list (verify-log M9); the light factor is ~0..1
-                // against 0..255 vertex colours (verify-log M8).
-                set_float4(g_constants[12], lc.x, lc.y, lc.z, 0);
-                set_float4(g_constants[13], 0, 0, 0, 0);
-                set_float4(g_constants[14], 0, 0, 0, 0);
-                set_float4(g_constants[15], 0.157f, 0.157f, 0.157f, 0);
-                set_float4(g_constants[16], 255.0f, 255.0f, 255.0f, 128.0f);
-                ok = chain.add_constants(g_constants, 17, 0);
-            } else {
-                gfx::BatchBuilder::build_unlit_constants(mvp.m, vscale, voffset,
-                                                         4095.0f, cam.znear,
-                                                         g_constants);
-                ok = chain.add_constants(g_constants, 7, 0);
-            }
-            const uint32_t addr =
-                mat.kind == scene::kMaterialVertexLit ? kAddrLit : kAddrUnlit;
-            for (uint32_t b = 0; b < mesh.batch_count && ok; ++b) {
-                ok = chain.add_batch(mesh.batches[b], addr);
-            }
-        }
-        if (!ok || !chain.kick()) {
-            fatal("dma chain kick");
+        scene::RenderStats stats;
+        if (!renderer.render(device, chain, world, programs, bind_texture,
+                             &bind_ctx, &stats)) {
+            fatal("scene render");
             return 1;
         }
-        chain.wait();
 
         // The frame is complete: now show it.
         device.present();
@@ -463,6 +499,16 @@ int main(void)
         // life in a log when someone is debugging a black screen. Once a
         // second is often enough to be useful and rare enough to be free.
         if (frame == PS2_GAME_READY_FRAME) {
+            // What actually reached the screen. A scene can load perfectly
+            // and draw nothing -- that is exactly how the skinned pass went
+            // missing here -- and "drawn 0" says so in one line.
+            printf("[game] drawn %u (culled %u, kicks %u), skinned %u in %u "
+                   "batches\n",
+                   static_cast<unsigned>(stats.drawn),
+                   static_cast<unsigned>(stats.culled),
+                   static_cast<unsigned>(stats.kicks),
+                   static_cast<unsigned>(stats.skinned_drawn),
+                   static_cast<unsigned>(stats.skin_batches));
             printf("PS2UR_TOKEN_GAME_OK frame %u\n",
                    static_cast<unsigned>(frame));
         }
