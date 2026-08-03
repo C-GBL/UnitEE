@@ -155,6 +155,62 @@ void DebugOverlay::draw_text(GsDevice& device, int32_t x, int32_t y, const char*
     packet.add_ad(GsReg::TEST_1, gs_test(false, 0, 0, 0, false, 0, true, 2));
 }
 
+void DebugOverlay::draw_text_aligned(GsDevice& device, int32_t x, int32_t y,
+                                     int32_t w, int32_t h, uint32_t align_h,
+                                     uint32_t align_v, const char* text)
+{
+    if (!m_initialized || text == nullptr) {
+        return;
+    }
+
+    // Count lines and measure the block height first. Advance rules must
+    // mirror draw_text's: in-range characters advance (space included),
+    // everything else is skipped.
+    const int32_t advance = static_cast<int32_t>(kGlyphW * m_scale);
+    const int32_t line_h = static_cast<int32_t>(kGlyphH * m_scale);
+    uint32_t lines = 1;
+    for (const char* p = text; *p != '\0'; ++p) {
+        if (*p == '\n') {
+            ++lines;
+        }
+    }
+    const int32_t total_h = static_cast<int32_t>(lines) * line_h;
+    int32_t pen_y = y;
+    if (align_v == 1u) {
+        pen_y += (h - total_h) / 2;
+    } else if (align_v == 2u) {
+        pen_y += h - total_h;
+    }
+
+    const char* p = text;
+    while (*p != '\0') {
+        // One line at a time: measure it, place it, hand it to draw_text.
+        char line[64];
+        uint32_t len = 0;
+        int32_t line_w = 0;
+        while (*p != '\0' && *p != '\n' && len + 1u < sizeof(line)) {
+            const unsigned char c = static_cast<unsigned char>(*p);
+            if (c >= kFontFirstChar && c <= kFontLastChar) {
+                line_w += advance;
+            }
+            line[len++] = *p++;
+        }
+        line[len] = '\0';
+        if (*p == '\n') {
+            ++p;
+        }
+
+        int32_t pen_x = x;
+        if (align_h == 1u) {
+            pen_x += (w - line_w) / 2;
+        } else if (align_h == 2u) {
+            pen_x += w - line_w;
+        }
+        draw_text(device, pen_x, pen_y, line);
+        pen_y += line_h;
+    }
+}
+
 void DebugOverlay::fill_rect(GsDevice& device, int32_t x, int32_t y,
                              int32_t w, int32_t h, uint8_t r, uint8_t g,
                              uint8_t b, uint8_t a)

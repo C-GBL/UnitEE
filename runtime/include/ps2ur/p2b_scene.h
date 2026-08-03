@@ -250,6 +250,11 @@ struct UIElement {
     uint32_t texture = 0xFFFFFFFFu;   // TEX index; -1 = untextured
     int32_t link = -1;                // slider: fill element index
     uint32_t text_scale = 1;
+    // Text.alignment, split from the scale word's high bits at parse:
+    // 0 left/top, 1 centre/middle, 2 right/bottom. Applied per line at
+    // draw time so runtime text changes re-centre like Unity's do.
+    uint8_t align_h = 0;
+    uint8_t align_v = 0;
     bool visible = true;
     char text[kMaxUITextLength] = {};
 };

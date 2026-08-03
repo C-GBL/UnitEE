@@ -763,10 +763,16 @@ bool World::load(const io::P2bFile& file)
                 ui.colour = v.u32(data_off + 20);
                 ui.texture = v.u32(data_off + 24);
                 ui.link = v.i32(data_off + 28);
-                ui.text_scale = v.u32(data_off + 32);
+                // Low byte: font scale. Bits 8-9 / 10-11: horizontal and
+                // vertical Text.alignment (old files carry zeros = the old
+                // top-left behaviour).
+                const uint32_t scale_bits = v.u32(data_off + 32);
+                ui.text_scale = scale_bits & 0xFFu;
                 if (ui.text_scale < 1u) {
                     ui.text_scale = 1u;
                 }
+                ui.align_h = static_cast<uint8_t>((scale_bits >> 8) & 3u);
+                ui.align_v = static_cast<uint8_t>((scale_bits >> 10) & 3u);
                 for (uint32_t b = 0; b < kMaxUITextLength; ++b) {
                     ui.text[b] =
                         static_cast<char>(v.data[data_off + 36u + b]);

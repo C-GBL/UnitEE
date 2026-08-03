@@ -100,6 +100,8 @@ namespace Ps2.Editor
             public float SliderValue;
             public float SliderMaxW;
             public Vector4 Border;    // 9-slice L,B,R,T (sprite.border px)
+            public int AlignH;        // 0 left, 1 centre, 2 right
+            public int AlignV;        // 0 top, 1 middle, 2 bottom
         }
 
         private sealed class MeshKey
@@ -624,6 +626,10 @@ namespace Ps2.Editor
                 }
                 record.TextScale =
                     Mathf.Clamp(Mathf.RoundToInt(text.fontSize / 8f), 1, 4);
+                // TextAnchor enumerates a 3x3 grid row-major (UpperLeft=0
+                // .. LowerRight=8), so column and row fall out of div/mod.
+                record.AlignH = (int)text.alignment % 3;
+                record.AlignV = (int)text.alignment / 3;
                 drawable = true;
             }
             else if (image != null)
@@ -954,7 +960,9 @@ namespace Ps2.Editor
                         uiIndexOf.TryGetValue(ui.SliderFill, out int fi))
                         link = fi;
                     p.U32((uint)link);
-                    p.U32((uint)ui.TextScale);
+                    // Low byte scale; bits 8-9 / 10-11 the Text alignment.
+                    p.U32((uint)(ui.TextScale | (ui.AlignH << 8) |
+                                 (ui.AlignV << 10)));
                     if (ui.Role == 2)
                     {
                         p.F32(ui.SliderValue);

@@ -47,6 +47,16 @@ public:
     // Draws text at a screen position, in pixels. Newlines advance a line.
     void draw_text(GsDevice& device, int32_t x, int32_t y, const char* text);
 
+    // Draws text aligned inside a rect (uGUI Text.alignment, M12.5 task 5):
+    // align_h/align_v are 0 left/top, 1 centre/middle, 2 right/bottom.
+    // Alignment is PER LINE, like Unity's. Measured at draw time so text
+    // changed at runtime re-centres, which baking an offset at export
+    // could not do. Lines longer than 63 characters are split; UI text is
+    // capped at 48 bytes well before that.
+    void draw_text_aligned(GsDevice& device, int32_t x, int32_t y, int32_t w,
+                           int32_t h, uint32_t align_h, uint32_t align_v,
+                           const char* text);
+
     // Flat screen-space rectangle (M8 task 8: the uGUI Image primitive).
     // PS2 alpha: a < 0x80 blends, 0x80 is opaque. Depth test is off, like
     // all overlay drawing.

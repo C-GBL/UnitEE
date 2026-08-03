@@ -650,7 +650,9 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
                 case 2: // text
                     m_ui_overlay.set_colour(r, g, b);
                     m_ui_overlay.set_scale(ui.text_scale);
-                    m_ui_overlay.draw_text(device, x, y, ui.text);
+                    m_ui_overlay.draw_text_aligned(device, x, y, w, h,
+                                                   ui.align_h, ui.align_v,
+                                                   ui.text);
                     break;
                 default: // rect
                     m_ui_overlay.fill_rect(device, x, y, w, h, r, g, b, a);

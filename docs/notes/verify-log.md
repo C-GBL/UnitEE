@@ -549,3 +549,14 @@ genuinely active for the first time), actuator alignment -- and then
 nothing. Real-hardware caveat stands per plan 14.5: PCSX2's pad model
 is forgiving about timing, so the staging discipline matters MORE on a
 real DualShock, not less.
+
+## Text.alignment (M12.5 task 5, 2026-08-03)
+
+The button label drew at its rect's top-left; Unity had it MiddleCenter.
+The anchor now rides bits 8-11 of the text_scale word (3x3 TextAnchor
+grid = column mod 3, row div 3; old files carry zeros and keep the old
+top-left), and the overlay aligns PER LINE at draw time -- measured from
+the CURRENT string, because Text.text is mutable at runtime and a baked
+offset would go stale on the first SetText. draw_text_aligned measures
+with the same advance rules draw_text draws with; a drift between the
+two would misplace text by exactly the mismatch.

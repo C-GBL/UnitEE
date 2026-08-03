@@ -207,7 +207,12 @@ UIElement (M12.5 task 5, 84B) {
                    u32 colour;               // RGBA8, alpha 0..0x80
                    u32 texture;              // TEX index; -1 untextured
                    i32 link;                 // slider: fill element index
-                   u32 text_scale;           // baked-font integer scale
+                   u32 text_scale;           // low 8 bits: baked-font integer
+                                             // scale; bits 8-9 horizontal
+                                             // Text.alignment (0 left, 1
+                                             // centre, 2 right); bits 10-11
+                                             // vertical (0 top, 1 middle,
+                                             // 2 bottom)
                    u8  text[48] }            // NUL text. Overloads: a slider
                                              // (role 2) carries f32 value,
                                              // f32 max fill width; an image

@@ -210,6 +210,26 @@ TEST(SceneUI, TheLastPayloadInTheSectionLoadsAndRoundTripsEveryField)
     EXPECT_STREQ(ui.text, "NEW GAME");
 }
 
+TEST(SceneUI, TextAlignmentRidesTheScaleWordsHighBits)
+{
+    UISpec text;
+    text.kind_role = 2u | (2u << 8);
+    // Scale 2, MiddleCenter: h=1 in bits 8-9, v=1 in bits 10-11.
+    text.text_scale = 2u | (1u << 8) | (1u << 10);
+    text.set_text("BUTTON");
+
+    const std::vector<uint8_t> bytes = wrap_scene(build_scene(1, {text}));
+    io::P2bFile file;
+    ASSERT_TRUE(file.parse(bytes.data(), static_cast<uint32_t>(bytes.size())));
+    static World world;
+    ASSERT_TRUE(world.load(file)) << world.error();
+
+    const UIElement& ui = world.ui_element(0);
+    EXPECT_EQ(ui.text_scale, 2u) << "alignment bits must not leak into scale";
+    EXPECT_EQ(ui.align_h, 1u);
+    EXPECT_EQ(ui.align_v, 1u);
+}
+
 TEST(SceneUI, ATruncatedPayloadIsRefusedRatherThanRead)
 {
     // 80 bytes where the format says 84: the last four text bytes are gone.
