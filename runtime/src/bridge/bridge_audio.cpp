@@ -67,7 +67,12 @@ void register_spatial(audio::VoiceHandle voice, int32_t entity_handle,
 namespace ps2ur {
 namespace bridge {
 
-void audio_set_listener_handle(int32_t entity_handle)
+// 'int', matching the declaration in bridge.h exactly: on this toolchain
+// int32_t is LONG, so an int32_t here mangles to a DIFFERENT symbol (..El
+// vs ..Ei) and the game ELF fails to link with an undefined reference that
+// looks impossible -- the archive visibly contains the function
+// (verify-log M12.5).
+void audio_set_listener_handle(int entity_handle)
 {
     g_listener_handle = entity_handle;
 }
