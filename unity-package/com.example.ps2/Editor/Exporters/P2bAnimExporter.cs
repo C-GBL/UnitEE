@@ -20,6 +20,8 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Animations;
+using UnityEngine.Playables;
 
 namespace Ps2.Editor
 {
@@ -152,12 +154,49 @@ namespace Ps2.Editor
                 tracks[i].Scale = new Vector3[sampleCount];
             }
 
+            // TWO samplers, because humanoid and generic motion are stored
+            // differently. A humanoid clip keeps the BODY in muscle curves
+            // that exist only through avatar retargeting; SampleAnimation
+            // evaluates transform curves directly and silently skips them,
+            // so the body freezes in its rest pose while the generic bones
+            // riding the same clip -- hair, ribbons, cloth -- animate.
+            // Exactly half a character, and nothing says why (verify-log
+            // M12.5). A PlayableGraph driven through the Animator is the
+            // sampler that retargets.
+            Animator animator = root.GetComponent<Animator>();
+            bool viaGraph = animator != null && animator.isHuman &&
+                            clip.isHumanMotion;
+            PlayableGraph graph = default;
+            AnimationClipPlayable playable = default;
             bool wasLegacy = clip.legacy;
-            clip.legacy = true; // SampleAnimation needs it outside play mode
+            if (viaGraph)
+            {
+                graph = PlayableGraph.Create("ps2-clip-bake");
+                graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
+                var output = AnimationPlayableOutput.Create(graph, "bake", animator);
+                playable = AnimationClipPlayable.Create(graph, clip);
+                // Raw motion: IK would re-solve feet against nothing and
+                // bend what the clip actually says.
+                playable.SetApplyFootIK(false);
+                playable.SetApplyPlayableIK(false);
+                output.SetSourcePlayable(playable);
+            }
+            else
+            {
+                clip.legacy = true; // SampleAnimation needs it outside play mode
+            }
             for (int s = 0; s < sampleCount; s++)
             {
                 float t = clip.length * s / (sampleCount - 1);
-                clip.SampleAnimation(root, t);
+                if (viaGraph)
+                {
+                    playable.SetTime(t);
+                    graph.Evaluate(0f);
+                }
+                else
+                {
+                    clip.SampleAnimation(root, t);
+                }
                 for (int i = 0; i < ordered.Length; i++)
                 {
                     tracks[i].Position[s] = ordered[i].localPosition;
@@ -165,7 +204,14 @@ namespace Ps2.Editor
                     tracks[i].Scale[s] = ordered[i].localScale;
                 }
             }
-            clip.legacy = wasLegacy;
+            if (viaGraph)
+            {
+                graph.Destroy();
+            }
+            else
+            {
+                clip.legacy = wasLegacy;
+            }
 
             // Build the track table and key stream.
             var trackRecords = new List<byte[]>();

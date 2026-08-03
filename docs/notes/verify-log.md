@@ -371,3 +371,13 @@ Consequences worth knowing: bones bind by name, so renaming a bone after
 export breaks its binding (the exporter warns, and warns again on duplicate
 names); and an Animator whose rig failed to bake is now named at export
 instead of surfacing as GetComponent<Animator>() == null on target.
+
+Addendum, same day: the first run animated ONLY the hair. A humanoid clip
+stores the body in MUSCLE curves that exist only through avatar retargeting;
+`AnimationClip.SampleAnimation` evaluates transform curves directly (the
+exporter even forced clip.legacy=true to use it), so the body froze at rest
+while the generic hair/ribbon bones in the same clip moved -- half a
+character, from two storage forms in one asset. Humanoid clips now sample
+through a PlayableGraph driven by the Animator (foot IK off); generic clips
+keep the proven SampleAnimation path. This was the first humanoid content
+ever through the sampler -- M9's parity golden was generic clips.
