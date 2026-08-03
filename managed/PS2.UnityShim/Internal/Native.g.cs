@@ -250,5 +250,49 @@ namespace UnityEngine.Internal
         // A clip's duration in seconds, from its sample count and pitch. AudioClip.length reads this.
         [DllImport("__Internal")]
         internal static extern float ps2ur_audio_clip_seconds(int clip);
+
+        // PlayerPrefs.SetInt into the M10 memcard store (in memory until ps2ur_prefs_save). Keys cap at 24 bytes, the store at 64 entries (deviation 28). cstr use is deliberate: cold path, tiny strings, and hashed keys would make GetString impossible.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_prefs_set_int(string key, int value);
+
+        // PlayerPrefs.SetFloat.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_prefs_set_float(string key, float value);
+
+        // PlayerPrefs.SetString. Values cap at 48 bytes (deviation 28).
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_prefs_set_string(string key, string value);
+
+        // PlayerPrefs.GetInt with its fallback.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_prefs_get_int(string key, int fallback);
+
+        // PlayerPrefs.GetFloat with its fallback.
+        [DllImport("__Internal")]
+        internal static extern float ps2ur_prefs_get_float(string key, float fallback);
+
+        // PlayerPrefs.HasKey.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_prefs_has_key(string key);
+
+        // PlayerPrefs.DeleteKey.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_prefs_delete_key(string key);
+
+        // PlayerPrefs.DeleteAll.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_prefs_delete_all();
+
+        // Byte length of a string value, or -1 when the key is absent or not a string. A returned pointer would need an owner the boundary refuses to have, so GetString reads length + bytes and caches managed-side.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_prefs_string_length(string key);
+
+        // Byte at index of a string value, or -1 past the end. Cold path by design: a 48-byte value read once and cached.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_prefs_string_byte(string key, int index);
+
+        // Writes the store to memory card port 0 under the identity the host set at boot. Returns memcard::Status: 0 Ok, then NoCard, NotFormatted, Full, WriteProtected, NotFound, Error. Unity's Save cannot fail; this one reports through PS2Memory.LastSaveError (deviation 29).
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_prefs_save();
     }
 }

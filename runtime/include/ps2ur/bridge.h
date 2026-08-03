@@ -44,6 +44,11 @@ scene::World* world();
 void audio_set_listener_handle(int entity_handle);
 void audio_frame_update();
 
+// PlayerPrefs (M12.5 task 3): the host names the on-card save directory
+// (conventionally the disc serial) and browser title once at boot;
+// ps2ur_prefs_save() writes there, port 0.
+void prefs_set_identity(const char* directory, const char* title);
+
 // Where an async scene load puts the container it reads (M10 task 5). The
 // host program owns this memory because only it knows the memory budget;
 // the managed SceneManager has no way to allocate 4 MB of EE RAM and no

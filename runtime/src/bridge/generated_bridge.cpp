@@ -68,6 +68,17 @@ const Ps2urBridgeEntry ps2ur_bridge_table[] = {
     { "ps2ur_audio_set_volume", reinterpret_cast<const void*>(&ps2ur_audio_set_volume) },
     { "ps2ur_audio_clip_count", reinterpret_cast<const void*>(&ps2ur_audio_clip_count) },
     { "ps2ur_audio_clip_seconds", reinterpret_cast<const void*>(&ps2ur_audio_clip_seconds) },
+    { "ps2ur_prefs_set_int", reinterpret_cast<const void*>(&ps2ur_prefs_set_int) },
+    { "ps2ur_prefs_set_float", reinterpret_cast<const void*>(&ps2ur_prefs_set_float) },
+    { "ps2ur_prefs_set_string", reinterpret_cast<const void*>(&ps2ur_prefs_set_string) },
+    { "ps2ur_prefs_get_int", reinterpret_cast<const void*>(&ps2ur_prefs_get_int) },
+    { "ps2ur_prefs_get_float", reinterpret_cast<const void*>(&ps2ur_prefs_get_float) },
+    { "ps2ur_prefs_has_key", reinterpret_cast<const void*>(&ps2ur_prefs_has_key) },
+    { "ps2ur_prefs_delete_key", reinterpret_cast<const void*>(&ps2ur_prefs_delete_key) },
+    { "ps2ur_prefs_delete_all", reinterpret_cast<const void*>(&ps2ur_prefs_delete_all) },
+    { "ps2ur_prefs_string_length", reinterpret_cast<const void*>(&ps2ur_prefs_string_length) },
+    { "ps2ur_prefs_string_byte", reinterpret_cast<const void*>(&ps2ur_prefs_string_byte) },
+    { "ps2ur_prefs_save", reinterpret_cast<const void*>(&ps2ur_prefs_save) },
 };
 
 const int ps2ur_bridge_table_count =

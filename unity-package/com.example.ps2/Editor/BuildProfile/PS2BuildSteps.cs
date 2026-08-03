@@ -770,6 +770,9 @@ namespace Ps2.Editor
             sb.AppendLine();
             sb.AppendLine($"#define PS2_GAME_PRODUCT_NAME \"{Escape(p.productName)}\"");
             sb.AppendLine($"#define PS2_GAME_BOOT_SCENE \"{Escape(bootScene)}\"");
+            // PlayerPrefs' on-card home (M12.5 task 3): the browser
+            // convention is a directory named by the disc serial.
+            sb.AppendLine($"#define PS2_GAME_SAVE_DIRECTORY \"{Escape(p.discSerial)}\"");
             sb.AppendLine($"#define PS2_GAME_SCREEN_WIDTH {p.FramebufferWidth}");
             sb.AppendLine($"#define PS2_GAME_SCREEN_HEIGHT {p.FramebufferHeight}");
             sb.AppendLine($"#define PS2_GAME_ASSET_POOL_BYTES ({p.assetPoolMb} * 1024 * 1024)");

@@ -182,3 +182,15 @@ These are listed prominently here and asserted in the conformance suite
     voices are busy with higher-priority audio -- `Play()` then leaves
     `isPlaying` false, which is the platform behaving as designed (M10), not
     an error.
+28. **The PlayerPrefs store is finite.** A memory card save is a fixed
+    file: 64 keys, 24-byte keys, 48-byte string values (memcard.h). A Set
+    beyond a limit logs an error naming the limit and does not store, where
+    Unity's version is unbounded. Budget prefs like save data, because that
+    is what they are.
+29. **`PlayerPrefs.Save()` can fail.** A card can be absent, unformatted,
+    full or write-protected -- states Unity's API has no words for. Save()
+    stays void to match Unity; the result lands in
+    `PS2Memory.LastSaveError` (`PS2SaveStatus`), a warning is logged on
+    anything but Ok, and values survive a power cycle only after a Save
+    that reported Ok. There is no auto-save on quit: a PS2 game has no
+    quit.

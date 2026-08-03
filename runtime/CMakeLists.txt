@@ -69,6 +69,7 @@ set(PS2UR_SOURCES
     src/bridge/bridge_impl.cpp
     src/bridge/bridge_phys.cpp
     src/bridge/bridge_audio.cpp
+    src/bridge/bridge_prefs.cpp
     src/bridge/generated_bridge.cpp
 )
 

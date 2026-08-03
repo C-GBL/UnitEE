@@ -198,6 +198,28 @@ void ps2ur_audio_set_volume(int32_t voice, float volume);
 int32_t ps2ur_audio_clip_count(void);
 // A clip's duration in seconds, from its sample count and pitch. AudioClip.length reads this.
 float ps2ur_audio_clip_seconds(int32_t clip);
+// PlayerPrefs.SetInt into the M10 memcard store (in memory until ps2ur_prefs_save). Keys cap at 24 bytes, the store at 64 entries (deviation 28). cstr use is deliberate: cold path, tiny strings, and hashed keys would make GetString impossible.
+void ps2ur_prefs_set_int(const char* key, int32_t value);
+// PlayerPrefs.SetFloat.
+void ps2ur_prefs_set_float(const char* key, float value);
+// PlayerPrefs.SetString. Values cap at 48 bytes (deviation 28).
+void ps2ur_prefs_set_string(const char* key, const char* value);
+// PlayerPrefs.GetInt with its fallback.
+int32_t ps2ur_prefs_get_int(const char* key, int32_t fallback);
+// PlayerPrefs.GetFloat with its fallback.
+float ps2ur_prefs_get_float(const char* key, float fallback);
+// PlayerPrefs.HasKey.
+int32_t ps2ur_prefs_has_key(const char* key);
+// PlayerPrefs.DeleteKey.
+void ps2ur_prefs_delete_key(const char* key);
+// PlayerPrefs.DeleteAll.
+void ps2ur_prefs_delete_all(void);
+// Byte length of a string value, or -1 when the key is absent or not a string. A returned pointer would need an owner the boundary refuses to have, so GetString reads length + bytes and caches managed-side.
+int32_t ps2ur_prefs_string_length(const char* key);
+// Byte at index of a string value, or -1 past the end. Cold path by design: a 48-byte value read once and cached.
+int32_t ps2ur_prefs_string_byte(const char* key, int32_t index);
+// Writes the store to memory card port 0 under the identity the host set at boot. Returns memcard::Status: 0 Ok, then NoCard, NotFormatted, Full, WriteProtected, NotFound, Error. Unity's Save cannot fail; this one reports through PS2Memory.LastSaveError (deviation 29).
+int32_t ps2ur_prefs_save(void);
 
 } // extern "C"
 
