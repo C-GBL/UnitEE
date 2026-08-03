@@ -27,6 +27,16 @@ extern "C" int32_t ps2ur_ui_element_for_entity(int32_t entity_handle)
     return entity < 0 ? -1 : world->ui_element_for_entity(entity);
 }
 
+extern "C" uint32_t ps2ur_ui_get_colour(int32_t element)
+{
+    scene::World* world = bridge::world();
+    if (world == nullptr || element < 0 ||
+        static_cast<uint32_t>(element) >= world->ui_element_count()) {
+        return 0x80FFFFFFu; // opaque white, the uGUI default
+    }
+    return world->ui_element(static_cast<uint32_t>(element)).colour;
+}
+
 extern "C" void ps2ur_ui_set_rect(int32_t element, float x, float y, float w,
                                   float h)
 {

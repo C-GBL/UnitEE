@@ -64,6 +64,23 @@ namespace UnityEngine.UI
             }
         }
 
+        // Seeds m_Color from the AUTHORED tint in the native draw table.
+        // Without this the managed side assumes white, and the focus
+        // highlight would "restore" a coloured button to white on unfocus.
+        internal void SyncColourFromNative()
+        {
+            if (Element < 0)
+            {
+                return;
+            }
+            uint packed = Native.ps2ur_ui_get_colour(Element);
+            m_Color = new Color(
+                (packed & 0xFF) / 255f,
+                ((packed >> 8) & 0xFF) / 255f,
+                ((packed >> 16) & 0xFF) / 255f,
+                ((packed >> 24) & 0xFF) / 128f);
+        }
+
         // RGBA8 with alpha mapped to the PS2's 0..0x80 opaque range.
         internal static uint Pack(Color c)
         {
@@ -128,10 +145,15 @@ namespace UnityEngine.UI
                 return;
             }
             m_Focused = focused;
-            // Unity's ColorBlock reduced to its visible essence: highlighted
-            // is a lightened tint of the authored colour.
+            // A focused control tints toward a warm gold -- the PS2-era
+            // menu convention, and VISIBLE on the default white sprite,
+            // which a lerp toward white was not (a white-to-white
+            // "highlight" was the invisible-focus bug). Unity's ColorBlock
+            // is not modelled (deviation 31); scripts wanting a different
+            // look set Graphic.color themselves on focus via onClick-less
+            // polling or their own navigation.
             Target.color = focused
-                ? Color.Lerp(m_BaseColor, Color.white, 0.5f)
+                ? Color.Lerp(m_BaseColor, new Color(1f, 0.82f, 0.35f), 0.65f)
                 : m_BaseColor;
         }
 

@@ -253,6 +253,7 @@ namespace UnityEngine.Internal
                 graphic = new UI.Image();
             }
             graphic.Element = element;
+            graphic.SyncColourFromNative();
             graphic.Attach(go);
             go.RegisterComponent(graphic);
         }

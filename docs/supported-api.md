@@ -207,7 +207,12 @@ These are listed prominently here and asserted in the conformance suite
 31. **`PS2UINavigation` replaces `EventSystem`.** A DualShock 2 has no
     pointer, so focus moves with the D-pad in hierarchy order, Cross submits
     the focused Button, Left/Right step the focused Slider by a tenth of its
-    range. Exported Buttons and Sliders register automatically; EventSystem
+    range. A focused control tints its Graphic toward a warm gold and
+    restores the authored colour on unfocus -- Unity's ColorBlock states
+    are not modelled, and the tint is deliberately stronger than Unity's
+    near-invisible default highlight, because a D-pad menu on a TV lives
+    or dies by knowing where the cursor is. Exported Buttons and Sliders
+    register automatically; EventSystem
     and its input modules export as nothing and are reported as such.
     `onClick`/`onValueChanged` take listeners IN CODE -- Inspector-serialised
     persistent listeners do not exist on this platform.

@@ -619,3 +619,16 @@ passed the arena capacity. The loader's bytes_read() now rides the
 bridge (scene_last_load_bytes) and the host parses with the exact
 count. The strict equality stays: it is the check that catches a
 truncated read, and the fix is to tell it the truth, not to loosen it.
+
+## The focus highlight was white-on-white (M12.5, 2026-08-03)
+
+The navigation focus tint has existed since task 5 -- and lerped the
+target toward WHITE, on a default button sprite that is already white.
+An invisible highlight, shipped working. Two fixes: the tint now goes
+toward a warm gold (the PS2-era menu convention, deliberately stronger
+than Unity's near-invisible ColorBlock default -- a D-pad menu on a TV
+lives or dies by knowing where the cursor is), and behind it a latent
+base-colour bug: the managed Graphic assumed white as its base, so
+unfocusing a COLOURED button would have "restored" it to white. A new
+bridge getter (ps2ur_ui_get_colour) seeds the managed colour from the
+authored tint at create, so focus restores the truth.

@@ -234,6 +234,8 @@ int32_t ps2ur_particles_count(int32_t entity_handle);
 int32_t ps2ur_ui_element_for_entity(int32_t entity_handle);
 // Moves/resizes an element in screen pixels, top-left origin. Layout was baked at export; this is how scripts (and the Slider fill) animate it.
 void ps2ur_ui_set_rect(int32_t element, float x, float y, float w, float h);
+// The element's CURRENT tint, RGBA8 with alpha in the PS2 0..0x80 range. CreateUIGraphic seeds the managed Graphic from this so the focus highlight can restore the AUTHORED colour, not an assumed white. Out-of-range elements return opaque white.
+uint32_t ps2ur_ui_get_colour(int32_t element);
 // Tint, RGBA8 with alpha already in the PS2 0..0x80 range. Graphic.color and the navigation focus highlight write through this.
 void ps2ur_ui_set_colour(int32_t element, uint32_t rgba);
 // Replaces a text element's string (48-byte cap, baked 8x8 font). cstr on a set-on-change path, not per frame.

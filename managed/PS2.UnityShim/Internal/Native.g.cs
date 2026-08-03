@@ -323,6 +323,10 @@ namespace UnityEngine.Internal
         [DllImport("__Internal")]
         internal static extern void ps2ur_ui_set_rect(int element, float x, float y, float w, float h);
 
+        // The element's CURRENT tint, RGBA8 with alpha in the PS2 0..0x80 range. CreateUIGraphic seeds the managed Graphic from this so the focus highlight can restore the AUTHORED colour, not an assumed white. Out-of-range elements return opaque white.
+        [DllImport("__Internal")]
+        internal static extern uint ps2ur_ui_get_colour(int element);
+
         // Tint, RGBA8 with alpha already in the PS2 0..0x80 range. Graphic.color and the navigation focus highlight write through this.
         [DllImport("__Internal")]
         internal static extern void ps2ur_ui_set_colour(int element, uint rgba);

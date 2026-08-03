@@ -1474,6 +1474,18 @@
       ]
     },
     {
+      "name": "ps2ur_ui_get_colour",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "The element's CURRENT tint, RGBA8 with alpha in the PS2 0..0x80 range. CreateUIGraphic seeds the managed Graphic from this so the focus highlight can restore the AUTHORED colour, not an assumed white. Out-of-range elements return opaque white.",
+      "returns": "u32",
+      "params": [
+        {
+          "name": "element",
+          "type": "i32"
+        }
+      ]
+    },
+    {
       "name": "ps2ur_ui_set_colour",
       "cs_class": "UnityEngine.Internal.Native",
       "doc": "Tint, RGBA8 with alpha already in the PS2 0..0x80 range. Graphic.color and the navigation focus highlight write through this.",
