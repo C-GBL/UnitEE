@@ -381,3 +381,24 @@ character, from two storage forms in one asset. Humanoid clips now sample
 through a PlayableGraph driven by the Animator (foot IK off); generic clips
 keep the proven SampleAnimation path. This was the first humanoid content
 ever through the sampler -- M9's parity golden was generic clips.
+
+## Golden captures depended on the user's GUI settings (M12.5, 2026-08-03)
+
+All five goldens "regressed" with no rendering change anywhere near them.
+run-emu-test.sh inherited the user's global PCSX2.ini, whose Renderer = -1
+(automatic) had picked a different GS backend than when the goldens were
+captured -- the user had been in the PCSX2 GUI all day -- and tile CRCs are
+a function of the rasterizer. The golden had pinned the RENDERER along with
+the image.
+
+The harness now regenerates a PORTABLE config (pcsx2/inis) from the user's
+ini on every run: Renderer forced to 13 (software -- the only bit-exact,
+GPU- and driver-independent basis for a CRC golden), EnableEEConsole on,
+and every relative folder path absolutized to the user's config root,
+because portable mode moves the root and the BIOS would silently vanish.
+All five goldens re-baselined under the pinned renderer, deliberately.
+
+Residual: 02-scene-graph produced ONE spurious mismatch immediately after
+its re-baseline and passed twice after. Intermittent, so not chased to
+ground; the suspect is IOP module load timing shifting the capture frame.
+If it recurs, that is where to look.

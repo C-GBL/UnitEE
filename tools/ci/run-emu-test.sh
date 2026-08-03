@@ -88,10 +88,39 @@ rm -f "$LOG"
 # PCSX2 only writes EE printf output to the log when EnableEEConsole is set in
 # its ini (default false). A silent log with a running ELF is almost always
 # this, not a dead program -- check it before trusting a failure.
-INI=${PCSX2_INI:-/c/Users/Ash/Documents/PCSX2/inis/PCSX2.ini}
-if [ -f "$INI" ] && ! grep -q '^EnableEEConsole = true' "$INI" 2>/dev/null; then
-    echo "run-emu-test: WARNING -- EnableEEConsole is not true in $INI;"
-    echo "              EE printf output will not reach the log."
+USER_INI=${PCSX2_INI:-/c/Users/Ash/Documents/PCSX2/inis/PCSX2.ini}
+
+# A dedicated PORTABLE config, regenerated from the user's ini on every run
+# with the settings tests depend on forced. Without this the harness
+# inherited whatever the GUI last left behind -- and tile CRCs are a
+# function of the GS renderer, so 'Renderer = -1' (automatic) let a Vulkan
+# vs D3D11 coin-flip in the user's interactive session change every golden
+# (verify-log M12.5). Software rendering is the only bit-exact,
+# GPU-independent basis for a CRC golden; 13 is its ini value.
+PCSX2_DIR=$(dirname "$PCSX2_BIN")
+mkdir -p "$PCSX2_DIR/inis"
+if [ -f "$USER_INI" ]; then
+    # Folder entries in the user's ini are RELATIVE to its config root, and
+    # portable mode moves that root -- the BIOS would silently vanish. Pin
+    # every relative folder to the user's absolute config directory.
+    USER_ROOT=$(cd "$(dirname "$USER_INI")/.." && pwd)
+    if command -v cygpath >/dev/null 2>&1; then
+        USER_ROOT=$(cygpath -m "$USER_ROOT")
+    fi
+    awk -v root="$USER_ROOT" '
+        /^Renderer = / { print "Renderer = 13"; next }
+        /^EnableEEConsole = / { print "EnableEEConsole = true"; next }
+        /^(Bios|Snapshots|Savestates|MemoryCards|Cache|Textures|InputProfiles|Videos) = / {
+            split($0, kv, " = ")
+            if (kv[2] !~ /:/) { print kv[1] " = " root "/" kv[2]; next }
+        }
+        { print }
+    ' "$USER_INI" > "$PCSX2_DIR/inis/PCSX2.ini"
+else
+    printf '[EmuCore/GS]\nRenderer = 13\n[Logging]\nEnableEEConsole = true\n' \
+        > "$PCSX2_DIR/inis/PCSX2.ini"
+    echo "run-emu-test: WARNING -- $USER_INI not found; using a minimal"
+    echo "              portable config (BIOS path may be missing)."
 fi
 
 echo "run-emu-test: booting $(basename "$ELF") (timeout ${TIMEOUT}s, token '$TOKEN')"
@@ -113,7 +142,7 @@ if command -v cygpath >/dev/null 2>&1; then
     LOG_ABS=$(cygpath -w "$LOG_ABS")
 fi
 
-"$PCSX2_BIN" -batch -nogui -earlyconsolelog -fastboot \
+"$PCSX2_BIN" -portable -batch -nogui -earlyconsolelog -fastboot \
              -logfile "$LOG_ABS" -elf "$ELF_ABS" &
 EMU_PID=$!
 
