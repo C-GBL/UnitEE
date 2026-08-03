@@ -12,11 +12,32 @@ namespace Ps2.Editor
     {
         public const uint FormatPsmt8 = 0x13;
 
-        public static byte[] Export(Texture2D texture)
+        // maxSize is the profile's Texture Max Size. Passing 0 keeps the
+        // source resolution.
+        //
+        // This used to be validated and never applied: a build could warn that
+        // a 1024x1024 texture was over the limit and then put all 1 MB of it
+        // on the disc, where it did not fit in the ~1.4 MB of VRAM left after
+        // the framebuffers and the upload failed at boot (verify-log M12.5).
+        public static byte[] Export(Texture2D texture, int maxSize = 0)
         {
-            Color32[] pixels = ReadPixels(texture);
             int w = texture.width;
             int h = texture.height;
+            int tw = w, th = h;
+            if (maxSize > 0 && (w > maxSize || h > maxSize))
+            {
+                // Preserve aspect, then snap to powers of two: the GS
+                // addresses textures by log2 dimensions, so a non-power-of-two
+                // is not a slower texture, it is an unrepresentable one.
+                float scale = Mathf.Min((float)maxSize / w, (float)maxSize / h);
+                tw = Pow2AtMost(Mathf.Max(1, Mathf.RoundToInt(w * scale)), maxSize);
+                th = Pow2AtMost(Mathf.Max(1, Mathf.RoundToInt(h * scale)), maxSize);
+            }
+
+            Color32[] pixels = (tw == w && th == h) ? ReadPixels(texture)
+                                                    : ReadScaled(texture, tw, th);
+            w = tw;
+            h = th;
 
             byte[] indices;
             Color32[] palette = MedianCut(pixels, 256, out indices);
@@ -72,12 +93,34 @@ namespace Ps2.Editor
             return ReadViaBlit(texture);
         }
 
+        // The largest power of two that is <= v and <= cap.
+        private static int Pow2AtMost(int v, int cap)
+        {
+            int p = 1;
+            while (p * 2 <= v && p * 2 <= cap)
+            {
+                p *= 2;
+            }
+            return p;
+        }
+
+        // Downscale on the GPU. Blit already resamples, so a smaller target is
+        // a filtered resize for free -- and it works on the non-readable,
+        // compressed textures that imported art actually consists of.
+        internal static Color32[] ReadScaled(Texture2D texture, int w, int h)
+        {
+            VerifyBlitRoundTrip();
+            return ReadViaBlit(texture, w, h);
+        }
+
         // Copy through the GPU, which can read any format, and read that back.
         internal static Color32[] ReadViaBlit(Texture texture)
         {
-            int w = texture.width;
-            int h = texture.height;
+            return ReadViaBlit(texture, texture.width, texture.height);
+        }
 
+        internal static Color32[] ReadViaBlit(Texture texture, int w, int h)
+        {
             // sRGB, not Linear. In a linear-colour-space project the sampler
             // converts sRGB->linear when it reads an sRGB texture, and an sRGB
             // target converts back on write, so the two cancel and we recover

@@ -58,6 +58,13 @@ namespace Ps2.Editor
 
         internal static SkinPayload PendingSkin;
 
+        // The profile's Texture Max Size, set by the build step before it
+        // exports. 256 is the default a profile ships with, and it is what a
+        // scene exported from a menu item (no profile in sight) gets: at
+        // 512x448 the framebuffers leave about 1.4 MB of VRAM, so one
+        // 1024x1024 PSMT8 texture would not fit on its own.
+        internal static int MaxTextureSize = 256;
+
         // Pre-built SND section (M10), supplied by the audio export
         // entry point the same way PendingSkin supplies the rig.
         internal static byte[] PendingSound;
@@ -146,7 +153,8 @@ namespace Ps2.Editor
             foreach (Texture2D t in textures)
             {
                 writer.AddSection(P2bWriter.SectionTex,
-                                  P2bTextureExporter.Export(t), t.name);
+                                  P2bTextureExporter.Export(t, MaxTextureSize),
+                                  t.name);
             }
 
             // SCRP: deduplicated NUL-terminated script type names; SCEN

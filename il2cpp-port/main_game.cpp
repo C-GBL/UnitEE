@@ -414,8 +414,12 @@ int main(void)
                                    gfx::PixelFormat::PSMT8) ||
             !device.upload_clut(reinterpret_cast<const uint32_t*>(p + 16u),
                                 gt.clut, 256)) {
-            printf("[game] texture %u did not fit in VRAM.\n",
-                   static_cast<unsigned>(t));
+            printf("[game] texture %u (%ux%u) did not fit in the VRAM left "
+                   "after the framebuffers. Lower Texture Max Size in the PS2 "
+                   "build profile, or use fewer textures.\n",
+                   static_cast<unsigned>(t), static_cast<unsigned>(gt.w),
+                   static_cast<unsigned>(gt.h));
+            device.vram().debug_dump();
             fatal("texture upload");
             return 1;
         }

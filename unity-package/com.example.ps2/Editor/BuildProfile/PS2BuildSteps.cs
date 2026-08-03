@@ -117,6 +117,10 @@ namespace Ps2.Editor
         public void Run(PS2BuildContext ctx)
         {
             string active = EditorSceneManager.GetActiveScene().path;
+            // The profile's texture ceiling was validated but never applied,
+            // so a build could warn about a 1024x1024 texture and then ship
+            // it into VRAM that could not hold it (verify-log M12.5).
+            P2bSceneExporter.MaxTextureSize = ctx.Profile.textureMaxSize;
             foreach (string scenePath in ctx.ScenePaths)
             {
                 string output = OutputFor(ctx, scenePath);
