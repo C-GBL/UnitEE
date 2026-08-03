@@ -42,6 +42,12 @@ namespace Ps2.Editor
             // hair, each cloth piece -- because that is how its materials are
             // assigned, so this is a list, not a single mesh.
             public List<byte[]> SkinnedMeshes = new List<byte[]>();
+            // The texture each SkinnedMeshes entry samples, or null for the
+            // vertex-coloured 5-qword format. The scene exporter turns these
+            // into TEX sections and MATL records and patches each mesh's
+            // material_index -- the rig baker cannot, because texture and
+            // material indices are scene-wide.
+            public List<Texture2D> MeshTextures = new List<Texture2D>();
             // Which SkinnedMeshes index each renderer draws. Several renderers
             // may share one entry: a crowd of the same character costs one
             // mesh and one controller.
@@ -87,14 +93,6 @@ namespace Ps2.Editor
             var materials = new List<(uint kind, uint texture)>();
             var materialLookup = new Dictionary<string, int>();
 
-            // Skinned meshes name material 0 (they are exported before the
-            // walk, so the index has to be known up front).
-            if (PendingSkin != null)
-            {
-                materials.Add((P2bMeshExporter.KindSkinned, 0xFFFFFFFF));
-                materialLookup[P2bMeshExporter.KindSkinned + ":4294967295"] = 0;
-            }
-
             GameObject[] roots = SceneManager.GetActiveScene().GetRootGameObjects();
 
             // Rigs, BEFORE the walk: a skinned renderer names material 0, so
@@ -113,6 +111,43 @@ namespace Ps2.Editor
                 autoBakedRig = PendingSkin != null;
                 foreach (string warning in rigWarnings)
                     Debug.LogWarning("[PS2] " + warning);
+            }
+
+            // Skinned materials, BEFORE the walk so their indices are known
+            // (walk materials append after). One record per distinct texture
+            // -- kind Skinned throughout; the texture index is what differs.
+            // The old form of this registered one untextured material and,
+            // worse, ran before the auto-bake existed, so an auto-baked rig
+            // got no skinned material at all and its material_index 0 aliased
+            // whatever the walk found first. Harmless while the skinned pass
+            // ignored materials; fatal the moment it binds textures by them.
+            var skinMaterialOf = new List<int>();
+            if (PendingSkin != null)
+            {
+                for (int i = 0; i < PendingSkin.SkinnedMeshes.Count; i++)
+                {
+                    Texture2D tex = i < PendingSkin.MeshTextures.Count
+                                        ? PendingSkin.MeshTextures[i] : null;
+                    uint texIndex = 0xFFFFFFFF;
+                    if (tex != null)
+                    {
+                        if (!textureLookup.TryGetValue(tex, out int ti))
+                        {
+                            ti = textures.Count;
+                            textures.Add(tex);
+                            textureLookup[tex] = ti;
+                        }
+                        texIndex = (uint)ti;
+                    }
+                    string key = P2bMeshExporter.KindSkinned + ":" + texIndex;
+                    if (!materialLookup.TryGetValue(key, out int mi))
+                    {
+                        mi = materials.Count;
+                        materials.Add((P2bMeshExporter.KindSkinned, texIndex));
+                        materialLookup[key] = mi;
+                    }
+                    skinMaterialOf.Add(mi);
+                }
             }
 
             foreach (GameObject root in roots)
@@ -190,8 +225,18 @@ namespace Ps2.Editor
                     writer.AddSection(P2bWriter.SectionClip, clip);
                 }
                 writer.AddSection(P2bWriter.SectionController, PendingSkin.Controller);
-                foreach (byte[] skinned in PendingSkin.SkinnedMeshes)
+                for (int i = 0; i < PendingSkin.SkinnedMeshes.Count; i++)
                 {
+                    // The rig baker wrote material_index 0 as a placeholder --
+                    // it cannot know scene-wide indices. Patch the header's
+                    // u32 at offset 4 with the material registered above.
+                    byte[] skinned = PendingSkin.SkinnedMeshes[i];
+                    uint mat = i < skinMaterialOf.Count
+                                   ? (uint)skinMaterialOf[i] : 0u;
+                    skinned[4] = (byte)mat;
+                    skinned[5] = (byte)(mat >> 8);
+                    skinned[6] = (byte)(mat >> 16);
+                    skinned[7] = (byte)(mat >> 24);
                     writer.AddSection(P2bWriter.SectionSkinnedMesh, skinned);
                 }
             }
@@ -512,6 +557,21 @@ namespace Ps2.Editor
                     p.U32(0); // controller index
                     p.U32(1); // layers baked
                     comps.Add((7, p.ToArray()));
+                }
+                else if (e.Animator != null)
+                {
+                    // Dropping a component the scene visibly has, silently,
+                    // is the defect class M12.5 exists to kill: it surfaced
+                    // as GetComponent<Animator>() returning null on target
+                    // with nothing anywhere saying why (verify-log M12.5).
+                    Debug.LogWarning(
+                        "[PS2] '" + e.Transform.name + "' has an Animator but " +
+                        "the scene exported no rig, so the component is " +
+                        "dropped: GetComponent<Animator>() will return null " +
+                        "on target. A rig needs at least one " +
+                        "SkinnedMeshRenderer with bones -- a model imported " +
+                        "with Rig set to None, or a static copy of the " +
+                        "character, has none.");
                 }
                 if (e.Body != null)
                 {

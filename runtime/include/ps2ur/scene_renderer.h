@@ -31,6 +31,10 @@ struct RendererPrograms {
     uint32_t lit_addr = 700;
     uint32_t lit_fog_addr = 1000;
     uint32_t skin_addr = 1300;
+    // Textured skinning (M12.5): 6-qword vertices, ST+RGBAQ+XYZ2 out. Only
+    // hosts whose content is textured need to upload it; the format flag in
+    // the SKMS header decides which program a mesh runs on.
+    uint32_t skin_tex_addr = 1500;
 };
 
 struct RenderStats {

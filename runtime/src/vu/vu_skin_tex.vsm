@@ -1,0 +1,200 @@
+; runtime/src/vu/vu_skin_tex.vsm
+;
+; VU1 matrix-palette skinning, TEXTURED (M12.5 task 1): vu_skin plus the STQ
+; output of vu_unlit_tex. An imported character carries its detail in
+; textures, not vertex colours, so the M9 program -- correct for its
+; vertex-coloured test rigs -- draws such a character solid white.
+;
+; The skinning method, palette layout, lighting and flag discipline are
+; vu_skin's, unchanged; see that file for the reasoning. The differences are
+; exactly three:
+;
+;   - vertices are 6 qwords: a texcoord qword (u, v, 1, 0) follows the
+;     weights. The exporter has already flipped v into GS raster orientation.
+;   - after the perspective divide the texcoord is multiplied by Q, the same
+;     (uq, vq, q, 0) form vu_unlit_tex emits; the GS interpolates that
+;     linearly and divides per pixel.
+;   - output is ST + RGBAQ + XYZ2 per vertex (NREG=3, regs 0x512). ST must
+;     precede RGBAQ because writing RGBAQ latches the Q the GS pairs with it.
+;
+; ---------------------------------------------------------------------------
+; VU1 DATA MEMORY LAYOUT (quadwords)
+; ---------------------------------------------------------------------------
+;   0..17   as vu_skin (MVP, viewport, clip, tag, count, lights, ambient,
+;           clamp, reserved)
+;   18..113 BONE PALETTE: 24 matrices x 4 qwords, column-major, model space
+;   114..   vertices, 6 qwords each:
+;             +0 position     (x, y, z, 1)
+;             +1 normal       (x, y, z, 0)
+;             +2 colour       (r, g, b, a)
+;             +3 palette offsets, four INTEGERS, each bone_slot * 4
+;             +4 weights      (w0, w1, w2, w3), summing to 1
+;             +5 texcoord     (u, v, 1, 0), v already flipped
+;
+; Output from qword 600: tag, then ST + RGBAQ + XYZ2 per vertex.
+; Capacity: the VIF NUM field is 8 bits, so a batch unpack is at most 255
+; qwords -- 42 vertices x 6 = 252 (14 triangles). Input tops out at
+; 114 + 252 = 366 < 600; output at 1 + 3*42 = 127, 600 + 127 = 727 < 1024.
+
+		.vu
+		.align 4
+		.global	VuSkinTex_CodeStart
+		.global	VuSkinTex_CodeEnd
+
+VuSkinTex_CodeStart:
+
+; --- Per-batch constants ----------------------------------------------------
+		NOP							lq		VF01, 0(VI00)
+		NOP							lq		VF02, 1(VI00)
+		NOP							lq		VF03, 2(VI00)
+		NOP							lq		VF04, 3(VI00)
+		NOP							lq		VF05, 4(VI00)		; viewport scale
+		NOP							lq		VF06, 5(VI00)		; viewport offset
+		NOP							lq		VF07, 7(VI00)		; GIF tag
+		NOP							lq		VF08, 6(VI00)		; clip constants
+		NOP							lq		VF09, 9(VI00)		; light dirs x row
+		NOP							lq		VF10, 10(VI00)		; light dirs y row
+		NOP							lq		VF11, 11(VI00)		; light dirs z row
+		NOP							lq		VF12, 12(VI00)		; light 0 colour
+		NOP							lq		VF13, 13(VI00)		; light 1 colour
+		NOP							lq		VF14, 14(VI00)		; light 2 colour
+		NOP							lq		VF15, 15(VI00)		; ambient
+		NOP							lq		VF16, 16(VI00)		; clamp
+		NOP							ilw.x	VI05, 8(VI00)		; vertex count
+
+		FTOI4	VF31, VF00			iaddiu	VI08, VI00, 600		; degenerate pt
+
+		NOP							sq		VF07, 0(VI08)		; emit the tag
+		NOP							iaddiu	VI08, VI08, 1
+		NOP							iaddiu	VI06, VI00, 114		; input cursor
+		NOP							iaddiu	VI07, VI00, 0		; vertex counter
+
+tri_loop:
+		NOP							iadd	VI11, VI00, VI00	; reject accum = 0
+		NOP							iadd	VI12, VI08, VI00	; tri out base
+		NOP							iaddiu	VI13, VI00, 3		; 3 vertices
+
+; ============================ one vertex ====================================
+vert_loop:
+; Bone addresses first: ILW has an integer load latency, and the four vector
+; loads below give it room before the addresses are used.
+		NOP							ilw.x	VI01, 3(VI06)
+		NOP							ilw.y	VI02, 3(VI06)
+		NOP							ilw.z	VI03, 3(VI06)
+		NOP							ilw.w	VI04, 3(VI06)
+		NOP							lq		VF17, 0(VI06)		; position
+		NOP							lq		VF18, 1(VI06)		; normal
+		NOP							lq		VF19, 2(VI06)		; colour
+		NOP							lq		VF20, 4(VI06)		; weights
+		NOP							iaddi	VI13, VI13, -1		; early: branch hazard
+		NOP							iaddiu	VI01, VI01, 18		; + palette base
+		NOP							iaddiu	VI02, VI02, 18
+		NOP							iaddiu	VI03, VI03, 18
+		NOP							iaddiu	VI04, VI04, 18
+
+; --- Blend the four bone matrices: M = sum(w_i * M_i), column by column -----
+		NOP							lq		VF25, 0(VI01)
+		NOP							lq		VF26, 0(VI02)
+		NOP							lq		VF27, 0(VI03)
+		NOP							lq		VF28, 0(VI04)
+		MULAx	ACC, VF25, VF20x	NOP
+		MADDAy	ACC, VF26, VF20y	lq		VF25, 1(VI01)
+		MADDAz	ACC, VF27, VF20z	lq		VF26, 1(VI02)
+		MADDw	VF21, VF28, VF20w	lq		VF27, 1(VI03)
+		NOP							lq		VF28, 1(VI04)
+		MULAx	ACC, VF25, VF20x	NOP
+		MADDAy	ACC, VF26, VF20y	lq		VF25, 2(VI01)
+		MADDAz	ACC, VF27, VF20z	lq		VF26, 2(VI02)
+		MADDw	VF22, VF28, VF20w	lq		VF27, 2(VI03)
+		NOP							lq		VF28, 2(VI04)
+		MULAx	ACC, VF25, VF20x	NOP
+		MADDAy	ACC, VF26, VF20y	lq		VF25, 3(VI01)
+		MADDAz	ACC, VF27, VF20z	lq		VF26, 3(VI02)
+		MADDw	VF23, VF28, VF20w	lq		VF27, 3(VI03)
+		NOP							lq		VF28, 3(VI04)
+		MULAx	ACC, VF25, VF20x	NOP
+		MADDAy	ACC, VF26, VF20y	NOP
+		MADDAz	ACC, VF27, VF20z	NOP
+		MADDw	VF24, VF28, VF20w	NOP
+
+; --- Skin: position and normal into model space ------------------------------
+		MULAx	ACC, VF21, VF17x	NOP
+		MADDAy	ACC, VF22, VF17y	NOP
+		MADDAz	ACC, VF23, VF17z	NOP
+		MADDw	VF29, VF24, VF17w	NOP							; skinned pos
+; Weights that do not sum to exactly 1 (quantisation) would leave w slightly
+; off; VF00 is hardwired (0,0,0,1), so this pins it.
+		MULw.w	VF29, VF00, VF00w	NOP
+		MULAx	ACC, VF21, VF18x	NOP
+		MADDAy	ACC, VF22, VF18y	NOP
+		MADDz	VF30, VF23, VF18z	NOP							; skinned normal
+
+; --- Lighting (object space, three directional lights + ambient) ------------
+; The blended matrix (VF21..24) is dead from here, so VF21 takes the
+; texcoord; the lq sits in a free lower slot with cycles to spare before its
+; use after the divide.
+		MULAx	ACC, VF09, VF30x	lq		VF21, 5(VI06)		; texcoord
+		MADDAy	ACC, VF10, VF30y	NOP
+		MADDz	VF27, VF11, VF30z	NOP							; N.L per light
+		MAX		VF27, VF27, VF00	NOP							; clamp negatives
+		MULAx	ACC, VF12, VF27x	NOP
+		MADDAy	ACC, VF13, VF27y	NOP
+		MADDAz	ACC, VF14, VF27z	NOP
+		MADDw	VF27, VF15, VF00w	NOP							; + ambient
+		MUL		VF27, VF27, VF19	NOP							; x vertex colour
+		MINI	VF27, VF27, VF16	NOP
+		MAX		VF27, VF27, VF00	NOP
+
+; --- Transform to clip space, project, viewport ------------------------------
+		MULAx	ACC, VF01, VF29x	NOP
+		MADDAy	ACC, VF02, VF29y	NOP
+		MADDAz	ACC, VF03, VF29z	NOP
+		MADDw	VF25, VF04, VF29w	NOP							; clip space
+		NOP							div		Q, VF00w, VF25w
+		NOP							waitq
+		MULq	VF26, VF25, Q		NOP
+		MULq	VF21, VF21, Q		NOP							; (uq, vq, q, 0)
+		MUL		VF26, VF26, VF05	NOP
+		ADD		VF26, VF26, VF06	NOP							; GS pixels
+		FTOI4	VF28, VF26			NOP
+		FTOI0	VF27, VF27			NOP
+
+; --- Isolated clip-test window ----------------------------------------------
+		NOP							fsset	0x000
+		SUB.w	VF24, VF25, VF08	NOP							; w < near ?
+		SUB.xy	VF24, VF26, VF00	NOP							; x<0 or y<0 ?
+		SUB.xy	VF24, VF08, VF26	NOP							; x/y > 4095 ?
+		NOP							NOP
+		NOP							NOP
+		NOP							NOP
+		NOP							fsand	VI10, 0x080			; sticky S
+		NOP							ior		VI11, VI11, VI10
+
+		NOP							sq		VF21, 0(VI08)		; ST(Q)
+		NOP							sq		VF27, 1(VI08)		; RGBAQ
+		NOP							sq		VF28, 2(VI08)		; XYZ2
+		NOP							iaddiu	VI08, VI08, 3
+		NOP							iaddiu	VI06, VI06, 6
+		NOP							iaddiu	VI07, VI07, 1
+		NOP							ibne	VI13, VI00, vert_loop
+		NOP							NOP
+
+; --- Reject patch: any flagged vertex degenerates the whole triangle --------
+; XYZ2 sits at +2 of each vertex's 3-qword record.
+		NOP							ibeq	VI11, VI00, tri_ok
+		NOP							NOP
+		NOP							sq		VF31, 2(VI12)
+		NOP							sq		VF31, 5(VI12)
+		NOP							sq		VF31, 8(VI12)
+tri_ok:
+		NOP							ibne	VI07, VI05, tri_loop
+		NOP							NOP
+
+; --- Kick --------------------------------------------------------------------
+		NOP							iaddiu	VI09, VI00, 600
+		NOP							xgkick	VI09
+
+		NOP[E]						NOP
+		NOP							NOP
+		.align 4
+VuSkinTex_CodeEnd:

@@ -325,6 +325,25 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
             continue;
         }
 
+        // Textured characters (M12.5): the mesh's format decides the PROGRAM
+        // -- a 6-qword blob through the 5-qword program is garbage, whatever
+        // the material says -- and the material supplies the texture to bind.
+        // Binding happens here, before this renderer's chain traffic starts,
+        // the same between-kicks rule the queue's groups follow.
+        const int32_t skin_mat = renderer.material >= 0
+                                     ? renderer.material
+                                     : static_cast<int32_t>(mesh.material_index);
+        if (mesh.textured && bind_texture != nullptr && skin_mat >= 0 &&
+            static_cast<uint32_t>(skin_mat) < world.material_count()) {
+            const LoadedMaterial& sm =
+                world.material(static_cast<uint32_t>(skin_mat));
+            if (sm.texture_index != 0xFFFFFFFFu) {
+                bind_texture(bind_user, sm.texture_index);
+            }
+        }
+        const uint32_t skin_program =
+            mesh.textured ? programs.skin_tex_addr : programs.skin_addr;
+
         const Mat4 mvp = mat4_mul(viewproj, w);
         gfx::BatchBuilder::build_unlit_constants(mvp.m, vscale, voffset, 4095.0f,
                                                  cam.znear, g_constants);
@@ -377,7 +396,7 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
                 last_table = b;
             }
             if (ok) {
-                ok = chain.add_batch(mesh.batches[b], programs.skin_addr);
+                ok = chain.add_batch(mesh.batches[b], skin_program);
                 ++local.skin_batches;
             }
         }

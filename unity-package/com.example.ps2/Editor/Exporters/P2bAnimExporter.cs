@@ -399,19 +399,28 @@ namespace Ps2.Editor
             public List<int> Bones = new List<int>();
         }
 
+        // 'textured' selects the 6-qword vertex layout (a texcoord qword after
+        // the weights) and the ST+RGBAQ+XYZ2 batch tags for vu_skin_tex. The
+        // header's flags bit0 records the choice for the loader.
         public static byte[] ExportSkinnedMesh(Mesh mesh, uint materialIndex,
                                                Color32 fallbackColour,
                                                Transform[] bones,
                                                Dictionary<Transform, int> boneIndex,
                                                Transform[] originalBones,
-                                               int skeletonIndex)
+                                               int skeletonIndex,
+                                               bool textured = false)
         {
             Vector3[] positions = mesh.vertices;
             Vector3[] normals = mesh.normals;
             Color32[] colours = mesh.colors32;
+            Vector2[] uvs = textured ? mesh.uv : null;
             BoneWeight[] weights = mesh.boneWeights;
             int[] indices = mesh.triangles;
             int triangleCount = indices.Length / 3;
+            // 6 qwords need 42 vertices to stay under the 8-bit VIF NUM
+            // limit of 255 unpacked qwords; 5-qword batches keep their 48.
+            int stride = textured ? 6 : 5;
+            int maxVertsPerBatch = textured ? 42 : MaxSkinVertsPerBatch;
 
             // Unity's weight indices address the ORIGINAL bones[] order.
             var remap = new int[originalBones.Length];
@@ -456,7 +465,7 @@ namespace Ps2.Editor
                         }
                     }
                     bool needNew = current == null ||
-                                   current.TriangleCount * 3 + 3 > MaxSkinVertsPerBatch ||
+                                   current.TriangleCount * 3 + 3 > maxVertsPerBatch ||
                                    current.Bones.Count + additions > MaxPaletteBones;
                     if (needNew)
                     {
@@ -508,7 +517,7 @@ namespace Ps2.Editor
             header.F32(bounds.center.z);
             header.F32(bounds.extents.magnitude);
             header.U32((uint)skeletonIndex);
-            header.U32(0);
+            header.U32(textured ? 1u : 0u); // flags: bit0 = 6-qword vertices
 
             var descs = new ByteBuffer();
             var tables = new ByteBuffer();
@@ -518,7 +527,7 @@ namespace Ps2.Editor
             foreach (Batch batch in batches)
             {
                 int vertexCount = batch.TriangleCount * 3;
-                int vertQw = vertexCount * 5;
+                int vertQw = vertexCount * stride;
 
                 descs.U32((uint)blobCursorQw);
                 descs.U32((uint)vertQw);
@@ -537,7 +546,7 @@ namespace Ps2.Editor
                 tables.U16(0);
                 tables.U16(0);
 
-                WriteGifTag(blobs, (uint)vertexCount);
+                WriteGifTag(blobs, (uint)vertexCount, textured);
                 blobs.U32((uint)vertexCount);
                 blobs.U32(0);
                 blobs.U64(0);
@@ -578,6 +587,20 @@ namespace Ps2.Editor
                         for (int i = 0; i < 4; i++)
                         {
                             blobs.F32(weight[i]);
+                        }
+
+                        if (textured)
+                        {
+                            // (u, 1-v, 1, 0): v flips into GS raster
+                            // orientation, exactly as the rigid textured
+                            // path writes it; the 1 in z becomes Q after the
+                            // VU's perspective divide.
+                            Vector2 uv = uvs != null && uvs.Length > src
+                                             ? uvs[src] : Vector2.zero;
+                            blobs.F32(uv.x);
+                            blobs.F32(1.0f - uv.y);
+                            blobs.F32(1.0f);
+                            blobs.F32(0.0f);
                         }
                     }
                 }
@@ -646,17 +669,23 @@ namespace Ps2.Editor
             }
         }
 
-        private static void WriteGifTag(ByteBuffer b, uint nloop)
+        private static void WriteGifTag(ByteBuffer b, uint nloop, bool textured)
         {
-            // prim = triangle | IIP (gouraud); regs RGBAQ, XYZ2.
+            // prim = triangle | IIP (gouraud) | TME when textured (FST stays
+            // 0: STQ perspective-correct texturing, as the rigid path).
             ulong prim = 3UL | (1UL << 3);
+            if (textured)
+            {
+                prim |= 1UL << 4;
+            }
             ulong lo = (nloop & 0x7FFFUL)
                        | (1UL << 15)   // EOP
                        | (1UL << 46)   // PRE
                        | ((prim & 0x7FFUL) << 47)
-                       | (2UL << 60);  // NREG
+                       | ((textured ? 3UL : 2UL) << 60); // NREG
             b.U64(lo);
-            b.U64(0x51UL);
+            b.U64(textured ? 0x512UL   // ST, RGBAQ, XYZ2
+                           : 0x51UL);  // RGBAQ, XYZ2
         }
 
         private static int Align16(int v) => (v + 15) & ~15;

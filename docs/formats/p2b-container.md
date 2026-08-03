@@ -295,7 +295,10 @@ SkinnedMeshHeader {                 // 32 bytes
     f32 bounds_center[3]
     f32 bounds_radius
     u32 skeleton_index
-    u32 pad
+    u32 flags                       // bit0 = textured (M12.5); was pad,
+                                    // always written 0 before, so old files
+                                    // read as untextured. Unknown bits are a
+                                    // load error, not a warning.
 }
 BatchDesc[batch_count] { u32 offset_qw, vert_qw, vcount, vdest }   // vdest = 114
 BoneTable[batch_count] {            // 64 bytes, fixed stride
@@ -307,7 +310,7 @@ BoneTable[batch_count] {            // 64 bytes, fixed stride
 Blob[batch_count] { GifTag; count qw; Vertex[vcount] }
 ```
 
-Vertex, 5 quadwords:
+Vertex, 5 quadwords (flags bit0 clear) or 6 (set):
 
 ```
 +0 f32 position[4]      // w = 1
@@ -315,7 +318,15 @@ Vertex, 5 quadwords:
 +2 f32 colour[4]        // 0..255, alpha in PS2 range (0x80 opaque)
 +3 i32 palette_offset[4] // bone_slot * 4 -- INTEGERS, read by ILW
 +4 f32 weight[4]        // sums to 1
++5 f32 texcoord[4]      // textured only: (u, 1-v, 1, 0), v pre-flipped to
+                        // GS raster orientation like the rigid MESH path
 ```
+
+The stride decides the microprogram (vu_skin at 1300 vs vu_skin_tex at
+1500) and the batch ceiling: 48 vertices (16 triangles) untextured, 42 (14)
+textured -- both are the largest multiple of 3 whose unpack stays inside
+the 8-bit VIF NUM limit of 255 qwords. Textured batch tags carry NREG=3,
+regs ST+RGBAQ+XYZ2, PRIM.TME set; untextured stay NREG=2, RGBAQ+XYZ2.
 
 `palette_offset` holds *local slot* indices (already multiplied by the
 4-quadword matrix stride), not skeleton bone indices: the microprogram adds

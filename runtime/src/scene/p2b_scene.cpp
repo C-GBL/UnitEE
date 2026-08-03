@@ -365,6 +365,16 @@ bool World::load(const io::P2bFile& file)
             mesh.bounds_center = Vec3{v.f32(8), v.f32(12), v.f32(16)};
             mesh.bounds_radius = v.f32(20);
             mesh.skeleton = v.u32(24);
+            // Offset 28 was header pad, always written 0, until M12.5 made
+            // it flags: bit0 = textured (6-qword vertices). Unknown bits are
+            // a format from the future; refuse rather than misread it.
+            const uint32_t skin_flags = v.u32(28);
+            if ((skin_flags & ~1u) != 0u) {
+                m_error = "unknown skinned mesh flags";
+                return false;
+            }
+            mesh.textured = (skin_flags & 1u) != 0u;
+            const uint32_t vert_stride = mesh.textured ? 6u : 5u;
             if (mesh.batch_count == 0 || mesh.batch_count > kMaxSkinBatches) {
                 m_error = "bad skinned batch count";
                 return false;
@@ -395,7 +405,8 @@ bool World::load(const io::P2bFile& file)
                     m_error = "skinned batch blob outside its section";
                     return false;
                 }
-                if (vcount == 0 || vcount % 3u != 0 || vert_qw != vcount * 5u) {
+                if (vcount == 0 || vcount % 3u != 0 ||
+                    vert_qw != vcount * vert_stride) {
                     m_error = "skinned batch vertex counts inconsistent";
                     return false;
                 }

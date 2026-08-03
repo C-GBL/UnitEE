@@ -248,10 +248,20 @@ namespace Ps2.Editor
                 int at;
                 if (!meshAt.TryGetValue(smr.sharedMesh, out at))
                 {
+                    // The texture is the renderer's main texture; without one
+                    // (or without UVs) the mesh exports in the 5-qword
+                    // vertex-coloured format the M9 rigs use.
+                    Texture2D tex = smr.sharedMaterial != null
+                        ? smr.sharedMaterial.mainTexture as Texture2D : null;
+                    bool textured = tex != null && smr.sharedMesh.uv != null &&
+                                    smr.sharedMesh.uv.Length ==
+                                        smr.sharedMesh.vertexCount;
                     at = payload.SkinnedMeshes.Count;
                     payload.SkinnedMeshes.Add(P2bAnimExporter.ExportSkinnedMesh(
                         smr.sharedMesh, 0, FallbackColour(smr),
-                        skeleton.Ordered, skeleton.Index, smr.bones, 0));
+                        skeleton.Ordered, skeleton.Index, smr.bones, 0,
+                        textured));
+                    payload.MeshTextures.Add(textured ? tex : null);
                     meshAt[smr.sharedMesh] = at;
                 }
                 payload.RendererMesh[smr] = at;

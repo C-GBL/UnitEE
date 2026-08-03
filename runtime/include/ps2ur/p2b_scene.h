@@ -165,6 +165,10 @@ struct LoadedSkinnedMesh {
     uint32_t material_index = 0;
     uint32_t batch_count = 0;
     uint32_t skeleton = 0;
+    // Header flags bit0 (M12.5): vertices are 6 qwords with a texcoord and
+    // the batch tags emit ST+RGBAQ+XYZ2, so these batches MUST run on the
+    // textured program -- the vertex stride is baked into the blob.
+    bool textured = false;
     gfx::BatchBlock batches[kMaxSkinBatches];
     uint16_t bone_table[kMaxSkinBatches][anim::kMaxPaletteBones];
     uint8_t bone_count[kMaxSkinBatches];

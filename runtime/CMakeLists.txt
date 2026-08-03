@@ -107,7 +107,8 @@ if(PS2UR_PLATFORM STREQUAL "ps2")
         ${CMAKE_CURRENT_SOURCE_DIR}/src/vu/vu_lit.vsm
         ${CMAKE_CURRENT_SOURCE_DIR}/src/vu/vu_unlit_tex.vsm
         ${CMAKE_CURRENT_SOURCE_DIR}/src/vu/vu_lit_fog.vsm
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/vu/vu_skin.vsm)
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/vu/vu_skin.vsm
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/vu/vu_skin_tex.vsm)
     # The ps2 configuration must be driven through the ps2dev cross toolchain
     # file (planned at tools/cmake/ps2-toolchain.cmake, plan section 8), with
     # the toolchain rooted at $ENV{PS2DEV} (default C:/Users/Ash/ps2dev,

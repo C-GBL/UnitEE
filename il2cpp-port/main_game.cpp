@@ -58,6 +58,8 @@ extern "C" u32 VuLitFog_CodeStart __attribute__((section(".vudata")));
 extern "C" u32 VuLitFog_CodeEnd __attribute__((section(".vudata")));
 extern "C" u32 VuSkin_CodeStart __attribute__((section(".vudata")));
 extern "C" u32 VuSkin_CodeEnd __attribute__((section(".vudata")));
+extern "C" u32 VuSkinTex_CodeStart __attribute__((section(".vudata")));
+extern "C" u32 VuSkinTex_CodeEnd __attribute__((section(".vudata")));
 extern "C" u32 VuLit_CodeStart __attribute__((section(".vudata")));
 extern "C" u32 VuLit_CodeEnd __attribute__((section(".vudata")));
 
@@ -72,6 +74,7 @@ constexpr uint32_t kAddrTex = 300;
 constexpr uint32_t kAddrLit = 700;
 constexpr uint32_t kAddrLitFog = 1000;
 constexpr uint32_t kAddrSkin = 1300;
+constexpr uint32_t kAddrSkinTex = 1500;
 
 // VRAM holds the two colour buffers and the depth buffer, so what is left is
 // what textures get. Eight 256x256 PSMT8 pages plus CLUTs fits comfortably.
@@ -442,14 +445,17 @@ int main(void)
     // All FIVE, at the addresses scene::RendererPrograms defaults to. Only
     // unlit and lit were uploaded before, which silently ruled out every
     // textured, fogged and skinned material a build could contain.
-    vu::MicroProgram prog_unlit, prog_tex, prog_lit, prog_fog, prog_skin;
+    vu::MicroProgram prog_unlit, prog_tex, prog_lit, prog_fog, prog_skin,
+        prog_skin_tex;
     prog_unlit.set_blob(&VuUnlit_CodeStart, &VuUnlit_CodeEnd, kAddrUnlit);
     prog_tex.set_blob(&VuUnlitTex_CodeStart, &VuUnlitTex_CodeEnd, kAddrTex);
     prog_lit.set_blob(&VuLit_CodeStart, &VuLit_CodeEnd, kAddrLit);
     prog_fog.set_blob(&VuLitFog_CodeStart, &VuLitFog_CodeEnd, kAddrLitFog);
     prog_skin.set_blob(&VuSkin_CodeStart, &VuSkin_CodeEnd, kAddrSkin);
+    prog_skin_tex.set_blob(&VuSkinTex_CodeStart, &VuSkinTex_CodeEnd,
+                           kAddrSkinTex);
     if (!prog_unlit.upload() || !prog_tex.upload() || !prog_lit.upload() ||
-        !prog_fog.upload() || !prog_skin.upload()) {
+        !prog_fog.upload() || !prog_skin.upload() || !prog_skin_tex.upload()) {
         fatal("vu programs");
         return 1;
     }
