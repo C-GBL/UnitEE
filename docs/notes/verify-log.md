@@ -411,3 +411,16 @@ its copy loop skipped missing files silently, while the runtime asks for
 fixed, and a listed-but-missing module is now a build warning naming the
 boot symptom. The embedded-blob fallback in memcard.cpp is exactly what the
 list's own comment says cannot be trusted (SifExecModuleBuffer, M10).
+
+## PS2ParticleSystem (M12.5 task 4, 2026-08-03)
+
+ADR-011: CPU sim (8 systems x 128 particles, xorshift32 per system so a
+reload replays identically), billboarded on the EE from the view matrix's
+rows, drawn through vu_unlit_tex with the transparent-pass GS state
+(alpha 0x44 / additive 0x48, Z test on, Z write off). No new microprogram:
+a few hundred quads is under a millisecond of EE time, and M4 is the
+receipt for what a new .vsm costs. Batches stage 13 quads (78 verts x 3
+qwords = 234, under the 255-qword VIF NUM ceiling) in a static scratch
+reused after each per-system kick+wait. Bursts are QUEUED at load and fired
+on the first update -- spawning at parse time would read world matrices
+that do not exist yet.

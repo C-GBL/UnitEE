@@ -48,6 +48,7 @@ set(PS2UR_SOURCES
     src/vu/vu_program.cpp
     src/scene/scene.cpp
     src/scene/p2b_scene.cpp
+    src/scene/particles.cpp
     src/scene/scene_renderer.cpp
     src/scene/scene_load.cpp
     src/gfx/render_queue.cpp
@@ -70,6 +71,7 @@ set(PS2UR_SOURCES
     src/bridge/bridge_phys.cpp
     src/bridge/bridge_audio.cpp
     src/bridge/bridge_prefs.cpp
+    src/bridge/bridge_particles.cpp
     src/bridge/generated_bridge.cpp
 )
 

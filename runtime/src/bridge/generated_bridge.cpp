@@ -79,6 +79,11 @@ const Ps2urBridgeEntry ps2ur_bridge_table[] = {
     { "ps2ur_prefs_string_length", reinterpret_cast<const void*>(&ps2ur_prefs_string_length) },
     { "ps2ur_prefs_string_byte", reinterpret_cast<const void*>(&ps2ur_prefs_string_byte) },
     { "ps2ur_prefs_save", reinterpret_cast<const void*>(&ps2ur_prefs_save) },
+    { "ps2ur_particles_play", reinterpret_cast<const void*>(&ps2ur_particles_play) },
+    { "ps2ur_particles_stop", reinterpret_cast<const void*>(&ps2ur_particles_stop) },
+    { "ps2ur_particles_emit", reinterpret_cast<const void*>(&ps2ur_particles_emit) },
+    { "ps2ur_particles_is_playing", reinterpret_cast<const void*>(&ps2ur_particles_is_playing) },
+    { "ps2ur_particles_count", reinterpret_cast<const void*>(&ps2ur_particles_count) },
 };
 
 const int ps2ur_bridge_table_count =

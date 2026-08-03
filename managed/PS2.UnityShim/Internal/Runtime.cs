@@ -214,6 +214,19 @@ namespace UnityEngine.Internal
             }
         }
 
+        internal static void CreatePS2ParticleSystem(int entityHandle)
+        {
+            GameObject go = GetOrCreateWrapper(entityHandle);
+            if (go == null)
+            {
+                Debug.LogError("CreatePS2ParticleSystem: dead entity handle");
+                return;
+            }
+            var system = new Ps2.Runtime.PS2ParticleSystem();
+            system.Attach(go);
+            go.RegisterComponent(system);
+        }
+
         internal static void CreateAudioListener(int entityHandle)
         {
             GameObject go = GetOrCreateWrapper(entityHandle);

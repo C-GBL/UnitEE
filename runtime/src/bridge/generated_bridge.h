@@ -220,6 +220,16 @@ int32_t ps2ur_prefs_string_length(const char* key);
 int32_t ps2ur_prefs_string_byte(const char* key, int32_t index);
 // Writes the store to memory card port 0 under the identity the host set at boot. Returns memcard::Status: 0 Ok, then NoCard, NotFormatted, Full, WriteProtected, NotFound, Error. Unity's Save cannot fail; this one reports through PS2Memory.LastSaveError (deviation 29).
 int32_t ps2ur_prefs_save(void);
+// PS2ParticleSystem.Play (ADR-011): starts emission and fires the authored burst. Addressed by the owning entity's handle.
+void ps2ur_particles_play(int32_t entity_handle);
+// PS2ParticleSystem.Stop: emission ceases, live particles play out -- Unity's Stop semantics.
+void ps2ur_particles_stop(int32_t entity_handle);
+// PS2ParticleSystem.Emit(count). Spawns up to the pool's remaining capacity; the budget is the contract.
+void ps2ur_particles_emit(int32_t entity_handle, int32_t count);
+// 1 while the system is emitting.
+int32_t ps2ur_particles_is_playing(int32_t entity_handle);
+// Live particles right now; PS2ParticleSystem.particleCount.
+int32_t ps2ur_particles_count(int32_t entity_handle);
 
 } // extern "C"
 

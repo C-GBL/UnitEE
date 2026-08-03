@@ -144,7 +144,8 @@ ComponentRef[component_count] {
     u16 type_id             // 1 MeshRenderer, 2 Camera, 3 DirectionalLight,
                             // 4 Script (M7), 5 SkinnedMeshRenderer (M9),
                             // 6 Rigidbody (M11), 7 Animator (M12.5),
-                            // 8 AudioSource, 9 AudioListener (M12.5)
+                            // 8 AudioSource, 9 AudioListener,
+                            // 10 PS2ParticleSystem (M12.5)
     u16 pad
     u32 data_offset         // from the start of this section
 }
@@ -184,6 +185,17 @@ AudioSource (M12.5, 24B) {
                                              // the exporter wrote 256-unity
 AudioListener (M12.5, 4B) { u32 pad }        // one per scene; loader keeps
                                              // the first
+PS2ParticleSystem (M12.5, 64B, ADR-011) {
+                   u32 texture;              // TEX index; -1 untextured
+                   u32 flags;                // bit0 looping, bit1 playOnAwake,
+                                             // bit2 additive, bit3 world-space
+                   f32 emission_rate; u32 burst_count;
+                   u32 shape;                // 0 sphere, 1 cone(+Z), 2 box
+                   f32 shape_a, shape_b, shape_c;
+                   f32 lifetime, speed, size_start, size_end;
+                   u32 colour_start, colour_end;  // RGBA8
+                   f32 gravity;              // multiplier of 9.81 down
+                   u32 max_particles }       // clamped to the runtime's 128
 ```
 
 Readers accept the 12-byte camera and default the M8 tail (old runtimes

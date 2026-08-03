@@ -70,6 +70,7 @@ bool World::load(const io::P2bFile& file)
     }
     m_audio_source_count = 0;
     m_listener_entity = -1;
+    m_particle_count = 0;
     m_camera = Camera{};
     m_light = DirectionalLight{};
     m_error = "";
@@ -692,6 +693,48 @@ bool World::load(const io::P2bFile& file)
                 if (m_listener_entity < 0) {
                     m_listener_entity = static_cast<int32_t>(i);
                 }
+            } else if (type == kComponentParticleSystem) {
+                // 64 bytes; the ParticleEmitter fields in declaration order.
+                if (!v.ok(data_off, 64u)) {
+                    m_error = "particle system payload truncated";
+                    return false;
+                }
+                if (m_particle_count >= kMaxParticleSystems) {
+                    m_error = "too many particle systems";
+                    return false;
+                }
+                ParticleEmitter& fx = m_particle_emitters[m_particle_count];
+                fx.entity = static_cast<int32_t>(i);
+                fx.texture = v.u32(data_off + 0);
+                fx.flags = v.u32(data_off + 4);
+                fx.emission_rate = v.f32(data_off + 8);
+                fx.burst_count = v.u32(data_off + 12);
+                fx.shape = v.u32(data_off + 16);
+                fx.shape_a = v.f32(data_off + 20);
+                fx.shape_b = v.f32(data_off + 24);
+                fx.shape_c = v.f32(data_off + 28);
+                fx.lifetime = v.f32(data_off + 32);
+                fx.speed = v.f32(data_off + 36);
+                fx.size_start = v.f32(data_off + 40);
+                fx.size_end = v.f32(data_off + 44);
+                fx.colour_start = v.u32(data_off + 48);
+                fx.colour_end = v.u32(data_off + 52);
+                fx.gravity = v.f32(data_off + 56);
+                fx.max_particles = v.u32(data_off + 60);
+                if (fx.max_particles > kMaxParticlesPerSystem) {
+                    fx.max_particles = kMaxParticlesPerSystem;
+                }
+                ParticleSystemState& fresh =
+                    m_particle_states[m_particle_count];
+                fresh = ParticleSystemState{};
+                fresh.rng ^= static_cast<uint32_t>(i) * 2654435761u;
+                fresh.playing = (fx.flags & 2u) != 0u; // playOnAwake
+                if (fresh.playing && fx.burst_count > 0) {
+                    // Queued, not fired: spawning here would read world
+                    // matrices that do not exist yet.
+                    fresh.pending_emit = fx.burst_count;
+                }
+                ++m_particle_count;
             } else if (type == kComponentAnimator) {
                 // 8 bytes: controller index and the layer count baked.
                 if (!v.ok(data_off, 8u)) {
@@ -862,6 +905,9 @@ bool World::append(const io::P2bFile& file)
     } else if (m_audio_source_count + incoming.m_audio_source_count >
                kMaxAudioSources) {
         m_error = "additive scene does not fit: audio sources";
+    } else if (m_particle_count + incoming.m_particle_count >
+               kMaxParticleSystems) {
+        m_error = "additive scene does not fit: particle systems";
     } else if (animator_ref_base + incoming.m_animator_ref_count >
                kMaxAnimators) {
         m_error = "additive scene does not fit: animators";
@@ -950,6 +996,14 @@ bool World::append(const io::P2bFile& file)
         AudioSourceRef snd = incoming.m_audio_sources[i];
         snd.entity += static_cast<int32_t>(entity_base);
         m_audio_sources[m_audio_source_count++] = snd;
+    }
+
+    for (uint32_t i = 0; i < incoming.m_particle_count; ++i) {
+        ParticleEmitter fx = incoming.m_particle_emitters[i];
+        fx.entity += static_cast<int32_t>(entity_base);
+        m_particle_emitters[m_particle_count] = fx;
+        m_particle_states[m_particle_count] = incoming.m_particle_states[i];
+        ++m_particle_count;
     }
 
     for (uint32_t i = 0; i < incoming.m_rigidbody_count; ++i) {

@@ -28,6 +28,7 @@ namespace Ps2.Editor
             public Animator Animator;           // M12.5, or null
             public AudioSource Audio;           // M12.5 task 2, or null
             public bool Listener;               // has an AudioListener
+            public Ps2.Runtime.PS2ParticleSystem Particles; // task 4, or null
         }
 
         // The rig sections. Normally baked from the scene's own assets by
@@ -160,6 +161,18 @@ namespace Ps2.Editor
             {
                 Walk(root.transform, -1, entities, meshes, meshLookup, textures,
                      textureLookup, materials, materialLookup);
+            }
+
+            // Particle textures (M12.5 task 4): registered after the walk
+            // found the components, deduplicated against everything else.
+            foreach (var e in entities)
+            {
+                Texture2D fx = e.Particles != null ? e.Particles.texture : null;
+                if (fx != null && !textureLookup.ContainsKey(fx))
+                {
+                    textureLookup[fx] = textures.Count;
+                    textures.Add(fx);
+                }
             }
 
             // AudioClips referenced by the scene's AudioSources -> SND (M12.5
@@ -336,7 +349,8 @@ namespace Ps2.Editor
                 writer.AddSection(P2bWriter.SectionPhysics, phys.Payload);
             }
 
-            writer.AddSection(P2bWriter.SectionScene, BuildScene(entities, scriptNames, audioClipIndex));
+            writer.AddSection(P2bWriter.SectionScene, BuildScene(entities, scriptNames, audioClipIndex,
+                                       textureLookup));
             writer.Write(path);
 
             // A rig this call baked belongs to THIS scene. PendingSkin is
@@ -450,6 +464,7 @@ namespace Ps2.Editor
             record.Animator = t.GetComponent<Animator>();
             record.Audio = t.GetComponent<AudioSource>();
             record.Listener = t.GetComponent<AudioListener>() != null;
+            record.Particles = t.GetComponent<Ps2.Runtime.PS2ParticleSystem>();
 
             var camera = t.GetComponent<Camera>();
             if (camera != null)
@@ -526,6 +541,15 @@ namespace Ps2.Editor
             return 0;
         }
 
+        private static uint PackColour(Color c)
+        {
+            uint r = (uint)Mathf.Clamp(Mathf.RoundToInt(c.r * 255f), 0, 255);
+            uint g = (uint)Mathf.Clamp(Mathf.RoundToInt(c.g * 255f), 0, 255);
+            uint b = (uint)Mathf.Clamp(Mathf.RoundToInt(c.b * 255f), 0, 255);
+            uint a = (uint)Mathf.Clamp(Mathf.RoundToInt(c.a * 255f), 0, 255);
+            return r | (g << 8) | (b << 16) | (a << 24);
+        }
+
         // GS ALPHA register: Cv = ((A-B)*C >> 7) + D.
         private static ulong GsAlphaFor(uint kind)
         {
@@ -547,7 +571,8 @@ namespace Ps2.Editor
 
         private static byte[] BuildScene(List<EntityRecord> entities,
                                          Dictionary<string, uint> scriptNames,
-                                         Dictionary<string, int> audioClipIndex)
+                                         Dictionary<string, int> audioClipIndex,
+                                         Dictionary<Texture2D, int> textureLookup)
         {
             // Components are laid out entity-by-entity, so component_first is
             // sequential. Payloads follow the ref table.
@@ -688,6 +713,38 @@ namespace Ps2.Editor
                     var p = new ByteBuffer();
                     p.U32(0); // 4 bytes, all pad
                     comps.Add((9, p.ToArray()));
+                }
+                if (e.Particles != null)
+                {
+                    // 64 bytes; ParticleEmitter field order (ADR-011).
+                    Ps2.Runtime.PS2ParticleSystem fx = e.Particles;
+                    var p = new ByteBuffer();
+                    uint tex = 0xFFFFFFFF;
+                    if (fx.texture != null &&
+                        textureLookup.TryGetValue(fx.texture, out int ti))
+                        tex = (uint)ti;
+                    p.U32(tex);
+                    uint f = 0;
+                    if (fx.looping) f |= 1;
+                    if (fx.playOnAwake) f |= 2;
+                    if (fx.additive) f |= 4;
+                    if (fx.worldSpace) f |= 8;
+                    p.U32(f);
+                    p.F32(fx.emissionRate);
+                    p.U32((uint)Mathf.Max(0, fx.burstCount));
+                    p.U32((uint)fx.shape);
+                    p.F32(fx.shapeA);
+                    p.F32(fx.shapeB);
+                    p.F32(fx.shapeC);
+                    p.F32(fx.lifetime);
+                    p.F32(fx.speed);
+                    p.F32(fx.sizeStart);
+                    p.F32(fx.sizeEnd);
+                    p.U32(PackColour(fx.colourStart));
+                    p.U32(PackColour(fx.colourEnd));
+                    p.F32(fx.gravityModifier);
+                    p.U32((uint)Mathf.Clamp(fx.maxParticles, 1, 128));
+                    comps.Add((10, p.ToArray()));
                 }
                 if (e.Scripts != null)
                 {

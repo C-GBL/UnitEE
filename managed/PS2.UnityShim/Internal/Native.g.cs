@@ -294,5 +294,25 @@ namespace UnityEngine.Internal
         // Writes the store to memory card port 0 under the identity the host set at boot. Returns memcard::Status: 0 Ok, then NoCard, NotFormatted, Full, WriteProtected, NotFound, Error. Unity's Save cannot fail; this one reports through PS2Memory.LastSaveError (deviation 29).
         [DllImport("__Internal")]
         internal static extern int ps2ur_prefs_save();
+
+        // PS2ParticleSystem.Play (ADR-011): starts emission and fires the authored burst. Addressed by the owning entity's handle.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_particles_play(int entity_handle);
+
+        // PS2ParticleSystem.Stop: emission ceases, live particles play out -- Unity's Stop semantics.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_particles_stop(int entity_handle);
+
+        // PS2ParticleSystem.Emit(count). Spawns up to the pool's remaining capacity; the budget is the contract.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_particles_emit(int entity_handle, int count);
+
+        // 1 while the system is emitting.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_particles_is_playing(int entity_handle);
+
+        // Live particles right now; PS2ParticleSystem.particleCount.
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_particles_count(int entity_handle);
     }
 }

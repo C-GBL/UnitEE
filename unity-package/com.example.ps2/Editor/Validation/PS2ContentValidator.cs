@@ -60,6 +60,7 @@ namespace Ps2.Editor
             "BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider",
             // M12.5: task 1 (both rig kinds) and task 2.
             "SkinnedMeshRenderer", "Animator", "AudioSource", "AudioListener",
+            "PS2ParticleSystem",
         };
 
         /// <summary>
@@ -71,6 +72,15 @@ namespace Ps2.Editor
         private static readonly Dictionary<string, string> DropReasons =
             new Dictionary<string, string>
             {
+                ["ParticleSystem"] =
+                    "Unity's ParticleSystem (curves, sub-emitters, GPU sim) " +
+                    "has no PS2 equivalent. Use the PS2ParticleSystem " +
+                    "component (Add Component > PS2), the constrained " +
+                    "replacement ADR-011 defines: rate/burst emission, " +
+                    "sphere/cone/box shapes, linear size and colour ramps.",
+                ["ParticleSystemRenderer"] =
+                    "rides Unity's ParticleSystem; PS2ParticleSystem draws " +
+                    "itself.",
                 ["Animation"] =
                     "the legacy Animation component is not implemented; the " +
                     "runtime animates through Animator and baked clips only.",

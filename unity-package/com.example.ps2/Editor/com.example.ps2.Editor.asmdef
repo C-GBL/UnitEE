@@ -1,7 +1,9 @@
 {
     "name": "com.example.ps2.Editor",
     "rootNamespace": "Ps2.Editor",
-    "references": [],
+    "references": [
+        "com.example.ps2.Runtime"
+    ],
     "includePlatforms": [
         "Editor"
     ],

@@ -1368,6 +1368,70 @@
       "doc": "Writes the store to memory card port 0 under the identity the host set at boot. Returns memcard::Status: 0 Ok, then NoCard, NotFormatted, Full, WriteProtected, NotFound, Error. Unity's Save cannot fail; this one reports through PS2Memory.LastSaveError (deviation 29).",
       "returns": "i32",
       "params": []
+    },
+    {
+      "name": "ps2ur_particles_play",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "PS2ParticleSystem.Play (ADR-011): starts emission and fires the authored burst. Addressed by the owning entity's handle.",
+      "returns": "void",
+      "params": [
+        {
+          "name": "entity_handle",
+          "type": "i32"
+        }
+      ]
+    },
+    {
+      "name": "ps2ur_particles_stop",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "PS2ParticleSystem.Stop: emission ceases, live particles play out -- Unity's Stop semantics.",
+      "returns": "void",
+      "params": [
+        {
+          "name": "entity_handle",
+          "type": "i32"
+        }
+      ]
+    },
+    {
+      "name": "ps2ur_particles_emit",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "PS2ParticleSystem.Emit(count). Spawns up to the pool's remaining capacity; the budget is the contract.",
+      "returns": "void",
+      "params": [
+        {
+          "name": "entity_handle",
+          "type": "i32"
+        },
+        {
+          "name": "count",
+          "type": "i32"
+        }
+      ]
+    },
+    {
+      "name": "ps2ur_particles_is_playing",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "1 while the system is emitting.",
+      "returns": "i32",
+      "params": [
+        {
+          "name": "entity_handle",
+          "type": "i32"
+        }
+      ]
+    },
+    {
+      "name": "ps2ur_particles_count",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "Live particles right now; PS2ParticleSystem.particleCount.",
+      "returns": "i32",
+      "params": [
+        {
+          "name": "entity_handle",
+          "type": "i32"
+        }
+      ]
     }
   ]
 }

@@ -55,6 +55,12 @@ inline constexpr uint16_t kComponentRigidbody = 6;
 inline constexpr uint16_t kComponentAnimator = 7;
 inline constexpr uint16_t kComponentAudioSource = 8;
 inline constexpr uint16_t kComponentAudioListener = 9;
+inline constexpr uint16_t kComponentParticleSystem = 10;
+
+// Particles (M12.5 task 4, ADR-011). Budgeted, not unbounded: the pool is
+// the contract, and an emitter cannot exceed it.
+inline constexpr uint32_t kMaxParticleSystems = 8;
+inline constexpr uint32_t kMaxParticlesPerSystem = 128;
 
 // A Rigidbody at most per entity, so the table is bounded by kMaxEntities;
 // this is the far smaller number a scene realistically simulates, and
@@ -183,6 +189,47 @@ struct AudioSourceRef {
     int32_t priority = 128;
 };
 
+// A PS2ParticleSystem component (M12.5 task 4, ADR-011): the Editor-authored
+// emitter. Deliberately not Unity's ParticleSystem -- constants and linear
+// ramps only, the subset plan 7.2 names.
+struct ParticleEmitter {
+    int32_t entity = -1;
+    uint32_t texture = 0xFFFFFFFFu; // TEX section index; -1 = untextured
+    // bit0 looping, bit1 playOnAwake, bit2 additive (else alpha),
+    // bit3 world-space simulation (else local, gravity = local -Y).
+    uint32_t flags = 0;
+    float emission_rate = 10.0f; // particles per second while playing
+    uint32_t burst_count = 0;    // emitted at Play()
+    uint32_t shape = 0;          // 0 sphere, 1 cone (+Z axis), 2 box
+    float shape_a = 0.5f;        // sphere radius / cone angle deg / box half x
+    float shape_b = 0.0f;        //               / cone radius    / box half y
+    float shape_c = 0.0f;        //                                / box half z
+    float lifetime = 1.0f;       // seconds
+    float speed = 1.0f;
+    float size_start = 0.25f;    // world units, quad edge
+    float size_end = 0.25f;
+    uint32_t colour_start = 0xFFFFFFFFu; // RGBA8, A in 0..255 Unity range
+    uint32_t colour_end = 0x00FFFFFFu;
+    float gravity = 0.0f;        // multiplier of 9.81 downward
+    uint32_t max_particles = kMaxParticlesPerSystem;
+};
+
+struct Particle {
+    Vec3 pos;
+    float ttl;  // total lifetime, for the ramps
+    Vec3 vel;
+    float life; // remaining; dead at <= 0
+};
+
+struct ParticleSystemState {
+    uint32_t count = 0;
+    bool playing = false;
+    float spawn_accumulator = 0.0f;
+    uint32_t pending_emit = 0; // burst queued for the next update
+    uint32_t rng = 0x12345678u; // xorshift32; per-system so replays repeat
+    Particle particles[kMaxParticlesPerSystem];
+};
+
 // A skinned mesh (M9). Batches are zero-copy blobs like rigid meshes, but
 // each carries the bone table its vertices' local slots index.
 struct LoadedSkinnedMesh {
@@ -295,6 +342,28 @@ public:
     // the first if a scene ships more anyway.
     int32_t listener_entity() const { return m_listener_entity; }
 
+    // ---- M12.5 task 4: particles (ADR-011) -------------------------------
+
+    uint32_t particle_system_count() const { return m_particle_count; }
+    const ParticleEmitter& particle_emitter(uint32_t i) const
+    {
+        return m_particle_emitters[i];
+    }
+    const ParticleSystemState& particle_state(uint32_t i) const
+    {
+        return m_particle_states[i];
+    }
+    // The system on an entity, or -1; how the bridge addresses them.
+    int32_t particle_system_for_entity(int32_t entity_index) const;
+
+    // Steps every playing system: emission, integration, expiry. Call with
+    // world matrices CURRENT -- world-space systems spawn from the entity's
+    // world transform.
+    void update_particles(float dt);
+    void particle_play(uint32_t system);
+    void particle_stop(uint32_t system);   // stops EMITTING; live ones finish
+    void particle_emit(uint32_t system, uint32_t count);
+
     // ---- M9: skinning + animation ---------------------------------------
 
     uint32_t skinned_mesh_count() const { return m_skinned_mesh_count; }
@@ -363,6 +432,10 @@ private:
     AudioSourceRef m_audio_sources[kMaxAudioSources];
     uint32_t m_audio_source_count = 0;
     int32_t m_listener_entity = -1;
+
+    ParticleEmitter m_particle_emitters[kMaxParticleSystems];
+    ParticleSystemState m_particle_states[kMaxParticleSystems];
+    uint32_t m_particle_count = 0;
 
     AnimatorRef m_animator_refs[kMaxAnimators];
     uint32_t m_animator_ref_count = 0;

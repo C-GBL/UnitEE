@@ -363,11 +363,13 @@ int main(void)
         find_runtime_method("CreateAudioSource", 7);
     const MethodInfo* create_audio_listener =
         find_runtime_method("CreateAudioListener", 1);
+    const MethodInfo* create_particles =
+        find_runtime_method("CreatePS2ParticleSystem", 1);
     const MethodInfo* tick = find_runtime_method("Tick", 1);
     if (create_script == nullptr || tick == nullptr ||
         create_rigidbody == nullptr || bind_colliders == nullptr ||
         create_animator == nullptr || create_audio_source == nullptr ||
-        create_audio_listener == nullptr) {
+        create_audio_listener == nullptr || create_particles == nullptr) {
         // Almost always a stripping problem: the dispatcher is reached by
         // reflection, so it needs a link.xml entry to survive.
         printf("[game] UnityEngine.Internal.Runtime was not found. It is "
@@ -441,6 +443,19 @@ int main(void)
             return 1;
         }
     }
+    for (uint32_t fx = 0; fx < world.particle_system_count(); ++fx) {
+        int32_t handle = world.handle_of(world.particle_emitter(fx).entity);
+        void* args[1] = {&handle};
+        if (!invoke_checked(create_particles, args, "CreatePS2ParticleSystem")) {
+            fatal("CreatePS2ParticleSystem");
+            return 1;
+        }
+    }
+    if (world.particle_system_count() > 0) {
+        printf("[game] %u particle systems\n",
+               static_cast<unsigned>(world.particle_system_count()));
+    }
+
     if (world.audio_source_count() > 0 || world.listener_entity() >= 0) {
         printf("[game] %u audio sources, listener on entity %d\n",
                static_cast<unsigned>(world.audio_source_count()),
@@ -602,7 +617,9 @@ int main(void)
         // this, so a scene's animators advanced by nothing at all.
         world.update_animators(dt);
         world.update_world_matrices();
-        // With the frame's final transforms: listener pose + spatial voices.
+        // With the frame's final transforms: particles spawn from fresh
+        // emitter matrices, then listener pose + spatial voices.
+        world.update_particles(dt);
         bridge::audio_frame_update();
 
         scene::RenderStats stats;

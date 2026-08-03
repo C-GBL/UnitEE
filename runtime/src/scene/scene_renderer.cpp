@@ -58,6 +58,20 @@ bool kind_uses_lit_constants(uint32_t kind)
            kind == kMaterialCutout || kind == kMaterialVertexLitFog;
 }
 
+
+// Packs four floats into a qword, for the CPU-staged particle vertices.
+inline gfx::Qword qword4f(float x, float y, float z, float w)
+{
+    union {
+        float f;
+        uint32_t u;
+    } cx{x}, cy{y}, cz{z}, cw{w};
+    gfx::Qword q;
+    q.lo = static_cast<uint64_t>(cx.u) | (static_cast<uint64_t>(cy.u) << 32);
+    q.hi = static_cast<uint64_t>(cz.u) | (static_cast<uint64_t>(cw.u) << 32);
+    return q;
+}
+
 } // namespace
 
 bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
@@ -407,6 +421,153 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
         chain_open = false;
         ++local.kicks;
         ++local.skinned_drawn;
+    }
+
+    // --- Particles (M12.5 task 4, ADR-011) ----------------------------------
+    //
+    // CPU-billboarded quads through the vu_unlit_tex path: for each system,
+    // stage [tag][count][pos,st,colour x verts] into a static scratch buffer,
+    // then constants + batches + kick, waiting before the scratch is reused.
+    // Camera right/up come from the view matrix's rows -- the transpose of
+    // the camera's rotation -- so the quads face the camera by construction.
+    if (world.particle_system_count() > 0) {
+        // 13 quads x 6 verts x 3 qwords = 234, under the 255-qword VIF NUM
+        // ceiling; one system stages at most 10 batches of that.
+        constexpr uint32_t kQuadsPerBatch = 13;
+        constexpr uint32_t kBatchQwords = 2 + kQuadsPerBatch * 6 * 3;
+        constexpr uint32_t kMaxBatches =
+            (kMaxParticlesPerSystem + kQuadsPerBatch - 1) / kQuadsPerBatch;
+        alignas(16) static gfx::Qword scratch[kMaxBatches * kBatchQwords];
+
+        const Vec3 cam_right{view.m[0], view.m[4], view.m[8]};
+        const Vec3 cam_up{view.m[1], view.m[5], view.m[9]};
+
+        for (uint32_t s = 0; s < world.particle_system_count(); ++s) {
+            const ParticleEmitter& emitter = world.particle_emitter(s);
+            const ParticleSystemState& state = world.particle_state(s);
+            if (state.count == 0 || emitter.entity < 0 ||
+                !world.entity_visible(emitter.entity)) {
+                continue;
+            }
+            const bool world_space = (emitter.flags & 8u) != 0u;
+            const Mat4& model =
+                world.world_matrix(static_cast<uint32_t>(emitter.entity));
+            const bool textured =
+                emitter.texture != 0xFFFFFFFFu && bind_texture != nullptr;
+            if (textured) {
+                bind_texture(bind_user, emitter.texture);
+            }
+            // Transparent-pass state: Z test on through the default TEST,
+            // no Z write, blend on. 0x44 = (Cs-Cd)*As+Cd, 0x48 = Cs*As+Cd.
+            device.set_material_state(
+                0, (emitter.flags & 4u) != 0u ? 0x48u : 0x44u, true, false);
+
+            uint32_t emitted = 0;
+            uint32_t batch_count = 0;
+            gfx::Qword* cursor = scratch;
+            gfx::BatchBlock batches[kMaxBatches];
+            while (emitted < state.count) {
+                const uint32_t quads =
+                    state.count - emitted < kQuadsPerBatch
+                        ? state.count - emitted
+                        : kQuadsPerBatch;
+                const uint32_t verts = quads * 6;
+                gfx::Qword* tag = cursor;
+                // GIF tag: NREG=3 (ST, RGBAQ, XYZ2), PRE, prim = tri | IIP
+                // | ABE | TME when textured. NLOOP = verts.
+                uint64_t prim = 3ull | (1ull << 3) | (1ull << 6);
+                if (textured) {
+                    prim |= 1ull << 4;
+                }
+                tag[0].lo = (static_cast<uint64_t>(verts) & 0x7FFFull) |
+                            (1ull << 15) | (1ull << 46) |
+                            ((prim & 0x7FFull) << 47) | (3ull << 60);
+                tag[0].hi = 0x512ull;
+                tag[1].lo = verts;
+                tag[1].hi = 0;
+                gfx::Qword* v = tag + 2;
+                for (uint32_t q = 0; q < quads; ++q) {
+                    const Particle& p = state.particles[emitted + q];
+                    Vec3 centre = p.pos;
+                    if (!world_space) {
+                        centre = Vec3{model.m[0] * p.pos.x +
+                                          model.m[4] * p.pos.y +
+                                          model.m[8] * p.pos.z + model.m[12],
+                                      model.m[1] * p.pos.x +
+                                          model.m[5] * p.pos.y +
+                                          model.m[9] * p.pos.z + model.m[13],
+                                      model.m[2] * p.pos.x +
+                                          model.m[6] * p.pos.y +
+                                          model.m[10] * p.pos.z + model.m[14]};
+                    }
+                    const float t = 1.0f - p.life / p.ttl; // 0 birth, 1 death
+                    const float size =
+                        (emitter.size_start +
+                         (emitter.size_end - emitter.size_start) * t) *
+                        0.5f;
+                    const uint32_t c0 = emitter.colour_start;
+                    const uint32_t c1 = emitter.colour_end;
+                    float col[4];
+                    for (int ch = 0; ch < 4; ++ch) {
+                        const float a =
+                            static_cast<float>((c0 >> (ch * 8)) & 0xFF);
+                        const float b =
+                            static_cast<float>((c1 >> (ch * 8)) & 0xFF);
+                        col[ch] = a + (b - a) * t;
+                    }
+                    // PS2 alpha: 0x80 is opaque, so halve the 0..255 ramp.
+                    col[3] *= 0.5f;
+
+                    const Vec3 rx{cam_right.x * size, cam_right.y * size,
+                                  cam_right.z * size};
+                    const Vec3 uy{cam_up.x * size, cam_up.y * size,
+                                  cam_up.z * size};
+                    const Vec3 corners[4] = {
+                        {centre.x - rx.x - uy.x, centre.y - rx.y - uy.y,
+                         centre.z - rx.z - uy.z}, // bottom-left
+                        {centre.x + rx.x - uy.x, centre.y + rx.y - uy.y,
+                         centre.z + rx.z - uy.z}, // bottom-right
+                        {centre.x + rx.x + uy.x, centre.y + rx.y + uy.y,
+                         centre.z + rx.z + uy.z}, // top-right
+                        {centre.x - rx.x + uy.x, centre.y - rx.y + uy.y,
+                         centre.z - rx.z + uy.z}, // top-left
+                    };
+                    // V grows DOWN in GS space: top corners get v=0.
+                    static const float kU[4] = {0, 1, 1, 0};
+                    static const float kV[4] = {1, 1, 0, 0};
+                    static const int kTri[6] = {0, 1, 2, 0, 2, 3};
+                    for (int i = 0; i < 6; ++i) {
+                        const int c = kTri[i];
+                        v[0] = qword4f(corners[c].x, corners[c].y,
+                                              corners[c].z, 1.0f);
+                        v[1] = qword4f(kU[c], kV[c], 1.0f, 0.0f);
+                        v[2] = qword4f(col[0], col[1], col[2], col[3]);
+                        v += 3;
+                    }
+                }
+                batches[batch_count] = gfx::BatchBlock{
+                    tag, tag + 2, verts * 3, verts, 10};
+                ++batch_count;
+                cursor = v;
+                emitted += quads;
+            }
+
+            gfx::BatchBuilder::build_unlit_constants(viewproj.m, vscale,
+                                                     voffset, 4095.0f,
+                                                     cam.znear, g_constants);
+            chain.begin();
+            bool ok = chain.add_constants(g_constants, 7, 0);
+            for (uint32_t b = 0; b < batch_count && ok; ++b) {
+                ok = chain.add_batch(batches[b], programs.tex_addr);
+            }
+            if (!ok || !chain.kick()) {
+                return false;
+            }
+            chain.wait(); // the scratch is reused by the next system
+            local.drawn += 1;
+            local.kicks += 1;
+        }
+        device.set_material_state(0, 0, false, true); // restore opaque
     }
 
     if (stats != nullptr) {
