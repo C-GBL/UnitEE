@@ -32,6 +32,7 @@
 #include <ps2ur/p2b.h>
 #include <ps2ur/p2b_scene.h>
 #include <ps2ur/scene_renderer.h>
+#include <ps2ur/stream.h>
 #include <ps2ur/phys.h>
 #include <ps2ur/phys_bake.h>
 #include <ps2ur/platform.h>
@@ -195,6 +196,333 @@ void fatal(const char* what)
     SleepThread();
 }
 
+// Every Runtime entry point the host invokes, looked up once. A scene swap
+// re-runs the same creates boot ran, so they live in one struct instead of
+// a dozen locals.
+struct RuntimeMethods {
+    const MethodInfo* create_script;
+    const MethodInfo* create_rigidbody;
+    const MethodInfo* bind_colliders;
+    const MethodInfo* create_animator;
+    const MethodInfo* create_audio_source;
+    const MethodInfo* create_audio_listener;
+    const MethodInfo* create_particles;
+    const MethodInfo* create_ui_graphic;
+    const MethodInfo* create_ui_button;
+    const MethodInfo* create_ui_slider;
+    const MethodInfo* reset_for_scene_load;
+    const MethodInfo* tick;
+
+    bool lookup()
+    {
+        create_script = find_runtime_method("CreateScript", 2);
+        create_rigidbody = find_runtime_method("CreateRigidbody", 5);
+        bind_colliders = find_runtime_method("BindColliders", 0);
+        create_animator = find_runtime_method("CreateAnimator", 1);
+        create_audio_source = find_runtime_method("CreateAudioSource", 7);
+        create_audio_listener = find_runtime_method("CreateAudioListener", 1);
+        create_particles = find_runtime_method("CreatePS2ParticleSystem", 1);
+        create_ui_graphic = find_runtime_method("CreateUIGraphic", 3);
+        create_ui_button = find_runtime_method("CreateUIButton", 2);
+        create_ui_slider = find_runtime_method("CreateUISlider", 7);
+        reset_for_scene_load = find_runtime_method("ResetForSceneLoad", 0);
+        tick = find_runtime_method("Tick", 1);
+        return create_script != nullptr && tick != nullptr &&
+               create_rigidbody != nullptr && bind_colliders != nullptr &&
+               create_animator != nullptr && create_audio_source != nullptr &&
+               create_audio_listener != nullptr &&
+               create_particles != nullptr && create_ui_graphic != nullptr &&
+               create_ui_button != nullptr && create_ui_slider != nullptr &&
+               reset_for_scene_load != nullptr;
+    }
+};
+
+// Static collision for a container. No PHYS section is a scene with no
+// collision, which is fine; a malformed one is not.
+bool load_scene_physics(const io::P2bFile& file, phys::StaticMesh* mesh)
+{
+    phys::BakeInfo bake;
+    const char* phys_error = "";
+    if (!phys::load_physics(file, mesh, &bake, &phys_error)) {
+        printf("[game] collision: %s\n", phys_error);
+        return false;
+    }
+    phys::set_static_mesh(mesh);
+    printf("[game] collision: %u colliders, %u triangles, %u nodes\n",
+           static_cast<unsigned>(bake.collider_count),
+           static_cast<unsigned>(bake.triangle_count),
+           static_cast<unsigned>(bake.node_count));
+    return true;
+}
+
+// TEX sections into VRAM. base == 0 replaces: every previous allocation is
+// freed first (the VRAM allocator does real frees). base > 0 appends, for
+// an additive load whose material indices were rebased by that amount.
+bool upload_scene_textures(gfx::GsDevice& device, const io::P2bFile& file,
+                           GpuTexture* textures, uint32_t* io_count,
+                           uint32_t base)
+{
+    if (base == 0u) {
+        for (uint32_t t = 0; t < *io_count; ++t) {
+            device.vram().free(textures[t].tex);
+            device.vram().free(textures[t].clut);
+            textures[t] = GpuTexture{};
+        }
+        *io_count = 0;
+    }
+    uint32_t tex_count = file.count_of(io::kSectionTex);
+    if (base + tex_count > kMaxGpuTextures) {
+        printf("[game] %u textures, only %u fit in VRAM; the rest will not "
+               "be bound.\n",
+               static_cast<unsigned>(base + tex_count),
+               static_cast<unsigned>(kMaxGpuTextures));
+        tex_count = kMaxGpuTextures - base;
+    }
+    for (uint32_t t = 0; t < tex_count; ++t) {
+        // ONE PACKET PER TEXTURE. A 256x256 PSMT8 upload is 4096 qwords of
+        // IMAGE data; several in one frame packet overflow it, and the
+        // overflow reads exactly like running out of VRAM (verify-log
+        // M12.5).
+        device.begin_frame();
+        device.clear(0, 0, 0);
+        const io::P2bSection* sec = file.find(io::kSectionTex, t);
+        const uint8_t* p = sec->data;
+        GpuTexture& gt = textures[base + t];
+        gt.w = rd_u32(p + 0);
+        gt.h = rd_u32(p + 4);
+        gt.tex = device.vram().alloc_buffer(gt.w, gt.h, gfx::PixelFormat::PSMT8,
+                                            "game-tex");
+        gt.clut = device.vram().alloc_buffer(16, 16, gfx::PixelFormat::PSMCT32,
+                                             "game-clut");
+        if (!gt.tex.valid() || !gt.clut.valid() ||
+            !device.upload_texture(p + 16u + 1024u, gt.tex, gt.w, gt.h,
+                                   gfx::PixelFormat::PSMT8) ||
+            !device.upload_clut(reinterpret_cast<const uint32_t*>(p + 16u),
+                                gt.clut, 256)) {
+            printf("[game] texture %u (%ux%u) failed to upload: %s. Lower "
+                   "Texture Max Size in the PS2 build profile, or use fewer "
+                   "textures.\n",
+                   static_cast<unsigned>(base + t), static_cast<unsigned>(gt.w),
+                   static_cast<unsigned>(gt.h),
+                   (!gt.tex.valid() || !gt.clut.valid())
+                       ? "no room left in VRAM"
+                       : "the GS packet overflowed");
+            device.vram().debug_dump();
+            device.end_frame();
+            return false;
+        }
+        device.end_frame();
+    }
+    *io_count = base + tex_count;
+    return true;
+}
+
+// SND clips into SPU2 memory. The blobs are used in place, which is one of
+// the reasons a scene's arena outlives its load.
+void upload_scene_clips(const io::P2bFile& file)
+{
+    if (!audio::initialized()) {
+        return;
+    }
+    const io::P2bSection* snd = file.find(io::kSectionSound);
+    if (snd == nullptr || snd->size < 16u) {
+        return;
+    }
+    const uint32_t snd_clips = rd_u32(snd->data);
+    uint32_t loaded = 0;
+    for (uint32_t c = 0; c < snd_clips; ++c) {
+        const uint8_t* record = snd->data + 16u + c * 16u;
+        const uint32_t offset = rd_u32(record + 4);
+        const uint32_t bytes = rd_u32(record + 8);
+        if (offset + bytes > snd->size ||
+            audio::load_clip(snd->data + offset, bytes) < 0) {
+            printf("[game] SND clip %u did not load; sources naming it stay "
+                   "silent.\n",
+                   static_cast<unsigned>(c));
+            continue;
+        }
+        ++loaded;
+    }
+    printf("[game] audio: %u of %u clips in SPU2 memory\n",
+           static_cast<unsigned>(loaded), static_cast<unsigned>(snd_clips));
+}
+
+// The managed side of a world: every component object and script, created
+// from the world's tables. 'from' is all zeros at boot and after a Single
+// load; after an additive load it holds the table sizes from before the
+// merge, so only the appended entries are created.
+bool instantiate_managed(scene::World& world, const RuntimeMethods& rm,
+                         const bridge::PreLoadCounts& from,
+                         bool run_bind_colliders)
+{
+    if (run_bind_colliders &&
+        !invoke_checked(rm.bind_colliders, nullptr, "BindColliders")) {
+        return false;
+    }
+    for (uint32_t r = from.rigidbodies; r < world.rigidbody_count(); ++r) {
+        const scene::RigidbodyRef& rb = world.rigidbody(r);
+        int32_t handle = world.handle_of(rb.entity);
+        float mass = rb.mass;
+        float linear_damping = rb.linear_damping;
+        float angular_damping = rb.angular_damping;
+        int32_t flags = static_cast<int32_t>(rb.flags);
+        void* args[5] = {&handle, &mass, &linear_damping, &angular_damping,
+                         &flags};
+        if (!invoke_checked(rm.create_rigidbody, args, "CreateRigidbody")) {
+            return false;
+        }
+    }
+    for (uint32_t a = from.animator_refs; a < world.animator_ref_count(); ++a) {
+        int32_t handle = world.handle_of(world.animator_ref(a).entity);
+        void* args[1] = {&handle};
+        if (!invoke_checked(rm.create_animator, args, "CreateAnimator")) {
+            return false;
+        }
+    }
+    if (world.listener_entity() >= 0) {
+        bridge::audio_set_listener_handle(
+            world.handle_of(world.listener_entity()));
+        int32_t handle = world.handle_of(world.listener_entity());
+        void* args[1] = {&handle};
+        if (!invoke_checked(rm.create_audio_listener, args,
+                            "CreateAudioListener")) {
+            return false;
+        }
+    }
+    for (uint32_t s = from.audio_sources; s < world.audio_source_count(); ++s) {
+        const scene::AudioSourceRef& src = world.audio_source(s);
+        int32_t handle = world.handle_of(src.entity);
+        int32_t clip = src.clip == 0xFFFFFFFFu
+                           ? -1
+                           : static_cast<int32_t>(src.clip);
+        float volume = src.volume;
+        int32_t flags = static_cast<int32_t>(src.flags);
+        float min_d = src.min_distance;
+        float max_d = src.max_distance;
+        int32_t priority = src.priority;
+        void* args[7] = {&handle, &clip,  &volume, &flags,
+                         &min_d,  &max_d, &priority};
+        if (!invoke_checked(rm.create_audio_source, args,
+                            "CreateAudioSource")) {
+            return false;
+        }
+    }
+    for (uint32_t fx = from.particle_systems; fx < world.particle_system_count();
+         ++fx) {
+        int32_t handle = world.handle_of(world.particle_emitter(fx).entity);
+        void* args[1] = {&handle};
+        if (!invoke_checked(rm.create_particles, args,
+                            "CreatePS2ParticleSystem")) {
+            return false;
+        }
+    }
+    if (world.particle_system_count() > 0) {
+        printf("[game] %u particle systems\n",
+               static_cast<unsigned>(world.particle_system_count()));
+    }
+
+    // Graphics first, then the buttons and sliders, so a Selectable's focus
+    // tint finds the Graphic already registered on its GameObject. Buttons
+    // and sliders reach PS2UINavigation in table order, which the exporter
+    // wrote in hierarchy order -- the D-pad walks the menu top to bottom.
+    uint32_t ui_buttons = 0;
+    uint32_t ui_sliders = 0;
+    for (uint32_t u = from.ui_elements; u < world.ui_element_count(); ++u) {
+        const scene::UIElement& ui = world.ui_element(u);
+        if (ui.w <= 0.0f || ui.h <= 0.0f) {
+            continue; // role-only record: a Selectable with no graphic
+        }
+        int32_t handle = world.handle_of(ui.entity);
+        int32_t element = static_cast<int32_t>(u);
+        int32_t managed_kind = static_cast<int32_t>((ui.kind >> 8) & 0xFFu);
+        void* args[3] = {&handle, &element, &managed_kind};
+        if (!invoke_checked(rm.create_ui_graphic, args, "CreateUIGraphic")) {
+            return false;
+        }
+    }
+    for (uint32_t u = from.ui_elements; u < world.ui_element_count(); ++u) {
+        const scene::UIElement& ui = world.ui_element(u);
+        if (ui.role == 1u) {
+            int32_t handle = world.handle_of(ui.entity);
+            int32_t element = static_cast<int32_t>(u);
+            void* args[2] = {&handle, &element};
+            if (!invoke_checked(rm.create_ui_button, args, "CreateUIButton")) {
+                return false;
+            }
+            ++ui_buttons;
+        } else if (ui.role == 2u) {
+            // The slider record's text bytes carry (f32 normalised value,
+            // f32 max fill width); the fill rect's x/y/h come from the
+            // linked fill element (docs/formats/p2b-container.md).
+            int32_t handle = world.handle_of(ui.entity);
+            int32_t fill = ui.link;
+            float value;
+            float max_w;
+            memcpy(&value, ui.text + 0, 4);
+            memcpy(&max_w, ui.text + 4, 4);
+            float fill_x = 0.0f;
+            float fill_y = 0.0f;
+            float fill_h = 0.0f;
+            if (fill >= 0 &&
+                static_cast<uint32_t>(fill) < world.ui_element_count()) {
+                const scene::UIElement& f =
+                    world.ui_element(static_cast<uint32_t>(fill));
+                fill_x = f.x;
+                fill_y = f.y;
+                fill_h = f.h;
+            } else {
+                fill = -1; // no fill rect authored; the value still works
+            }
+            void* args[7] = {&handle, &fill,   &fill_x, &fill_y,
+                             &max_w,  &fill_h, &value};
+            if (!invoke_checked(rm.create_ui_slider, args, "CreateUISlider")) {
+                return false;
+            }
+            ++ui_sliders;
+        }
+    }
+    if (world.ui_element_count() > 0) {
+        printf("[game] ui: %u elements, %u buttons, %u sliders\n",
+               static_cast<unsigned>(world.ui_element_count()),
+               static_cast<unsigned>(ui_buttons),
+               static_cast<unsigned>(ui_sliders));
+    }
+
+    if (world.audio_source_count() > 0 || world.listener_entity() >= 0) {
+        printf("[game] %u audio sources, listener on entity %d\n",
+               static_cast<unsigned>(world.audio_source_count()),
+               world.listener_entity());
+    }
+
+    if (world.animator_ref_count() > 0 || world.skinned_renderer_count() > 0) {
+        printf("[game] %u animator components, %u skinned renderers over %u "
+               "meshes, %u skeletons, %u clips, %u animators\n",
+               static_cast<unsigned>(world.animator_ref_count()),
+               static_cast<unsigned>(world.skinned_renderer_count()),
+               static_cast<unsigned>(world.skinned_mesh_count()),
+               static_cast<unsigned>(world.skeleton_count()),
+               static_cast<unsigned>(world.clip_count()),
+               static_cast<unsigned>(world.animator_count()));
+    }
+    if (world.rigidbody_count() > 0) {
+        printf("[game] %u rigidbodies\n",
+               static_cast<unsigned>(world.rigidbody_count()));
+    }
+
+    for (uint32_t s = from.scripts; s < world.script_count(); ++s) {
+        const scene::ScriptRef& script = world.script(s);
+        Il2CppString* type_name = il2cpp_string_new(script.type_name);
+        int32_t handle = world.handle_of(script.entity);
+        void* args[2] = {type_name, &handle};
+        printf("[game] script '%s' on entity %d\n", script.type_name,
+               script.entity);
+        if (!invoke_checked(rm.create_script, args, "CreateScript")) {
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 int main(void)
@@ -229,6 +557,20 @@ int main(void)
         return 1;
     }
     file_arena.init(file_arena_mem, kBootSceneArenaBytes);
+
+    // A second arena of the same size, for SceneManager.LoadScene: the
+    // loader reads the INCOMING scene here while the outgoing one -- whose
+    // meshes live zero-copy in the other arena -- is still being drawn.
+    // The two flip on every Single load. Reserved now, before il2cpp claims
+    // the heap, so failure is a clear message rather than metadata writes
+    // through a null (verify-log M12). A game that does not fit both keeps
+    // running; it just cannot change scenes.
+    void* scene_arenas[2] = {file_arena_mem, memalign(16, kBootSceneArenaBytes)};
+    if (scene_arenas[1] == nullptr) {
+        printf("[game] no RAM for a second scene arena; "
+               "SceneManager.LoadScene is disabled. Lower Asset Pool in the "
+               "PS2 build profile to enable scene transitions.\n");
+    }
 
     // resolve_media_path tries host:, then the bare name, then
     // cdrom0:\NAME;1 -- so the same ELF runs from the emulator's host
@@ -278,29 +620,26 @@ int main(void)
         return 1;
     }
     bridge::bind_world(&world);
+    if (scene_arenas[1] != nullptr) {
+        // LoadScene reads into the arena the world is NOT in.
+        bridge::bind_scene_buffer(scene_arenas[1], kBootSceneArenaBytes);
+    }
+    uint32_t arena_holds_world = 0;
+    uint32_t seen_swaps = bridge::scene_swap_count();
     phys::init();
 
     // Collision. The BVH and the vertices are used straight out of the
-    // container, so 'static_mesh' must outlive the world -- hence static
-    // storage rather than a stack local whose pointers would dangle the
-    // moment main's frame is reused.
+    // container, so the mesh must outlive the world -- static storage, one
+    // slot per arena, flipping with them on scene loads.
     //
     // A scene with no PHYS section loads fine and reports zero colliders;
     // not every scene has collision, and refusing to boot one would be
     // wrong. What is NOT fine is a section that is present and malformed.
-    static phys::StaticMesh static_mesh;
-    phys::BakeInfo bake;
-    const char* phys_error = "";
-    if (!phys::load_physics(file, &static_mesh, &bake, &phys_error)) {
-        printf("[game] collision: %s\n", phys_error);
+    static phys::StaticMesh static_meshes[2];
+    if (!load_scene_physics(file, &static_meshes[0])) {
         fatal("physics load");
         return 1;
     }
-    phys::set_static_mesh(&static_mesh);
-    printf("[game] collision: %u colliders, %u triangles, %u nodes\n",
-           static_cast<unsigned>(bake.collider_count),
-           static_cast<unsigned>(bake.triangle_count),
-           static_cast<unsigned>(bake.node_count));
 
     // Platform services. input::init() brings up sio2man/padman and opens
     // both ports; without it every button reads false forever and
@@ -309,6 +648,13 @@ int main(void)
     // init. Audio is optional: a game with no sound should still boot.
     if (!input::init()) {
         printf("[game] pads failed to initialise; input will not work.\n");
+    }
+    // The async loader reads through the stream queue; without this,
+    // SceneManager.LoadScene refuses every request. The M10 machinery was
+    // complete and verified in samples -- and unreachable from a game,
+    // because this call was missing (the M12 defect class, again).
+    if (!stream::init()) {
+        printf("[game] stream queue failed; scene loading will not work.\n");
     }
     // PlayerPrefs (M12.5 task 3): bring the card driver up, tell the bridge
     // where Save() writes, and hydrate the store from an existing save.
@@ -328,29 +674,8 @@ int main(void)
     if (!audio::init()) {
         printf("[game] audio failed to initialise; the game will run silent.\n");
     } else {
-        // SND clips into SPU2 memory (M12.5 task 2). The blobs are used in
-        // place, which is one of the reasons the scene arena outlives boot.
-        const io::P2bSection* snd = file.find(io::kSectionSound);
-        if (snd != nullptr && snd->size >= 16u) {
-            const uint32_t snd_clips = rd_u32(snd->data);
-            uint32_t loaded = 0;
-            for (uint32_t c = 0; c < snd_clips; ++c) {
-                const uint8_t* record = snd->data + 16u + c * 16u;
-                const uint32_t offset = rd_u32(record + 4);
-                const uint32_t bytes = rd_u32(record + 8);
-                if (offset + bytes > snd->size ||
-                    audio::load_clip(snd->data + offset, bytes) < 0) {
-                    printf("[game] SND clip %u did not load; sources naming "
-                           "it stay silent.\n",
-                           static_cast<unsigned>(c));
-                    continue;
-                }
-                ++loaded;
-            }
-            printf("[game] audio: %u of %u clips in SPU2 memory\n",
-                   static_cast<unsigned>(loaded),
-                   static_cast<unsigned>(snd_clips));
-        }
+        // SND clips into SPU2 memory (M12.5 task 2).
+        upload_scene_clips(file);
     }
 
     // --- Managed runtime ----------------------------------------------------
@@ -359,224 +684,25 @@ int main(void)
         fatal("il2cpp_init");
         return 1;
     }
-    const MethodInfo* create_script = find_runtime_method("CreateScript", 2);
-    const MethodInfo* create_rigidbody = find_runtime_method("CreateRigidbody", 5);
-    const MethodInfo* bind_colliders = find_runtime_method("BindColliders", 0);
-    const MethodInfo* create_animator = find_runtime_method("CreateAnimator", 1);
-    const MethodInfo* create_audio_source =
-        find_runtime_method("CreateAudioSource", 7);
-    const MethodInfo* create_audio_listener =
-        find_runtime_method("CreateAudioListener", 1);
-    const MethodInfo* create_particles =
-        find_runtime_method("CreatePS2ParticleSystem", 1);
-    const MethodInfo* create_ui_graphic =
-        find_runtime_method("CreateUIGraphic", 3);
-    const MethodInfo* create_ui_button = find_runtime_method("CreateUIButton", 2);
-    const MethodInfo* create_ui_slider =
-        find_runtime_method("CreateUISlider", 7);
-    const MethodInfo* tick = find_runtime_method("Tick", 1);
-    if (create_script == nullptr || tick == nullptr ||
-        create_rigidbody == nullptr || bind_colliders == nullptr ||
-        create_animator == nullptr || create_audio_source == nullptr ||
-        create_audio_listener == nullptr || create_particles == nullptr ||
-        create_ui_graphic == nullptr || create_ui_button == nullptr ||
-        create_ui_slider == nullptr) {
+    RuntimeMethods methods;
+    if (!methods.lookup()) {
         // Almost always a stripping problem: the dispatcher is reached by
         // reflection, so it needs a link.xml entry to survive.
         printf("[game] UnityEngine.Internal.Runtime was not found. It is "
-               "reached by reflection, so it must be preserved in link.xml.\n");
+               "reached by reflection, so it must be preserved in "
+               "link.xml.\n");
         fatal("Runtime methods missing");
         return 1;
     }
 
-    // --- Physics components -------------------------------------------------
-    //
-    // Before the scripts, deliberately. A script's Start() runs on the first
-    // Tick and the very first thing gameplay code does is
-    // GetComponent<Rigidbody>(); if the body were created afterwards that
-    // call would return null and the script would throw on frame 1.
-    if (!invoke_checked(bind_colliders, nullptr, "BindColliders")) {
-        fatal("BindColliders");
+    // Everything managed, from the world's tables: physics bindings first
+    // (a script's Start does GetComponent<Rigidbody>() on frame 1), then
+    // components, then scripts. A scene swap re-runs exactly this.
+    const bridge::PreLoadCounts kFromScratch = {};
+    if (!instantiate_managed(world, methods, kFromScratch,
+                             /*run_bind_colliders=*/true)) {
+        fatal("instantiate managed");
         return 1;
-    }
-    for (uint32_t r = 0; r < world.rigidbody_count(); ++r) {
-        const scene::RigidbodyRef& rb = world.rigidbody(r);
-        int32_t handle = world.handle_of(rb.entity);
-        float mass = rb.mass;
-        float linear_damping = rb.linear_damping;
-        float angular_damping = rb.angular_damping;
-        int32_t flags = static_cast<int32_t>(rb.flags);
-        void* args[5] = {&handle, &mass, &linear_damping, &angular_damping,
-                         &flags};
-        if (!invoke_checked(create_rigidbody, args, "CreateRigidbody")) {
-            fatal("CreateRigidbody");
-            return 1;
-        }
-    }
-    for (uint32_t a = 0; a < world.animator_ref_count(); ++a) {
-        int32_t handle = world.handle_of(world.animator_ref(a).entity);
-        void* args[1] = {&handle};
-        if (!invoke_checked(create_animator, args, "CreateAnimator")) {
-            fatal("CreateAnimator");
-            return 1;
-        }
-    }
-    // --- Audio components (M12.5 task 2) ------------------------------------
-    // The listener drives the mixer's pose natively every frame; each
-    // AudioSource becomes a managed component carrying the Editor's values,
-    // and playOnAwake fires inside CreateAudioSource, before the first Tick.
-    if (world.listener_entity() >= 0) {
-        bridge::audio_set_listener_handle(
-            world.handle_of(world.listener_entity()));
-        int32_t handle = world.handle_of(world.listener_entity());
-        void* args[1] = {&handle};
-        if (!invoke_checked(create_audio_listener, args,
-                            "CreateAudioListener")) {
-            fatal("CreateAudioListener");
-            return 1;
-        }
-    }
-    for (uint32_t s = 0; s < world.audio_source_count(); ++s) {
-        const scene::AudioSourceRef& src = world.audio_source(s);
-        int32_t handle = world.handle_of(src.entity);
-        int32_t clip = src.clip == 0xFFFFFFFFu
-                           ? -1
-                           : static_cast<int32_t>(src.clip);
-        float volume = src.volume;
-        int32_t flags = static_cast<int32_t>(src.flags);
-        float min_d = src.min_distance;
-        float max_d = src.max_distance;
-        int32_t priority = src.priority;
-        void* args[7] = {&handle, &clip,  &volume, &flags,
-                         &min_d,  &max_d, &priority};
-        if (!invoke_checked(create_audio_source, args, "CreateAudioSource")) {
-            fatal("CreateAudioSource");
-            return 1;
-        }
-    }
-    for (uint32_t fx = 0; fx < world.particle_system_count(); ++fx) {
-        int32_t handle = world.handle_of(world.particle_emitter(fx).entity);
-        void* args[1] = {&handle};
-        if (!invoke_checked(create_particles, args, "CreatePS2ParticleSystem")) {
-            fatal("CreatePS2ParticleSystem");
-            return 1;
-        }
-    }
-    if (world.particle_system_count() > 0) {
-        printf("[game] %u particle systems\n",
-               static_cast<unsigned>(world.particle_system_count()));
-    }
-
-    // --- uGUI components (M12.5 task 5) -------------------------------------
-    //
-    // Graphics first, then the buttons and sliders, so a Selectable's focus
-    // tint finds the Graphic already registered on its GameObject. Buttons
-    // and sliders reach PS2UINavigation in table order, which the exporter
-    // wrote in hierarchy order -- the D-pad walks the menu top to bottom.
-    //
-    // (The lookups above existed before these calls did: the renderer drew
-    // the canvas straight from the World table, so a menu LOOKED wired
-    // while every Button was unreachable -- the M12 defect class again,
-    // found by the acceptance run, not by a layer test.)
-    uint32_t ui_buttons = 0;
-    uint32_t ui_sliders = 0;
-    for (uint32_t u = 0; u < world.ui_element_count(); ++u) {
-        const scene::UIElement& ui = world.ui_element(u);
-        if (ui.w <= 0.0f || ui.h <= 0.0f) {
-            continue; // role-only record: a Selectable with no graphic
-        }
-        int32_t handle = world.handle_of(ui.entity);
-        int32_t element = static_cast<int32_t>(u);
-        int32_t managed_kind = static_cast<int32_t>((ui.kind >> 8) & 0xFFu);
-        void* args[3] = {&handle, &element, &managed_kind};
-        if (!invoke_checked(create_ui_graphic, args, "CreateUIGraphic")) {
-            fatal("CreateUIGraphic");
-            return 1;
-        }
-    }
-    for (uint32_t u = 0; u < world.ui_element_count(); ++u) {
-        const scene::UIElement& ui = world.ui_element(u);
-        if (ui.role == 1u) {
-            int32_t handle = world.handle_of(ui.entity);
-            int32_t element = static_cast<int32_t>(u);
-            void* args[2] = {&handle, &element};
-            if (!invoke_checked(create_ui_button, args, "CreateUIButton")) {
-                fatal("CreateUIButton");
-                return 1;
-            }
-            ++ui_buttons;
-        } else if (ui.role == 2u) {
-            // The slider record's text bytes carry (f32 normalised value,
-            // f32 max fill width); the fill rect's x/y/h come from the
-            // linked fill element (docs/formats/p2b-container.md).
-            int32_t handle = world.handle_of(ui.entity);
-            int32_t fill = ui.link;
-            float value;
-            float max_w;
-            memcpy(&value, ui.text + 0, 4);
-            memcpy(&max_w, ui.text + 4, 4);
-            float fill_x = 0.0f;
-            float fill_y = 0.0f;
-            float fill_h = 0.0f;
-            if (fill >= 0 &&
-                static_cast<uint32_t>(fill) < world.ui_element_count()) {
-                const scene::UIElement& f =
-                    world.ui_element(static_cast<uint32_t>(fill));
-                fill_x = f.x;
-                fill_y = f.y;
-                fill_h = f.h;
-            } else {
-                fill = -1; // no fill rect authored; the value still works
-            }
-            void* args[7] = {&handle, &fill,   &fill_x, &fill_y,
-                             &max_w,  &fill_h, &value};
-            if (!invoke_checked(create_ui_slider, args, "CreateUISlider")) {
-                fatal("CreateUISlider");
-                return 1;
-            }
-            ++ui_sliders;
-        }
-    }
-    if (world.ui_element_count() > 0) {
-        printf("[game] ui: %u elements, %u buttons, %u sliders\n",
-               static_cast<unsigned>(world.ui_element_count()),
-               static_cast<unsigned>(ui_buttons),
-               static_cast<unsigned>(ui_sliders));
-    }
-
-    if (world.audio_source_count() > 0 || world.listener_entity() >= 0) {
-        printf("[game] %u audio sources, listener on entity %d\n",
-               static_cast<unsigned>(world.audio_source_count()),
-               world.listener_entity());
-    }
-
-    if (world.animator_ref_count() > 0 || world.skinned_renderer_count() > 0) {
-        printf("[game] %u animator components, %u skinned renderers over %u "
-               "meshes, %u skeletons, %u clips, %u animators\n",
-               static_cast<unsigned>(world.animator_ref_count()),
-               static_cast<unsigned>(world.skinned_renderer_count()),
-               static_cast<unsigned>(world.skinned_mesh_count()),
-               static_cast<unsigned>(world.skeleton_count()),
-               static_cast<unsigned>(world.clip_count()),
-               static_cast<unsigned>(world.animator_count()));
-    }
-    if (world.rigidbody_count() > 0) {
-        printf("[game] %u rigidbodies\n",
-               static_cast<unsigned>(world.rigidbody_count()));
-    }
-
-    // --- Script components --------------------------------------------------
-    for (uint32_t s = 0; s < world.script_count(); ++s) {
-        const scene::ScriptRef& script = world.script(s);
-        Il2CppString* type_name = il2cpp_string_new(script.type_name);
-        int32_t handle = world.handle_of(script.entity);
-        void* args[2] = {type_name, &handle};
-        printf("[game] script '%s' on entity %d\n", script.type_name,
-               script.entity);
-        if (!invoke_checked(create_script, args, "CreateScript")) {
-            fatal("CreateScript");
-            return 1;
-        }
     }
 
     // --- Textures -----------------------------------------------------------
@@ -585,52 +711,10 @@ int main(void)
     // produced was dead weight on the disc and every textured material drew
     // with whatever happened to be in VRAM (verify-log M12.5).
     static GpuTexture textures[kMaxGpuTextures];
-    uint32_t tex_count = file.count_of(io::kSectionTex);
-    if (tex_count > kMaxGpuTextures) {
-        printf("[game] %u textures, only %u fit in VRAM; the rest will not "
-               "be bound.\n",
-               static_cast<unsigned>(tex_count),
-               static_cast<unsigned>(kMaxGpuTextures));
-        tex_count = kMaxGpuTextures;
-    }
-    for (uint32_t t = 0; t < tex_count; ++t) {
-        // ONE PACKET PER TEXTURE. A 256x256 PSMT8 upload is 4096 qwords of
-        // IMAGE data, so four of them in a single frame packet overflow it --
-        // and the overflow surfaces as upload_texture returning false, which
-        // reads exactly like running out of VRAM even though the allocation
-        // succeeded (verify-log M12.5). The samples never hit it because their
-        // textures were small enough to share one packet.
-        device.begin_frame();
-        device.clear(0, 0, 0);
-        const io::P2bSection* sec = file.find(io::kSectionTex, t);
-        const uint8_t* p = sec->data;
-        GpuTexture& gt = textures[t];
-        gt.w = rd_u32(p + 0);
-        gt.h = rd_u32(p + 4);
-        gt.tex = device.vram().alloc_buffer(gt.w, gt.h, gfx::PixelFormat::PSMT8,
-                                            "game-tex");
-        gt.clut = device.vram().alloc_buffer(16, 16, gfx::PixelFormat::PSMCT32,
-                                             "game-clut");
-        if (!gt.tex.valid() || !gt.clut.valid() ||
-            !device.upload_texture(p + 16u + 1024u, gt.tex, gt.w, gt.h,
-                                   gfx::PixelFormat::PSMT8) ||
-            !device.upload_clut(reinterpret_cast<const uint32_t*>(p + 16u),
-                                gt.clut, 256)) {
-            // Say which of the two it was. They need opposite fixes, and the
-            // VRAM map below answers the first question on sight.
-            printf("[game] texture %u (%ux%u) failed to upload: %s. Lower "
-                   "Texture Max Size in the PS2 build profile, or use fewer "
-                   "textures.\n",
-                   static_cast<unsigned>(t), static_cast<unsigned>(gt.w),
-                   static_cast<unsigned>(gt.h),
-                   (!gt.tex.valid() || !gt.clut.valid())
-                       ? "no room left in VRAM"
-                       : "the GS packet overflowed");
-            device.vram().debug_dump();
-            fatal("texture upload");
-            return 1;
-        }
-        device.end_frame();
+    uint32_t tex_count = 0;
+    if (!upload_scene_textures(device, file, textures, &tex_count, 0)) {
+        fatal("texture upload");
+        return 1;
     }
 
     // --- VU programs + DMA chain -------------------------------------------
@@ -695,12 +779,102 @@ int main(void)
     for (;;) {
         float dt = kFixedDt;
         void* tick_args[1] = {&dt};
-        if (!invoke_checked(tick, tick_args, "Tick")) {
+        if (!invoke_checked(methods.tick, tick_args, "Tick")) {
             printf("[game] Tick threw on frame %u; stopping so the error is "
                    "visible rather than repeating forever.\n",
                    static_cast<unsigned>(frame));
             fatal("Tick");
             return 1;
+        }
+
+        // --- Scene transition (M12.5) -----------------------------------
+        //
+        // A managed SceneManager.LoadScene ACTIVATES inside Tick -- the
+        // native world is already swapped by the time we are here, and the
+        // old scene's managed objects ran this Tick against dead handles
+        // (safe: every handle is generation-checked). Everything DERIVED
+        // from the world is rebuilt now, between frames: managed objects,
+        // physics, VRAM, SPU2. This block is why LoadScene works from a
+        // game at all; the loader alone only swaps the tables.
+        const uint32_t swaps_now = bridge::scene_swap_count();
+        if (swaps_now != seen_swaps) {
+            seen_swaps = swaps_now;
+            const bool additive = bridge::scene_last_load_additive();
+            const uint32_t loaded_arena = arena_holds_world ^ 1u;
+            io::P2bFile next;
+            if (scene_arenas[loaded_arena] == nullptr ||
+                !next.parse(scene_arenas[loaded_arena], kBootSceneArenaBytes)) {
+                printf("[game] swapped scene container unreadable: %s\n",
+                       next.error());
+                fatal("scene swap");
+                return 1;
+            }
+            if (!additive) {
+                // Old scene down: managed objects (OnDestroy fires), bodies,
+                // voices and clips. PlayerPrefs survives by design.
+                if (!invoke_checked(methods.reset_for_scene_load, nullptr,
+                                    "ResetForSceneLoad")) {
+                    fatal("scene reset");
+                    return 1;
+                }
+                phys::clear_bodies();
+                audio::reset_clips();
+                if (!load_scene_physics(next, &static_meshes[loaded_arena]) ||
+                    !upload_scene_textures(device, next, textures, &tex_count,
+                                           0)) {
+                    fatal("scene swap assets");
+                    return 1;
+                }
+                upload_scene_clips(next);
+                bind_ctx.count = tex_count;
+                if (!instantiate_managed(world, methods, kFromScratch,
+                                         /*run_bind_colliders=*/true)) {
+                    fatal("scene swap instantiate");
+                    return 1;
+                }
+                if (!world.has_camera()) {
+                    printf("[game] the loaded scene has no Camera; nothing "
+                           "could be drawn.\n");
+                    fatal("scene swap camera");
+                    return 1;
+                }
+                arena_holds_world = loaded_arena;
+                // The arena the OLD world lived in is now the free one.
+                bridge::bind_scene_buffer(scene_arenas[arena_holds_world ^ 1u],
+                                          kBootSceneArenaBytes);
+                printf("[game] scene swapped: %u entities, %u meshes, %u "
+                       "scripts\n",
+                       static_cast<unsigned>(world.entity_count()),
+                       static_cast<unsigned>(world.mesh_count()),
+                       static_cast<unsigned>(world.script_count()));
+            } else {
+                // Additive: the merge appended; create only what is new.
+                // Static collision is NOT merged (the BVH is baked per
+                // scene) -- an additive scene's PHYS section is ignored,
+                // and both arenas are now live, so no further load has a
+                // buffer until a Single load frees one.
+                if (next.find(io::kSectionPhysics) != nullptr) {
+                    printf("[game] additive scene has a PHYS section; static "
+                           "collision cannot be merged and was ignored.\n");
+                }
+                if (!upload_scene_textures(device, next, textures, &tex_count,
+                                           tex_count)) {
+                    fatal("scene append assets");
+                    return 1;
+                }
+                upload_scene_clips(next);
+                bind_ctx.count = tex_count;
+                if (!instantiate_managed(world, methods,
+                                         bridge::scene_pre_load_counts(),
+                                         /*run_bind_colliders=*/false)) {
+                    fatal("scene append instantiate");
+                    return 1;
+                }
+                bridge::bind_scene_buffer(nullptr, 0);
+                printf("[game] scene appended: %u entities now; further "
+                       "loads need a Single load first.\n",
+                       static_cast<unsigned>(world.entity_count()));
+            }
         }
 
         // Animation runs between Update and LateUpdate, which is the

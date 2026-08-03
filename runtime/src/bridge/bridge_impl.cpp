@@ -53,6 +53,30 @@ void bind_scene_buffer(void* buffer, unsigned int capacity)
     g_scene_capacity = static_cast<uint32_t>(capacity);
 }
 
+// Swap bookkeeping (M12.5): see bridge.h. Definitions live next to the
+// loader wrappers below that maintain them.
+static unsigned int g_swap_count = 0;
+static bool g_last_additive = false;
+static PreLoadCounts g_pre_counts = {};
+
+unsigned int scene_swap_count() { return g_swap_count; }
+bool scene_last_load_additive() { return g_last_additive; }
+const PreLoadCounts& scene_pre_load_counts() { return g_pre_counts; }
+
+void note_scene_activation() { ++g_swap_count; }
+void note_scene_begin(bool additive)
+{
+    g_last_additive = additive;
+    if (g_world != nullptr) {
+        g_pre_counts.rigidbodies = g_world->rigidbody_count();
+        g_pre_counts.animator_refs = g_world->animator_ref_count();
+        g_pre_counts.audio_sources = g_world->audio_source_count();
+        g_pre_counts.particle_systems = g_world->particle_system_count();
+        g_pre_counts.ui_elements = g_world->ui_element_count();
+        g_pre_counts.scripts = g_world->script_count();
+    }
+}
+
 } // namespace bridge
 } // namespace ps2ur
 
@@ -277,6 +301,7 @@ extern "C" int32_t ps2ur_scene_load_begin(const char* path, int32_t additive)
         PS2UR_LOG_ERROR("scene load: '%s' not found on any media", path);
         return 0;
     }
+    ps2ur::bridge::note_scene_begin(additive != 0);
     return g_loader.begin(resolved, g_scene_buffer, g_scene_capacity, g_world,
                           additive != 0)
                ? 1
@@ -287,7 +312,18 @@ extern "C" int32_t ps2ur_scene_load_update(int32_t byteBudget)
 {
     const uint32_t budget =
         byteBudget < 0 ? 0u : static_cast<uint32_t>(byteBudget);
-    return static_cast<int32_t>(g_loader.update(budget));
+    // The transition INTO Ready is the activation: the moment the world
+    // was mutated. Counted here because a blocking LoadScene pumps this
+    // to completion inside one managed call, so the host never observes
+    // the intermediate states -- only the counter moving.
+    const ps2ur::scene::LoadState before = g_loader.state();
+    const ps2ur::scene::LoadState after = g_loader.update(budget);
+    if (after == ps2ur::scene::LoadState::Ready &&
+        (before == ps2ur::scene::LoadState::Reading ||
+         before == ps2ur::scene::LoadState::Parsing)) {
+        ps2ur::bridge::note_scene_activation();
+    }
+    return static_cast<int32_t>(after);
 }
 
 extern "C" float ps2ur_scene_load_progress()

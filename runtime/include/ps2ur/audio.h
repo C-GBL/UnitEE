@@ -68,6 +68,12 @@ int32_t load_clip(const void* data, uint32_t size);
 uint32_t clip_count();
 const ClipInfo& clip_info(uint32_t index);
 
+// Stops every voice and forgets every clip, reclaiming the SPU2 memory in
+// one move (audsrv rebuilds its ADPCM arena). For a Single scene load,
+// where the incoming scene brings its own SND section and the outgoing
+// scene's blobs are about to be overwritten in the arena they live in.
+void reset_clips();
+
 // Starts a clip. Returns a voice handle, or 0 when every voice is busy with
 // something of equal or higher priority (a dropped sound is normal and must
 // never be an error).

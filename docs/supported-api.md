@@ -211,3 +211,18 @@ These are listed prominently here and asserted in the conformance suite
     and its input modules export as nothing and are reported as such.
     `onClick`/`onValueChanged` take listeners IN CODE -- Inspector-serialised
     persistent listeners do not exist on this platform.
+32. **Scene transitions double-buffer the asset pool.** A game that uses
+    `SceneManager.LoadScene`/`LoadSceneAsync` holds TWO asset-pool arenas:
+    the incoming scene streams into one while the outgoing scene -- whose
+    meshes live zero-copy in the other -- is still drawn. Budget
+    accordingly: transitions cost one extra Asset Pool of RAM, and a game
+    that cannot fit both boots with transitions disabled and a message
+    saying so. On a Single load every non-persistent object is destroyed
+    (OnDisable/OnDestroy fire) and the new scene's components and scripts
+    are created exactly as at boot; PlayerPrefs survives. ADDITIVE loads
+    append but occupy the second arena permanently: after one additive
+    load, further loads are refused until a Single load frees an arena,
+    and an additive scene's PHYS section is ignored (static collision is
+    baked per scene and cannot merge). Scripts carry no serialised
+    fields, so scene names passed to LoadScene belong in code, not the
+    Inspector.

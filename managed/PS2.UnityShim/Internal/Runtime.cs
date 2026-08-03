@@ -659,6 +659,45 @@ namespace UnityEngine.Internal
                    mb.gameObject != null && mb.gameObject.activeInHierarchy;
         }
 
+        // Called by the game host when a Single scene load has ACTIVATED:
+        // the native world has already been replaced, so every handle in
+        // here is stale. Unity's contract for a scene swap is that every
+        // non-persistent object dies, with OnDisable/OnDestroy fired so
+        // scripts can save state. PlayerPrefs and the type cache survive --
+        // both are scene-independent. The host re-creates the new scene's
+        // components right after this returns, exactly like boot.
+        internal static void ResetForSceneLoad()
+        {
+            for (int i = 0; i < s_Behaviours.Count; i++)
+            {
+                BehaviourState b = s_Behaviours[i];
+                if (b.Behaviour == null || b.Behaviour.IsDestroyedInternal)
+                    continue;
+                try
+                {
+                    if (b.EnabledRan)
+                        b.OnDisable?.Invoke();
+                    b.OnDestroy?.Invoke();
+                }
+                catch (Exception e)
+                {
+                    // One script's OnDestroy must not abort the swap.
+                    Debug.LogError("OnDestroy during scene load threw: " + e);
+                }
+                b.Behaviour.MarkDestroyed();
+            }
+            s_Behaviours.Clear();
+            s_PendingAwake.Clear();
+            s_Coroutines.Clear();
+            s_DeferredDestroy.Clear();
+            foreach (KeyValuePair<int, GameObject> kv in s_WrapperByHandle)
+                kv.Value.MarkDestroyed();
+            s_WrapperByHandle.Clear();
+            s_GameObjectByCollider.Clear();
+            s_HandleByCollider.Clear();
+            PS2UINavigation.Clear();
+        }
+
         private static void ProcessDeferredDestroy()
         {
             if (s_DeferredDestroy.Count == 0)

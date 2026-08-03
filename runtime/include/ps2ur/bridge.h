@@ -56,6 +56,26 @@ void prefs_set_identity(const char* directory, const char* title);
 // and says so, rather than reading into nothing.
 void bind_scene_buffer(void* buffer, unsigned int capacity);
 
+// Scene-swap bookkeeping for the game host (M12.5). A managed LoadScene
+// activates inside the managed Tick -- possibly reading to completion in
+// one call -- so the host cannot see the loader's intermediate states.
+// scene_swap_count() increments once per ACTIVATION (the world mutation);
+// the host compares it across frames and rebuilds everything derived from
+// the world when it moves. The rest describe the completed load.
+unsigned int scene_swap_count();
+bool scene_last_load_additive();
+// World table sizes captured when the load BEGAN: for an additive load,
+// creates run from these counts to the new totals.
+struct PreLoadCounts {
+    unsigned int rigidbodies;
+    unsigned int animator_refs;
+    unsigned int audio_sources;
+    unsigned int particle_systems;
+    unsigned int ui_elements;
+    unsigned int scripts;
+};
+const PreLoadCounts& scene_pre_load_counts();
+
 } // namespace bridge
 } // namespace ps2ur
 

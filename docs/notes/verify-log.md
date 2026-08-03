@@ -572,3 +572,39 @@ The milestone doc's token-asserted menu sample and its golden land with
 Task 6's combined D1-candidate sample. Known gap, stated in deviation
 30: Text wraps only on explicit newlines -- no automatic word wrap
 against the rect (marginal under a 48-byte cap).
+
+## SceneManager.LoadScene was finished and unreachable (M12.5, 2026-08-03)
+
+The user asked for a title screen whose Start button loads the game
+scene -- the first real use of SceneManager -- and the M10 loading stack
+turned out to be complete, sample-verified, and unreachable from a game:
+the host never called stream::init() (every load refused), never called
+bridge::bind_scene_buffer() (no buffer to read into), and had no code to
+rebuild ANYTHING derived from the world after a swap. Three missing
+calls between finished layers, in one feature.
+
+The host now owns scene transitions: a second asset-pool arena is
+reserved at boot (transitions cost one extra pool; a game that cannot
+fit both says so and runs without them), the bridge counts ACTIVATIONS
+-- a blocking LoadScene runs read-to-activation inside one managed Tick,
+so state polling can never see it; only a counter can -- and on a swap
+the host tears down the managed world (Runtime.ResetForSceneLoad: every
+OnDisable/OnDestroy, wrappers, navigation, collider maps), clears bodies
+and SPU2 clips (audio::reset_clips -- audsrv has no per-clip free, so
+its ADPCM arena is re-initialised), rebuilds static collision, frees and
+re-uploads VRAM textures, re-uploads clips, and re-runs the same
+instantiate pass boot uses, extracted into one function so boot and swap
+CANNOT drift. Additive loads create only appended entries (table counts
+snapshotted at begin) but occupy the second arena for good; deviation 32
+states the bounds.
+
+The old scene's managed objects run one last Tick against the already-
+swapped world before the host rebuilds -- safe by construction, because
+every cross-boundary handle is generation-checked (M7's design decision
+paying off six milestones later).
+
+NOT yet verified on target: needs a two-scene build, and the Unity
+Editor holds the project lock. The title screen scripts + a scene
+generator (PS2 > Create Title Screen) are in the user project; repo
+side is proven by 287 host tests and clean builds of all three
+toolchains.

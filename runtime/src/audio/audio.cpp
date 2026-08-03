@@ -290,6 +290,23 @@ int32_t load_clip(const void* data, uint32_t size)
     return static_cast<int32_t>(g_clip_count++);
 }
 
+void reset_clips()
+{
+    if (!g_initialized) {
+        return;
+    }
+    stop_all();
+#if defined(PS2UR_PLATFORM_PS2)
+    // audsrv has no per-clip free; re-initialising its ADPCM side releases
+    // every upload at once, which is exactly the scene-swap semantic.
+    audsrv_adpcm_init();
+#endif
+    for (uint32_t i = 0; i < kMaxClips; ++i) {
+        g_clips[i] = Clip{};
+    }
+    g_clip_count = 0;
+}
+
 uint32_t clip_count() { return g_clip_count; }
 
 const ClipInfo& clip_info(uint32_t index)
