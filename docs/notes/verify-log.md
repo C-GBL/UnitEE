@@ -446,3 +446,43 @@ usually did not. The runner now waits for the sample's COMPLETION token
 (PS2UR_TOKEN_*), and 02 passes 512/512 three runs straight. A retry-once
 guard remains in check.sh and now exists to catch the next NEW flake, with
 its message saying a real regression fails twice.
+
+## The first real Canvas found two bugs the layers could not (M12.5 task 5, 2026-08-03)
+
+The user added a Canvas with one Legacy Text and the scene refused to
+boot: "ui element payload truncated". The parser demanded 88 bytes for
+the UIElement payload; the format -- and the exporter -- say 84 (36 fixed
++ 48 text). The 4-byte overrun only fires when a UI element's payload is
+the LAST thing in the SCEN section, because payloads are addressed by
+explicit offset and the reads themselves only span 84 -- so every layout
+where anything followed the element passed. A Canvas hierarchy at the
+bottom of a scene produces exactly the fatal layout, and no synthetic
+scene existed to produce it first: the UI component shipped without the
+byte-level round-trip test the rigidbody component got, the discipline
+whose entire point is that a size drift "fails a test instead of failing
+in PCSX2". test_scene_ui.cpp now writes the payload from the format doc
+with the last element flush against the section end (7 tests, 285 total).
+
+Fixing that exposed the SECOND bug behind it, and it is the M12 defect
+class in its purest form yet: main_game looked up CreateUIGraphic /
+CreateUIButton / CreateUISlider, null-checked them, failed the boot if
+they were MISSING -- and never called them. The renderer draws the canvas
+straight from the World table, so a menu would LOOK wired while every
+Button was unreachable and PS2UINavigation had zero selectables. Present,
+tested, null-checked, and never invoked; only the on-target acceptance
+run could see it. The create loop now exists (graphics first, then
+selectables in table order) and prints "[game] ui: N elements, N buttons,
+N sliders" as the cross-layer proof.
+
+Verified on the user's own build output: SampleScene.p2b (182 entities,
+Canvas + Text + particles + audio + animator + PoseChanger) boots to
+PS2UR_TOKEN_GAME_OK with "ui: 1 elements"; goldens 512/64/64 unchanged.
+
+Incidental, found because grep started treating p2b_scene.cpp as a
+binary file: three '\0' char literals had been written as LITERAL NUL
+BYTES in the source (the printf/heredoc mangling class, third sighting).
+GCC compiles a quote-NUL-quote literal to the correct value, so behaviour
+was right and every build was green -- but the file was invisible to
+text search, which is how the class of tool that would find the next bug
+gets blinded. ASCII-only means checking for it; the fix was a byte-level
+replace.

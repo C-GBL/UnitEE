@@ -598,7 +598,10 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
             const int32_t y = static_cast<int32_t>(ui.y);
             const int32_t w = static_cast<int32_t>(ui.w);
             const int32_t h = static_cast<int32_t>(ui.h);
-            switch (ui.kind) {
+            // kind's low byte is the DRAW kind; bits 8-15 carry the managed
+            // class (Image/RawImage/Text) for the bridge, so an unmasked
+            // switch would send Text (0x202) to the default rect case.
+            switch (ui.kind & 0xFFu) {
                 case 1: // image
                     if (ui.texture != 0xFFFFFFFFu && bind_texture != nullptr) {
                         bind_texture(bind_user, ui.texture);

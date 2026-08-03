@@ -464,6 +464,83 @@ int main(void)
                static_cast<unsigned>(world.particle_system_count()));
     }
 
+    // --- uGUI components (M12.5 task 5) -------------------------------------
+    //
+    // Graphics first, then the buttons and sliders, so a Selectable's focus
+    // tint finds the Graphic already registered on its GameObject. Buttons
+    // and sliders reach PS2UINavigation in table order, which the exporter
+    // wrote in hierarchy order -- the D-pad walks the menu top to bottom.
+    //
+    // (The lookups above existed before these calls did: the renderer drew
+    // the canvas straight from the World table, so a menu LOOKED wired
+    // while every Button was unreachable -- the M12 defect class again,
+    // found by the acceptance run, not by a layer test.)
+    uint32_t ui_buttons = 0;
+    uint32_t ui_sliders = 0;
+    for (uint32_t u = 0; u < world.ui_element_count(); ++u) {
+        const scene::UIElement& ui = world.ui_element(u);
+        if (ui.w <= 0.0f || ui.h <= 0.0f) {
+            continue; // role-only record: a Selectable with no graphic
+        }
+        int32_t handle = world.handle_of(ui.entity);
+        int32_t element = static_cast<int32_t>(u);
+        int32_t managed_kind = static_cast<int32_t>((ui.kind >> 8) & 0xFFu);
+        void* args[3] = {&handle, &element, &managed_kind};
+        if (!invoke_checked(create_ui_graphic, args, "CreateUIGraphic")) {
+            fatal("CreateUIGraphic");
+            return 1;
+        }
+    }
+    for (uint32_t u = 0; u < world.ui_element_count(); ++u) {
+        const scene::UIElement& ui = world.ui_element(u);
+        if (ui.role == 1u) {
+            int32_t handle = world.handle_of(ui.entity);
+            int32_t element = static_cast<int32_t>(u);
+            void* args[2] = {&handle, &element};
+            if (!invoke_checked(create_ui_button, args, "CreateUIButton")) {
+                fatal("CreateUIButton");
+                return 1;
+            }
+            ++ui_buttons;
+        } else if (ui.role == 2u) {
+            // The slider record's text bytes carry (f32 normalised value,
+            // f32 max fill width); the fill rect's x/y/h come from the
+            // linked fill element (docs/formats/p2b-container.md).
+            int32_t handle = world.handle_of(ui.entity);
+            int32_t fill = ui.link;
+            float value;
+            float max_w;
+            memcpy(&value, ui.text + 0, 4);
+            memcpy(&max_w, ui.text + 4, 4);
+            float fill_x = 0.0f;
+            float fill_y = 0.0f;
+            float fill_h = 0.0f;
+            if (fill >= 0 &&
+                static_cast<uint32_t>(fill) < world.ui_element_count()) {
+                const scene::UIElement& f =
+                    world.ui_element(static_cast<uint32_t>(fill));
+                fill_x = f.x;
+                fill_y = f.y;
+                fill_h = f.h;
+            } else {
+                fill = -1; // no fill rect authored; the value still works
+            }
+            void* args[7] = {&handle, &fill,   &fill_x, &fill_y,
+                             &max_w,  &fill_h, &value};
+            if (!invoke_checked(create_ui_slider, args, "CreateUISlider")) {
+                fatal("CreateUISlider");
+                return 1;
+            }
+            ++ui_sliders;
+        }
+    }
+    if (world.ui_element_count() > 0) {
+        printf("[game] ui: %u elements, %u buttons, %u sliders\n",
+               static_cast<unsigned>(world.ui_element_count()),
+               static_cast<unsigned>(ui_buttons),
+               static_cast<unsigned>(ui_sliders));
+    }
+
     if (world.audio_source_count() > 0 || world.listener_entity() >= 0) {
         printf("[game] %u audio sources, listener on entity %d\n",
                static_cast<unsigned>(world.audio_source_count()),

@@ -737,8 +737,12 @@ bool World::load(const io::P2bFile& file)
                 }
                 ++m_particle_count;
             } else if (type == kComponentUIElement) {
-                // 88 bytes; UIElement in declaration order, text inline.
-                if (!v.ok(data_off, 88u)) {
+                // 84 bytes; UIElement in declaration order, text inline.
+                // (36 fixed + 48 text. This check once said 88 while the
+                // exporter wrote 84, and the 4-byte overrun only fired when
+                // a UI element was the LAST payload in SCEN -- i.e. on the
+                // first real Canvas export, not in any synthetic test.)
+                if (!v.ok(data_off, 84u)) {
                     m_error = "ui element payload truncated";
                     return false;
                 }
@@ -767,7 +771,7 @@ bool World::load(const io::P2bFile& file)
                     ui.text[b] =
                         static_cast<char>(v.data[data_off + 36u + b]);
                 }
-                ui.text[kMaxUITextLength - 1] = ' ';
+                ui.text[kMaxUITextLength - 1] = '\0';
                 ++m_ui_count;
             } else if (type == kComponentAnimator) {
                 // 8 bytes: controller index and the layer count baked.
@@ -1457,10 +1461,10 @@ void World::ui_set_text(uint32_t i, const char* text)
         return;
     }
     uint32_t b = 0;
-    for (; b + 1 < kMaxUITextLength && text[b] != ' '; ++b) {
+    for (; b + 1 < kMaxUITextLength && text[b] != '\0'; ++b) {
         m_ui[i].text[b] = text[b];
     }
-    m_ui[i].text[b] = ' ';
+    m_ui[i].text[b] = '\0';
 }
 
 void World::ui_set_visible(uint32_t i, bool visible)

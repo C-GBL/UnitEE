@@ -906,7 +906,7 @@ namespace Ps2.Editor
                 }
                 if (e.Ui != null)
                 {
-                    // 88 bytes (M12.5 task 5): kind|managed<<8 in the low
+                    // 84 bytes (M12.5 task 5): kind|managed<<8 in the low
                     // u16, role in the high u16, baked screen rect, tint
                     // (alpha in the PS2 0..0x80 range), texture, slider fill
                     // link, text scale, then 48 bytes of text -- which for a

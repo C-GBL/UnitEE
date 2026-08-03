@@ -196,7 +196,7 @@ PS2ParticleSystem (M12.5, 64B, ADR-011) {
                    u32 colour_start, colour_end;  // RGBA8
                    f32 gravity;              // multiplier of 9.81 down
                    u32 max_particles }       // clamped to the runtime's 128
-UIElement (M12.5 task 5, 88B) {
+UIElement (M12.5 task 5, 84B) {
                    u32 kind;                 // low8: 0 rect, 1 image, 2 text;
                                              // bits 8-15 managed kind
                                              // (Image/RawImage/Text);
