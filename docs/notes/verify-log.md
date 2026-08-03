@@ -664,3 +664,22 @@ kMaxGpuTextures rose 8 -> 12 to hold them.
 
 290 host tests (FONT round-trip, glyph-table truncation, missing-font
 ref). On-target visual awaits the user's rebuild.
+
+## The grey banded font, diagnosed from the container (M12.5, 2026-08-03)
+
+The first baked-font screenshot showed dark, banded, ghosted text.
+Rather than guess, the built TitleScreen.p2b was decoded offline
+(sections -> CSM1 un-shuffle -> CLUT -> pixels): glyph SHAPES were in
+the atlas at the right coordinates with sane proportional metrics --
+placement, orientation and the draw path all correct -- but coverage
+peaked at 34/128 (~27% alpha) across only EIGHT distinct levels. Two
+export bugs, one readback: (1) the ReadPixels round-trip attenuated the
+coverage and the code read only .a, when which channel a font atlas
+carries coverage in is a backend detail -- now MAX over channels,
+normalised so the peak is 100% (every real font has fully-opaque
+cores); (2) the median-cut quantiser, built for art, collapsed the
+alpha ramp to eight levels -- a font atlas's palette is known BY
+CONSTRUCTION (256 levels of white), so it is now encoded directly:
+index = coverage byte, CLUT = ramp, lossless with no quantiser in the
+path. The offline decoder earns a note: five minutes of reading the
+actual bytes replaced an afternoon of speculating about GS state.

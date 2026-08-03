@@ -22,7 +22,8 @@ namespace Ps2.Editor
 
         internal sealed class BakedFont
         {
-            public Texture2D Atlas;    // register like any scene texture
+            public byte[] Coverage;    // AtlasW x AtlasH, TOP-DOWN rows
+            public int AtlasW, AtlasH;
             public float Ascent;       // px above the baseline
             public float LineHeight;   // px per line
             public GlyphRecord[] Glyphs = new GlyphRecord[LastChar - FirstChar + 1];
@@ -111,12 +112,16 @@ namespace Ps2.Editor
                              "VRAM will be tight. Consider a smaller size.");
             }
 
-            var pixels = new Color32[atlasW * atlasH];
+            var coverage = new byte[atlasW * atlasH];
+            int peak = 0;
             foreach (var (glyph, ci, gx, gy) in placements)
             {
                 // Per-pixel UV interpolation between the four corners
                 // handles the rotated/flipped placements Unity's dynamic
-                // atlas produces.
+                // atlas produces. Coverage is the MAX channel: which channel
+                // a font atlas carries it in depends on the backend (Alpha8
+                // reads in .a, R8 in .r), and reading the wrong one shipped
+                // a 27%-grey font (verify-log M12.5).
                 int gw = ci.glyphWidth, gh = ci.glyphHeight;
                 for (int y = 0; y < gh; y++)
                 {
@@ -129,21 +134,27 @@ namespace Ps2.Editor
                         Vector2 uv = Vector2.Lerp(rowL, rowR, tx);
                         int sx = Mathf.Clamp((int)(uv.x * srcW), 0, srcW - 1);
                         int sy = Mathf.Clamp((int)(uv.y * srcH), 0, srcH - 1);
-                        byte a = srcPixels[sy * srcW + sx].a;
-                        // Stored bottom-up like every Unity texture: the
-                        // texture exporter flips rows on write, which makes
-                        // the metric V values top-origin on the PS2.
-                        pixels[(atlasH - 1 - (gy + y)) * atlasW + (gx + x)] =
-                            new Color32(255, 255, 255, a);
+                        Color32 s = srcPixels[sy * srcW + sx];
+                        int c = Mathf.Max(Mathf.Max(s.r, s.g),
+                                          Mathf.Max(s.b, s.a));
+                        if (c > peak) peak = c;
+                        coverage[(gy + y) * atlasW + (gx + x)] = (byte)c;
                     }
                 }
             }
+            // Normalise so full coverage is full alpha: blit paths through
+            // RenderTextures can attenuate (colour-space conversions among
+            // them), and a font whose peak is 68/255 draws as grey text.
+            // Every real font has fully-opaque cores, so the peak IS 100%.
+            if (peak > 0 && peak < 255)
+            {
+                for (int i = 0; i < coverage.Length; i++)
+                    coverage[i] = (byte)(coverage[i] * 255 / peak);
+            }
 
-            baked.Atlas = new Texture2D(atlasW, atlasH, TextureFormat.RGBA32,
-                                        false);
-            baked.Atlas.name = "font_" + font.name + "_" + size;
-            baked.Atlas.SetPixels32(pixels);
-            baked.Atlas.Apply(false, false);
+            baked.Coverage = coverage;
+            baked.AtlasW = atlasW;
+            baked.AtlasH = atlasH;
 
             baked.Ascent = maxTop;
             // Ascent + descent + 2px leading approximates Unity's default
@@ -178,6 +189,36 @@ namespace Ps2.Editor
                 b.U16((ushort)Mathf.Clamp(g.Advance << 4, 0, ushort.MaxValue));
                 b.U16(0);
             }
+            return b.ToArray();
+        }
+
+        // The atlas TEX section, encoded DIRECTLY: the palette of a font
+        // atlas is known by construction -- 256 levels of white -- so the
+        // index IS the coverage byte and the CLUT is a ramp. The general
+        // median-cut quantiser is built for art and collapsed the alpha
+        // ramp to eight levels (the banded text of verify-log M12.5);
+        // a known palette needs no quantiser at all.
+        internal static byte[] BuildAtlasSection(BakedFont baked)
+        {
+            var entries = new uint[256];
+            for (uint i = 0; i < 256; i++)
+            {
+                uint a = (i * 128 + 127) / 255; // PS2 alpha range
+                entries[i] = 0xFFFFFFu | (a << 24);
+            }
+            uint[] csm1 = P2bTextureExporter.Csm1Reorder(entries);
+
+            var b = new ByteBuffer();
+            b.U32((uint)baked.AtlasW);
+            b.U32((uint)baked.AtlasH);
+            b.U32(19); // PSMT8, the same constant Export writes
+            b.U32(256);
+            foreach (uint e in csm1)
+                b.U32(e);
+            // Coverage rows are already TOP-DOWN, which is the on-disc
+            // orientation (Export flips Unity's bottom-up arrays to get
+            // here; this data never was bottom-up).
+            b.Bytes(baked.Coverage);
             return b.ToArray();
         }
 

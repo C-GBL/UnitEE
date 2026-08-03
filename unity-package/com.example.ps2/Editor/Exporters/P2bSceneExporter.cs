@@ -211,9 +211,8 @@ namespace Ps2.Editor
             // atlas rides the ordinary texture path; the FONT section holds
             // the metrics. Capped at the runtime's four slots; overflow and
             // bake failures fall back to the builtin 8x8 font, said aloud.
-            var fontPayloads = new List<byte[]>();
+            var bakedFonts = new List<P2bFontExporter.BakedFont>();
             var fontIndexOf = new Dictionary<string, int>();
-            var fontAtlases = new HashSet<Texture2D>();
             foreach (var e in entities)
             {
                 UIRecord ui = e.Ui;
@@ -224,7 +223,7 @@ namespace Ps2.Editor
                 if (!fontIndexOf.TryGetValue(fontKey, out int fi))
                 {
                     fi = -1;
-                    if (fontPayloads.Count >= 4)
+                    if (bakedFonts.Count >= 4)
                     {
                         Debug.LogWarning(
                             "[PS2] more than 4 (font, size) pairs in the " +
@@ -241,13 +240,8 @@ namespace Ps2.Editor
                             Debug.LogWarning("[PS2] " + w);
                         if (bakedFont != null)
                         {
-                            int ti = textures.Count;
-                            textures.Add(bakedFont.Atlas);
-                            textureLookup[bakedFont.Atlas] = ti;
-                            fontAtlases.Add(bakedFont.Atlas);
-                            fi = fontPayloads.Count;
-                            fontPayloads.Add(
-                                P2bFontExporter.BuildSection(bakedFont, ti));
+                            fi = bakedFonts.Count;
+                            bakedFonts.Add(bakedFont);
                         }
                     }
                     fontIndexOf[fontKey] = fi;
@@ -340,16 +334,22 @@ namespace Ps2.Editor
             }
             foreach (Texture2D t in textures)
             {
-                // Font atlases must never be downscaled: every glyph metric
-                // is a pixel coordinate into them.
-                int cap = fontAtlases.Contains(t) ? 1024 : MaxTextureSize;
                 writer.AddSection(P2bWriter.SectionTex,
-                                  P2bTextureExporter.Export(t, cap),
+                                  P2bTextureExporter.Export(t, MaxTextureSize),
                                   t.name);
             }
-            foreach (byte[] fontPayload in fontPayloads)
+            // Font atlases as TEX sections AFTER the art (their indices
+            // follow it), encoded directly -- known palette, no quantiser,
+            // no downscale: every glyph metric is a pixel coordinate.
+            for (int k = 0; k < bakedFonts.Count; k++)
             {
-                writer.AddSection(P2bWriter.SectionFont, fontPayload);
+                writer.AddSection(P2bWriter.SectionTex,
+                                  P2bFontExporter.BuildAtlasSection(bakedFonts[k]),
+                                  "font-atlas-" + k);
+                writer.AddSection(
+                    P2bWriter.SectionFont,
+                    P2bFontExporter.BuildSection(bakedFonts[k],
+                                                 textures.Count + k));
             }
 
             // SCRP: deduplicated NUL-terminated script type names; SCEN
