@@ -560,3 +560,15 @@ the CURRENT string, because Text.text is mutable at runtime and a baked
 offset would go stale on the first SetText. draw_text_aligned measures
 with the same advance rules draw_text draws with; a drift between the
 two would misplace text by exactly the mismatch.
+
+## M12.5 task 5 ACCEPTED on target (2026-08-03)
+
+Accepted by the user in their own scene rather than a repo sample: title
+text, a button, a volume slider, D-pad focus, X firing onClick, real
+9-slice on the default rounded sprites, texture alpha, and a
+MiddleCenter button label actually centred. Boot line: "ui: 7 elements,
+1 buttons, 1 sliders", GAME_OK, five pad-config lines then silence.
+The milestone doc's token-asserted menu sample and its golden land with
+Task 6's combined D1-candidate sample. Known gap, stated in deviation
+30: Text wraps only on explicit newlines -- no automatic word wrap
+against the rect (marginal under a 48-byte cap).
