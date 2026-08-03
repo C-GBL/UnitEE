@@ -453,8 +453,15 @@ int main(void)
         fatal("vu programs");
         return 1;
     }
+    // 16384 qwords (256 KB), matching samples/17-skinning -- the proven value
+    // for character scenes. The 2048 this host inherited from main_m7 was
+    // sized for a spinning cube: a single skinned batch is ~340 qwords (a
+    // 24-matrix palette is 96 on its own, 48 5-qword vertices are 240), so
+    // one imported character overflowed it mid-frame at 3101 qwords and the
+    // frame was dropped (verify-log M12.5). This is a staging buffer in main
+    // RAM, not a hardware limit; the cost of headroom is kilobytes.
     gfx::DmaChain chain;
-    if (!chain.init(2048)) {
+    if (!chain.init(16384)) {
         fatal("dma chain");
         return 1;
     }
