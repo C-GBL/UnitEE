@@ -42,6 +42,7 @@ inline constexpr uint16_t kComponentDirectionalLight = 3;
 inline constexpr uint16_t kComponentScript = 4;
 inline constexpr uint16_t kComponentSkinnedMeshRenderer = 5;
 inline constexpr uint16_t kComponentRigidbody = 6;
+inline constexpr uint16_t kComponentAnimator = 7;
 
 // A Rigidbody at most per entity, so the table is bounded by kMaxEntities;
 // this is the far smaller number a scene realistically simulates, and
@@ -123,6 +124,17 @@ struct DirectionalLight {
 struct ScriptRef {
     int32_t entity = -1;
     const char* type_name = "";
+};
+
+// An Animator on an entity (M12.5). The animator INSTANCE is allocated per
+// skinned renderer at load; this records which entity owns the component, so
+// GetComponent<Animator>() resolves without going through the renderer --
+// Unity's own import puts the Animator on the model root and the renderer on
+// a child, so the two are usually different entities.
+struct AnimatorRef {
+    int32_t entity = -1;
+    uint32_t controller = 0;
+    uint32_t layers = 1;
 };
 
 // A Rigidbody on an entity (M11): the component state the managed Rigidbody
@@ -227,6 +239,9 @@ public:
     uint32_t rigidbody_count() const { return m_rigidbody_count; }
     const RigidbodyRef& rigidbody(uint32_t i) const { return m_rigidbodies[i]; }
 
+    uint32_t animator_ref_count() const { return m_animator_ref_count; }
+    const AnimatorRef& animator_ref(uint32_t i) const { return m_animator_refs[i]; }
+
     // ---- M9: skinning + animation ---------------------------------------
 
     uint32_t skinned_mesh_count() const { return m_skinned_mesh_count; }
@@ -261,6 +276,8 @@ public:
     // The animator driving an entity, or -1. The bridge resolves handles
     // through this so managed Animator components address the right one.
     int32_t animator_for_entity(int32_t entity_index) const;
+    // True when 'index' is 'ancestor' or sits below it. Cycle-guarded.
+    bool is_descendant_of(int32_t index, int32_t ancestor) const;
     // Baked state index for a name hash, or -1.
     int32_t state_index(uint32_t controller, uint32_t name_hash) const;
 
@@ -286,6 +303,9 @@ private:
 
     RigidbodyRef m_rigidbodies[kMaxRigidbodies];
     uint32_t m_rigidbody_count = 0;
+
+    AnimatorRef m_animator_refs[kMaxSkinnedRenderers];
+    uint32_t m_animator_ref_count = 0;
 
     LoadedSkinnedMesh m_skinned_meshes[kMaxSkinnedMeshes];
     uint32_t m_skinned_mesh_count = 0;

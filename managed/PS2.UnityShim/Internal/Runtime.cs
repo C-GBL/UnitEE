@@ -168,6 +168,24 @@ namespace UnityEngine.Internal
             }
         }
 
+        // Instantiates the Animator a scene exported. The shim's Animator
+        // addresses the native animator through its entity handle, so there
+        // is no index to bind -- what this buys is GetComponent<Animator>()
+        // returning something, which is the whole failure this phase exists
+        // to fix (ADR-010).
+        internal static void CreateAnimator(int entityHandle)
+        {
+            GameObject go = GetOrCreateWrapper(entityHandle);
+            if (go == null)
+            {
+                Debug.LogError("CreateAnimator: dead entity handle");
+                return;
+            }
+            Animator animator = new Animator();
+            animator.Attach(go);
+            go.RegisterComponent(animator);
+        }
+
         internal static void Register(MonoBehaviour behaviour)
         {
             BehaviourState state = Bind(behaviour);

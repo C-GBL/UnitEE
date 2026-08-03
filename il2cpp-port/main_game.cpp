@@ -244,9 +244,11 @@ int main(void)
     const MethodInfo* create_script = find_runtime_method("CreateScript", 2);
     const MethodInfo* create_rigidbody = find_runtime_method("CreateRigidbody", 5);
     const MethodInfo* bind_colliders = find_runtime_method("BindColliders", 0);
+    const MethodInfo* create_animator = find_runtime_method("CreateAnimator", 1);
     const MethodInfo* tick = find_runtime_method("Tick", 1);
     if (create_script == nullptr || tick == nullptr ||
-        create_rigidbody == nullptr || bind_colliders == nullptr) {
+        create_rigidbody == nullptr || bind_colliders == nullptr ||
+        create_animator == nullptr) {
         // Almost always a stripping problem: the dispatcher is reached by
         // reflection, so it needs a link.xml entry to survive.
         printf("[game] UnityEngine.Internal.Runtime was not found. It is "
@@ -278,6 +280,18 @@ int main(void)
             fatal("CreateRigidbody");
             return 1;
         }
+    }
+    for (uint32_t a = 0; a < world.animator_ref_count(); ++a) {
+        int32_t handle = world.handle_of(world.animator_ref(a).entity);
+        void* args[1] = {&handle};
+        if (!invoke_checked(create_animator, args, "CreateAnimator")) {
+            fatal("CreateAnimator");
+            return 1;
+        }
+    }
+    if (world.animator_ref_count() > 0) {
+        printf("[game] %u animators\n",
+               static_cast<unsigned>(world.animator_ref_count()));
     }
     if (world.rigidbody_count() > 0) {
         printf("[game] %u rigidbodies\n",

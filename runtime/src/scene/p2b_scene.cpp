@@ -49,6 +49,7 @@ bool World::load(const io::P2bFile& file)
     m_entity_count = 0;
     m_script_count = 0;
     m_rigidbody_count = 0;
+    m_animator_ref_count = 0;
     m_mesh_count = 0;
     m_material_count = 0;
     // The animation tables must reset too. A World is not always fresh: a
@@ -614,6 +615,21 @@ bool World::load(const io::P2bFile& file)
                 rb.angular_damping = v.f32(data_off + 8);
                 rb.flags = v.u32(data_off + 12);
                 ++m_rigidbody_count;
+            } else if (type == kComponentAnimator) {
+                // 8 bytes: controller index and the layer count baked.
+                if (!v.ok(data_off, 8u)) {
+                    m_error = "animator payload truncated";
+                    return false;
+                }
+                if (m_animator_ref_count >= kMaxSkinnedRenderers) {
+                    m_error = "too many animators";
+                    return false;
+                }
+                AnimatorRef& ar = m_animator_refs[m_animator_ref_count];
+                ar.entity = static_cast<int32_t>(i);
+                ar.controller = v.u32(data_off + 0);
+                ar.layers = v.u32(data_off + 4);
+                ++m_animator_ref_count;
             } else if (type == kComponentScript) {
                 // Payload = u32 byte offset of a NUL-terminated type name
                 // inside the SCRP section (payloads themselves stay uniform
@@ -689,6 +705,7 @@ bool World::append(const io::P2bFile& file)
     const uint32_t entity_base = m_entity_count;
     const uint32_t script_base = m_script_count;
     const uint32_t rigidbody_base = m_rigidbody_count;
+    const uint32_t animator_ref_base = m_animator_ref_count;
     const uint32_t skinned_mesh_base = m_skinned_mesh_count;
     const uint32_t skinned_base = m_skinned_count;
     const uint32_t skeleton_base = m_skeleton_count;
@@ -710,6 +727,9 @@ bool World::append(const io::P2bFile& file)
         m_error = "additive scene does not fit: scripts";
     } else if (rigidbody_base + incoming.m_rigidbody_count > kMaxRigidbodies) {
         m_error = "additive scene does not fit: rigidbodies";
+    } else if (animator_ref_base + incoming.m_animator_ref_count >
+               kMaxSkinnedRenderers) {
+        m_error = "additive scene does not fit: animators";
     } else if (skinned_mesh_base + incoming.m_skinned_mesh_count >
                kMaxSkinnedMeshes) {
         m_error = "additive scene does not fit: skinned meshes";
@@ -762,6 +782,15 @@ bool World::append(const io::P2bFile& file)
     // Rigidbodies rebase on the entity only: mass and damping are values,
     // not indices. The native body they will drive does not exist yet --
     // whoever merges the scene has to create it, exactly as boot does.
+    // Animators rebase on the entity AND the controller, since the incoming
+    // scene's controllers were appended after the running scene's.
+    for (uint32_t i = 0; i < incoming.m_animator_ref_count; ++i) {
+        AnimatorRef ar = incoming.m_animator_refs[i];
+        ar.entity += static_cast<int32_t>(entity_base);
+        ar.controller += controller_base;
+        m_animator_refs[animator_ref_base + i] = ar;
+    }
+
     for (uint32_t i = 0; i < incoming.m_rigidbody_count; ++i) {
         RigidbodyRef rb = incoming.m_rigidbodies[i];
         rb.entity += static_cast<int32_t>(entity_base);
@@ -811,6 +840,7 @@ bool World::append(const io::P2bFile& file)
     m_entity_count += incoming.m_entity_count;
     m_script_count += incoming.m_script_count;
     m_rigidbody_count += incoming.m_rigidbody_count;
+    m_animator_ref_count += incoming.m_animator_ref_count;
     m_skeleton_count += incoming.m_skeleton_count;
     m_clip_count += incoming.m_clip_count;
     m_controller_count += incoming.m_controller_count;
@@ -835,12 +865,46 @@ bool World::append(const io::P2bFile& file)
 
 int32_t World::animator_for_entity(int32_t entity_index) const
 {
+    // The renderer's own entity first: the direct case, and the only one
+    // that existed before M12.5.
     for (uint32_t i = 0; i < m_skinned_count; ++i) {
         if (m_skinned[i].entity == entity_index) {
             return static_cast<int32_t>(m_skinned[i].animator);
         }
     }
+
+    // Then the Animator COMPONENT's entity, which is usually a different one.
+    // Unity's model importer puts the Animator on the model root and the
+    // SkinnedMeshRenderer on a child mesh object, so a script calling
+    // GetComponent<Animator>().Play() addresses the root -- and matching only
+    // renderers would miss it and silently do nothing. Walking down from the
+    // component to the renderer it drives is what makes the ordinary imported
+    // character work.
+    for (uint32_t a = 0; a < m_animator_ref_count; ++a) {
+        if (m_animator_refs[a].entity != entity_index) {
+            continue;
+        }
+        for (uint32_t i = 0; i < m_skinned_count; ++i) {
+            if (is_descendant_of(m_skinned[i].entity, entity_index)) {
+                return static_cast<int32_t>(m_skinned[i].animator);
+            }
+        }
+    }
     return -1;
+}
+
+bool World::is_descendant_of(int32_t index, int32_t ancestor) const
+{
+    // Bounded by the entity count: a cycle introduced by runtime reparenting
+    // must not hang the frame.
+    uint32_t guard = 0;
+    while (index >= 0 && guard++ <= kMaxEntities) {
+        if (index == ancestor) {
+            return true;
+        }
+        index = m_entities[index].parent;
+    }
+    return false;
 }
 
 int32_t World::state_index(uint32_t controller, uint32_t name_hash) const

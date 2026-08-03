@@ -25,12 +25,13 @@ namespace Ps2.Editor
             public List<string> Scripts; // managed type names, or null
             public SkinnedMeshRenderer Skinned; // M9, or null
             public Rigidbody Body;              // M11, or null
+            public Animator Animator;           // M12.5, or null
         }
 
-        // Pre-built animation sections handed in by a caller that owns the
-        // rig (the M9 scene builder). Baking arbitrary AnimatorController
-        // assets is Editor plumbing this milestone does not attempt; the
-        // container and runtime accept whatever a baker produces.
+        // The rig sections. Normally baked from the scene's own assets by
+        // P2bRigExporter (M12.5 task 1); a caller that owns its rig may set
+        // this first and is then responsible for clearing it, which is how
+        // the M9 acceptance scene supplies a procedurally built character.
         internal sealed class SkinPayload
         {
             public byte[] Skeleton;
@@ -75,6 +76,25 @@ namespace Ps2.Editor
             }
 
             GameObject[] roots = SceneManager.GetActiveScene().GetRootGameObjects();
+
+            // Rigs, BEFORE the walk: a skinned renderer names material 0, so
+            // the material table has to know whether there is one.
+            //
+            // PendingSkin used to be the only way in, set by a bespoke export
+            // menu that built a procedural test rig. A caller that has already
+            // baked a rig still wins (the M9 acceptance scene does exactly
+            // that); anything else gets its rig read from the scene's own
+            // assets, which is what makes an imported character work.
+            var rigWarnings = new List<string>();
+            bool autoBakedRig = false;
+            if (PendingSkin == null)
+            {
+                PendingSkin = P2bRigExporter.Bake(roots, rigWarnings);
+                autoBakedRig = PendingSkin != null;
+                foreach (string warning in rigWarnings)
+                    Debug.LogWarning("[PS2] " + warning);
+            }
+
             foreach (GameObject root in roots)
             {
                 Walk(root.transform, -1, entities, meshes, meshLookup, textures,
@@ -189,6 +209,15 @@ namespace Ps2.Editor
 
             writer.AddSection(P2bWriter.SectionScene, BuildScene(entities, scriptNames));
             writer.Write(path);
+
+            // A rig this call baked belongs to THIS scene. PendingSkin is
+            // static, so leaving it set would carry scene 1's character into
+            // scene 2 of a multi-scene build -- the same shape as the M10 bug
+            // where World::load did not reset its animation counters and every
+            // third load overflowed them. A rig a CALLER supplied is theirs to
+            // clear, and PS2SkinExportMenu does.
+            if (autoBakedRig)
+                PendingSkin = null;
             int bodies = 0;
             foreach (var e in entities)
             {
@@ -280,6 +309,14 @@ namespace Ps2.Editor
             // state the managed Rigidbody owns. Keeping the body in SCEN is
             // what lets GetComponent<Rigidbody>() find one.
             record.Body = t.GetComponent<Rigidbody>();
+
+            // The Animator rides on the entity that HAS it, which is not
+            // always the one carrying the SkinnedMeshRenderer -- Unity's own
+            // import puts the Animator on the model root and the renderer on
+            // a child. Finding it through the renderer, as the runtime did
+            // until now, is the same indirection that made Rigidbody
+            // unreachable from GetComponent.
+            record.Animator = t.GetComponent<Animator>();
 
             var camera = t.GetComponent<Camera>();
             if (camera != null)
@@ -437,6 +474,17 @@ namespace Ps2.Editor
                     p.U32(0);          // skeleton (the mesh names its own)
                     p.U32(0);          // controller index
                     comps.Add((5, p.ToArray()));
+                }
+                if (e.Animator != null && PendingSkin != null)
+                {
+                    // 8 bytes: controller index and the layer count the
+                    // exporter actually baked. Only entities with a rig get
+                    // one -- an Animator with nothing to drive would bind to
+                    // controller 0 of an empty table.
+                    var p = new ByteBuffer();
+                    p.U32(0); // controller index
+                    p.U32(1); // layers baked
+                    comps.Add((7, p.ToArray()));
                 }
                 if (e.Body != null)
                 {
