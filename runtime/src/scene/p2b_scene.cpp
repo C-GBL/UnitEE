@@ -65,6 +65,9 @@ bool World::load(const io::P2bFile& file)
     m_clip_count = 0;
     m_controller_count = 0;
     m_animator_count = 0;
+    for (uint32_t i = 0; i < kMaxAnimators; ++i) {
+        m_animator_drives_entities[i] = false;
+    }
     m_camera = Camera{};
     m_light = DirectionalLight{};
     m_error = "";
@@ -725,6 +728,60 @@ bool World::load(const io::P2bFile& file)
                                             m_clips, m_clip_count);
     }
 
+    // Resolve each Animator COMPONENT to a pool slot (M12.5). A rig with
+    // skinned renderers shares theirs. A rig with none is a rigid-bound
+    // model -- meshes parented to bones, no skin weights anywhere, which is
+    // how Unity's transform animation ships characters too -- and gets a
+    // slot that drives ENTITY transforms: each skeleton bone is matched by
+    // name hash to an entity under the Animator, and the sampled pose is
+    // written to those entities every frame. Humanoid-with-valid-avatar
+    // says nothing about skinning; this is the case it describes.
+    for (uint32_t a = 0; a < m_animator_ref_count; ++a) {
+        AnimatorRef& ar = m_animator_refs[a];
+        int32_t shared = -1;
+        for (uint32_t i = 0; i < m_skinned_count && shared < 0; ++i) {
+            if (m_skinned[i].entity == ar.entity ||
+                is_descendant_of(m_skinned[i].entity, ar.entity)) {
+                shared = static_cast<int32_t>(m_skinned[i].animator);
+            }
+        }
+        if (shared >= 0) {
+            ar.animator = shared;
+            continue;
+        }
+        if (m_skeleton_count == 0 || ar.controller >= m_controller_count) {
+            // An Animator with no rig at all; the exporter warns about this
+            // at build time, and GetComponent<Animator>() returns null.
+            continue;
+        }
+        if (m_animator_count >= kMaxAnimators) {
+            m_error = "too many distinct animators";
+            return false;
+        }
+        const uint32_t slot = m_animator_count++;
+        // The exporter bakes one rig per scene, so a transform-animated rig
+        // is always skeleton 0 -- the same convention SKMS headers use.
+        m_animators[slot].bind(&m_skeletons[0], &m_controllers[ar.controller],
+                               m_clips, m_clip_count);
+        ar.animator = static_cast<int32_t>(slot);
+        m_animator_drives_entities[slot] = true;
+        const anim::Skeleton& skeleton = m_skeletons[0];
+        for (uint32_t b = 0; b < skeleton.bone_count; ++b) {
+            m_bone_entity[slot][b] = -1;
+            for (uint32_t e = 0; e < m_entity_count; ++e) {
+                if (!m_entities[e].alive ||
+                    m_entities[e].name_hash != skeleton.bones[b].name_hash) {
+                    continue;
+                }
+                if (!is_descendant_of(static_cast<int32_t>(e), ar.entity)) {
+                    continue;
+                }
+                m_bone_entity[slot][b] = static_cast<int16_t>(e);
+                break;
+            }
+        }
+    }
+
     update_world_matrices();
     return true;
 }
@@ -832,7 +889,21 @@ bool World::append(const io::P2bFile& file)
         AnimatorRef ar = incoming.m_animator_refs[i];
         ar.entity += static_cast<int32_t>(entity_base);
         ar.controller += controller_base;
+        if (ar.animator >= 0) {
+            ar.animator += static_cast<int32_t>(animator_base);
+        }
         m_animator_refs[animator_ref_base + i] = ar;
+    }
+    // Transform-animation state rides with its slot: the drive flag and the
+    // bone->entity map, the latter rebased onto the merged entity table.
+    for (uint32_t s = 0; s < incoming.m_animator_count; ++s) {
+        const uint32_t dst = animator_base + s;
+        m_animator_drives_entities[dst] = incoming.m_animator_drives_entities[s];
+        for (uint32_t b = 0; b < anim::kMaxBones; ++b) {
+            const int16_t e = incoming.m_bone_entity[s][b];
+            m_bone_entity[dst][b] =
+                e >= 0 ? static_cast<int16_t>(e + entity_base) : int16_t(-1);
+        }
     }
 
     for (uint32_t i = 0; i < incoming.m_rigidbody_count; ++i) {
@@ -903,6 +974,23 @@ bool World::append(const io::P2bFile& file)
                                             &m_controllers[renderer.controller],
                                             m_clips, m_clip_count);
     }
+    // Transform-driving slots re-bind through the component that owns them.
+    // An incoming rig's skeleton 0 landed at skeleton_base; one already ours
+    // keeps skeleton 0. Both cases are "the ref's controller, the rig's own
+    // skeleton", which the slot index against animator_base distinguishes.
+    for (uint32_t a = 0; a < m_animator_ref_count; ++a) {
+        const AnimatorRef& ar = m_animator_refs[a];
+        if (ar.animator < 0 ||
+            !m_animator_drives_entities[static_cast<uint32_t>(ar.animator)]) {
+            continue;
+        }
+        const uint32_t skeleton =
+            static_cast<uint32_t>(ar.animator) >= animator_base ? skeleton_base
+                                                                : 0u;
+        m_animators[ar.animator].bind(&m_skeletons[skeleton],
+                                      &m_controllers[ar.controller], m_clips,
+                                      m_clip_count);
+    }
 
     // The running scene keeps its own camera and light: the player is
     // looking through them.
@@ -920,21 +1008,16 @@ int32_t World::animator_for_entity(int32_t entity_index) const
         }
     }
 
-    // Then the Animator COMPONENT's entity, which is usually a different one.
+    // Then the Animator COMPONENT's entity, which is usually a different one:
     // Unity's model importer puts the Animator on the model root and the
-    // SkinnedMeshRenderer on a child mesh object, so a script calling
-    // GetComponent<Animator>().Play() addresses the root -- and matching only
-    // renderers would miss it and silently do nothing. Walking down from the
-    // component to the renderer it drives is what makes the ordinary imported
-    // character work.
+    // renderers on children, so a script calling GetComponent<Animator>()
+    // addresses the root. Load resolved every component to its slot --
+    // shared with the rig's skinned renderers, or a transform-driving slot
+    // of its own for a rigid-bound model (M12.5).
     for (uint32_t a = 0; a < m_animator_ref_count; ++a) {
-        if (m_animator_refs[a].entity != entity_index) {
-            continue;
-        }
-        for (uint32_t i = 0; i < m_skinned_count; ++i) {
-            if (is_descendant_of(m_skinned[i].entity, entity_index)) {
-                return static_cast<int32_t>(m_skinned[i].animator);
-            }
+        if (m_animator_refs[a].entity == entity_index &&
+            m_animator_refs[a].animator >= 0) {
+            return m_animator_refs[a].animator;
         }
     }
     return -1;
@@ -975,8 +1058,26 @@ void World::update_animators(float dt)
     // character, which is not a slow clock but a fast one: time, transitions
     // and exit conditions would all run 19x.
     for (uint32_t a = 0; a < m_animator_count; ++a) {
-        if (m_animators[a].valid()) {
-            m_animators[a].update(dt);
+        if (!m_animators[a].valid()) {
+            continue;
+        }
+        m_animators[a].update(dt);
+        if (!m_animator_drives_entities[a]) {
+            continue;
+        }
+        // Transform animation (M12.5): the pose IS the entity transforms.
+        // set_local_* marks each entity dirty, so the matrix pass after this
+        // recomputes exactly the subtree that moved.
+        const anim::Skeleton* skeleton = m_animators[a].skeleton();
+        const anim::Pose& pose = m_animators[a].pose();
+        for (uint32_t b = 0; b < skeleton->bone_count; ++b) {
+            const int16_t entity = m_bone_entity[a][b];
+            if (entity < 0) {
+                continue;
+            }
+            set_local_position(entity, pose.pos[b]);
+            set_local_rotation(entity, pose.rot[b]);
+            set_local_scale(entity, pose.scale[b]);
         }
     }
 

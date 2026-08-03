@@ -145,6 +145,11 @@ struct AnimatorRef {
     int32_t entity = -1;
     uint32_t controller = 0;
     uint32_t layers = 1;
+    // Pool slot this component resolves to, decided at load: a rig with
+    // skinned renderers shares theirs; a rig with none -- a rigid-bound
+    // model, meshes parented to bones -- gets its own, which DRIVES ENTITY
+    // TRANSFORMS instead of a palette (M12.5).
+    int32_t animator = -1;
 };
 
 // A Rigidbody on an entity (M11): the component state the managed Rigidbody
@@ -341,6 +346,12 @@ private:
     uint32_t m_controller_count = 0;
     anim::Animator m_animators[kMaxAnimators];
     uint32_t m_animator_count = 0;
+    // Transform-animation mode (M12.5): slots flagged here write their
+    // sampled pose to the entities in m_bone_entity each frame -- how a
+    // rigid-bound model (Unity: transform animation) moves. Bones match
+    // entities by name hash under the Animator's entity, resolved at load.
+    bool m_animator_drives_entities[kMaxAnimators] = {};
+    int16_t m_bone_entity[kMaxAnimators][anim::kMaxBones];
 
     LoadedMesh m_meshes[kMaxMeshes];
     uint32_t m_mesh_count = 0;

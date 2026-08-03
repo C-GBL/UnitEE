@@ -56,8 +56,9 @@ namespace Ps2.Editor
                     all.Add(smr);
                 }
             }
-            if (all.Count == 0)
-                return null;
+            // NO early return on an empty list: a scene with zero
+            // SkinnedMeshRenderers can still be a rigid-bound character, which
+            // the block after the usability filter handles.
 
             // Decide which renderers are usable BEFORE committing to any of
             // them. This used to keep only the first one found and abandon the
@@ -111,13 +112,46 @@ namespace Ps2.Editor
                 usable.Add(smr);
             }
 
+            // Rigid-bound model (M12.5): meshes parented to bones, no skin
+            // weights anywhere. Unity animates these by moving the bone
+            // TRANSFORMS -- Humanoid with a valid avatar says nothing about
+            // skinning, this is exactly the case it describes -- so the
+            // export does the same: the skeleton is the Animator's transform
+            // hierarchy, and the runtime writes the sampled pose to the
+            // matching entities every frame.
+            Animator hierarchyAnimator = null;
             if (usable.Count == 0)
             {
+                foreach (GameObject root in roots)
+                {
+                    if (root == null)
+                        continue;
+                    foreach (Animator a in
+                             root.GetComponentsInChildren<Animator>(true))
+                    {
+                        if (a.runtimeAnimatorController == null)
+                            continue;
+                        hierarchyAnimator = a;
+                        break;
+                    }
+                    if (hierarchyAnimator != null)
+                        break;
+                }
+                if (hierarchyAnimator == null)
+                {
+                    if (all.Count > 0)
+                        warnings.Add(
+                            $"None of the {all.Count} SkinnedMeshRenderers in the " +
+                            "scene could be exported, so no character will be " +
+                            "drawn. The reasons are above, one per renderer.");
+                    return null;
+                }
                 warnings.Add(
-                    $"None of the {all.Count} SkinnedMeshRenderers in the scene could " +
-                    "be exported, so no character will be drawn. The reasons are " +
-                    "above, one per renderer.");
-                return null;
+                    $"'{PathOf(hierarchyAnimator.gameObject)}': no usable " +
+                    "SkinnedMeshRenderer, so this exports as a TRANSFORM-animated " +
+                    "rig: the Animator moves the bone transforms and the rigid " +
+                    "meshes riding them. Bones bind to entities by NAME, so " +
+                    "renaming a bone after export breaks its binding.");
             }
 
             // ONE skeleton, shared. Every usable renderer contributes its bones
@@ -158,6 +192,21 @@ namespace Ps2.Editor
                 }
             }
 
+            if (hierarchyAnimator != null)
+            {
+                CollectRigidBones(hierarchyAnimator.transform, unionBones,
+                                  unionBind, boneAt);
+                var seen = new HashSet<string>();
+                foreach (Transform bone in unionBones)
+                {
+                    if (!seen.Add(bone.name))
+                        warnings.Add(
+                            $"'{PathOf(hierarchyAnimator.gameObject)}': two bones " +
+                            $"named '{bone.name}'. Entity binding is by name, so " +
+                            "one of them will take the other's animation.");
+                }
+            }
+
             if (unionBones.Count > MaxBones)
             {
                 warnings.Add(
@@ -169,7 +218,9 @@ namespace Ps2.Editor
                 return null;
             }
 
-            Animator animator = usable[0].GetComponentInParent<Animator>();
+            Animator animator = usable.Count > 0
+                ? usable[0].GetComponentInParent<Animator>()
+                : hierarchyAnimator;
 
             var payload = new P2bSceneExporter.SkinPayload();
 
@@ -282,6 +333,28 @@ namespace Ps2.Editor
                 payload.RendererGroup[smr] = group;
             }
             return payload;
+        }
+
+        // Strict descendants of the Animator's transform, parents before
+        // children -- the animator root itself stays out, so the scene's
+        // placement of the character is untouched by the pose. Bind poses are
+        // identity: nothing is skinned, the pose IS the transform.
+        private static void CollectRigidBones(Transform parent,
+                                              List<Transform> bones,
+                                              List<Matrix4x4> binds,
+                                              Dictionary<Transform, int> boneAt)
+        {
+            for (int i = 0; i < parent.childCount; i++)
+            {
+                Transform child = parent.GetChild(i);
+                if (!boneAt.ContainsKey(child))
+                {
+                    boneAt[child] = bones.Count;
+                    bones.Add(child);
+                    binds.Add(Matrix4x4.identity);
+                }
+                CollectRigidBones(child, bones, binds, boneAt);
+            }
         }
 
         // Bind poses are inverse bind MATRICES; comparing them elementwise

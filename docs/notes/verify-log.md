@@ -345,3 +345,29 @@ green at the unit level.
    `VerifyBlitRoundTrip` asserts both once per domain reload against a probe
    that is asymmetric in both axes. It also catches `-nographics`, where the
    blit silently produces nothing.
+
+## Rigid-bound models (M12.5, 2026-08-03)
+
+A model can be Humanoid with a valid avatar and still contain zero
+SkinnedMeshRenderers: if its meshes carry no skin weights they import as
+MeshRenderers parented to bones, and Unity animates them by moving the bone
+TRANSFORMS. It looks identical in Play mode, which is why "the rig tab says
+Humanoid" convinces everyone the model is skinned. The tell in a build is
+the .p2b: a skinned character contributes SKMS sections and no MESH; a
+rigid-bound one contributes only MESH (33 of them here) and bakes no rig.
+
+Support: when Bake() finds no usable SkinnedMeshRenderer but an Animator
+with a controller exists, the skeleton is the Animator's strict-descendant
+transform hierarchy (identity bindposes -- nothing is skinned, the pose IS
+the transform), clips sample exactly as before, and the SCEN type-7
+component is the only carrier. At load, an Animator component with no
+skinned renderer binds its own pool slot flagged drives_entities: each
+skeleton bone is matched BY NAME HASH to an entity under the Animator
+(both sides already wrote (uint)Fnv1a64(name)), and update_animators writes
+the sampled pose into those entities' locals -- the dirty-tracked matrix
+pass then moves exactly the subtree that changed. Root motion stays off.
+
+Consequences worth knowing: bones bind by name, so renaming a bone after
+export breaks its binding (the exporter warns, and warns again on duplicate
+names); and an Animator whose rig failed to bake is now named at export
+instead of surfacing as GetComponent<Animator>() == null on target.
