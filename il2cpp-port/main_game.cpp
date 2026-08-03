@@ -397,9 +397,15 @@ int main(void)
                static_cast<unsigned>(kMaxGpuTextures));
         tex_count = kMaxGpuTextures;
     }
-    device.begin_frame();
-    device.clear(0, 0, 0);
     for (uint32_t t = 0; t < tex_count; ++t) {
+        // ONE PACKET PER TEXTURE. A 256x256 PSMT8 upload is 4096 qwords of
+        // IMAGE data, so four of them in a single frame packet overflow it --
+        // and the overflow surfaces as upload_texture returning false, which
+        // reads exactly like running out of VRAM even though the allocation
+        // succeeded (verify-log M12.5). The samples never hit it because their
+        // textures were small enough to share one packet.
+        device.begin_frame();
+        device.clear(0, 0, 0);
         const io::P2bSection* sec = file.find(io::kSectionTex, t);
         const uint8_t* p = sec->data;
         GpuTexture& gt = textures[t];
@@ -414,17 +420,22 @@ int main(void)
                                    gfx::PixelFormat::PSMT8) ||
             !device.upload_clut(reinterpret_cast<const uint32_t*>(p + 16u),
                                 gt.clut, 256)) {
-            printf("[game] texture %u (%ux%u) did not fit in the VRAM left "
-                   "after the framebuffers. Lower Texture Max Size in the PS2 "
-                   "build profile, or use fewer textures.\n",
+            // Say which of the two it was. They need opposite fixes, and the
+            // VRAM map below answers the first question on sight.
+            printf("[game] texture %u (%ux%u) failed to upload: %s. Lower "
+                   "Texture Max Size in the PS2 build profile, or use fewer "
+                   "textures.\n",
                    static_cast<unsigned>(t), static_cast<unsigned>(gt.w),
-                   static_cast<unsigned>(gt.h));
+                   static_cast<unsigned>(gt.h),
+                   (!gt.tex.valid() || !gt.clut.valid())
+                       ? "no room left in VRAM"
+                       : "the GS packet overflowed");
             device.vram().debug_dump();
             fatal("texture upload");
             return 1;
         }
+        device.end_frame();
     }
-    device.end_frame();
 
     // --- VU programs + DMA chain -------------------------------------------
     //
