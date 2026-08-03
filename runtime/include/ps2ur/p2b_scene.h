@@ -14,6 +14,7 @@
 
 #include "ps2ur/anim.h"
 #include "ps2ur/gs_batch.h"
+#include "ps2ur/gs_overlay.h"
 #include "ps2ur/math.h"
 #include "ps2ur/p2b.h"
 
@@ -62,6 +63,7 @@ inline constexpr uint16_t kComponentUIElement = 11;
 // RectTransform anchor math resolved against the framebuffer resolution --
 // so the runtime holds finished screen rects that scripts may still move.
 inline constexpr uint32_t kMaxUIElements = 32;
+inline constexpr uint32_t kMaxUIFonts = 4;
 inline constexpr uint32_t kMaxUITextLength = 48;
 
 // Particles (M12.5 task 4, ADR-011). Budgeted, not unbounded: the pool is
@@ -255,6 +257,9 @@ struct UIElement {
     // draw time so runtime text changes re-centre like Unity's do.
     uint8_t align_h = 0;
     uint8_t align_v = 0;
+    // FONT table index (scale word bits 16-23, minus one), or -1 for the
+    // builtin 8x8 debug font -- which is what old scenes carry.
+    int16_t font = -1;
     bool visible = true;
     char text[kMaxUITextLength] = {};
 };
@@ -390,6 +395,10 @@ public:
     uint32_t ui_element_count() const { return m_ui_count; }
     const UIElement& ui_element(uint32_t i) const { return m_ui[i]; }
     int32_t ui_element_for_entity(int32_t entity_index) const;
+    // Baked Unity fonts (FONT sections): metrics here, pixels in the TEX
+    // section each font names.
+    uint32_t ui_font_count() const { return m_font_count; }
+    const gfx::UIFont& ui_font(uint32_t i) const { return m_fonts[i]; }
     // Script-facing mutation, addressed by element index (the bridge).
     void ui_set_rect(uint32_t i, float x, float y, float w, float h);
     void ui_set_colour(uint32_t i, uint32_t rgba);
@@ -478,6 +487,8 @@ private:
     uint32_t m_particle_count = 0;
 
     UIElement m_ui[kMaxUIElements];
+    gfx::UIFont m_fonts[kMaxUIFonts];
+    uint32_t m_font_count = 0;
     uint32_t m_ui_count = 0;
 
     AnimatorRef m_animator_refs[kMaxAnimators];

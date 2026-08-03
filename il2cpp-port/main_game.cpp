@@ -87,7 +87,10 @@ constexpr uint32_t kAddrSkinTex = 1500;
 
 // VRAM holds the two colour buffers and the depth buffer, so what is left is
 // what textures get. Eight 256x256 PSMT8 pages plus CLUTs fits comfortably.
-constexpr uint32_t kMaxGpuTextures = 8;
+// Raised from 8 when baked fonts arrived: each (font, size) pair is one
+// more resident texture. 12 x (256x256 PSMT8 + CLUT) is ~780 KB of the
+// ~1.4 MB left after the framebuffers -- tight but honest headroom.
+constexpr uint32_t kMaxGpuTextures = 12;
 
 struct GpuTexture {
     gfx::VramAlloc tex;

@@ -43,6 +43,9 @@ inline constexpr uint32_t kSectionSound = fourcc('S', 'N', 'D', ' ');
 // Baked collision (M11 task 1): primitive colliders plus a world-space BVH
 // over the static mesh triangles. Reserved as `PHYS` by plan 10.2.
 inline constexpr uint32_t kSectionPhysics = fourcc('P', 'H', 'Y', 'S');
+// A baked (font, size) pair (M12.5): per-glyph metrics referencing a TEX
+// section that holds Unity's own rasterised glyphs. Reserved by plan 8.
+inline constexpr uint32_t kSectionFont = fourcc('F', 'O', 'N', 'T');
 
 // Plain CRC-32 (reflected, poly 0xEDB88320), the same the writer uses.
 uint32_t crc32(const void* data, uint32_t size);

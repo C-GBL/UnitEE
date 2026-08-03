@@ -102,6 +102,9 @@ namespace Ps2.Editor
             public Vector4 Border;    // 9-slice L,B,R,T (sprite.border px)
             public int AlignH;        // 0 left, 1 centre, 2 right
             public int AlignV;        // 0 top, 1 middle, 2 bottom
+            public Font UsedFont;     // Text only; baked per (font, size)
+            public int UsedFontSize;
+            public int FontIndex = -1; // FONT table index, -1 = builtin 8x8
         }
 
         private sealed class MeshKey
@@ -203,6 +206,55 @@ namespace Ps2.Editor
                 }
             }
 
+            // Baked Unity fonts (M12.5): one atlas per (font, size) pair the
+            // scene's Texts use, rasterised by Unity's own font engine. The
+            // atlas rides the ordinary texture path; the FONT section holds
+            // the metrics. Capped at the runtime's four slots; overflow and
+            // bake failures fall back to the builtin 8x8 font, said aloud.
+            var fontPayloads = new List<byte[]>();
+            var fontIndexOf = new Dictionary<string, int>();
+            var fontAtlases = new HashSet<Texture2D>();
+            foreach (var e in entities)
+            {
+                UIRecord ui = e.Ui;
+                if (ui == null || ui.ManagedKind != 2 || ui.UsedFont == null)
+                    continue;
+                string fontKey =
+                    ui.UsedFont.GetInstanceID() + ":" + ui.UsedFontSize;
+                if (!fontIndexOf.TryGetValue(fontKey, out int fi))
+                {
+                    fi = -1;
+                    if (fontPayloads.Count >= 4)
+                    {
+                        Debug.LogWarning(
+                            "[PS2] more than 4 (font, size) pairs in the " +
+                            "scene; '" + e.Transform.name + "' falls back " +
+                            "to the builtin font.");
+                    }
+                    else
+                    {
+                        var fontWarnings = new List<string>();
+                        P2bFontExporter.BakedFont bakedFont =
+                            P2bFontExporter.Bake(ui.UsedFont, ui.UsedFontSize,
+                                                 fontWarnings);
+                        foreach (string w in fontWarnings)
+                            Debug.LogWarning("[PS2] " + w);
+                        if (bakedFont != null)
+                        {
+                            int ti = textures.Count;
+                            textures.Add(bakedFont.Atlas);
+                            textureLookup[bakedFont.Atlas] = ti;
+                            fontAtlases.Add(bakedFont.Atlas);
+                            fi = fontPayloads.Count;
+                            fontPayloads.Add(
+                                P2bFontExporter.BuildSection(bakedFont, ti));
+                        }
+                    }
+                    fontIndexOf[fontKey] = fi;
+                }
+                ui.FontIndex = fi;
+            }
+
             // AudioClips referenced by the scene's AudioSources -> SND (M12.5
             // task 2). A clip is encoded LOOPED when its source loops: SPU2
             // loop points live in the ADPCM stream itself, so looping is a
@@ -288,9 +340,16 @@ namespace Ps2.Editor
             }
             foreach (Texture2D t in textures)
             {
+                // Font atlases must never be downscaled: every glyph metric
+                // is a pixel coordinate into them.
+                int cap = fontAtlases.Contains(t) ? 1024 : MaxTextureSize;
                 writer.AddSection(P2bWriter.SectionTex,
-                                  P2bTextureExporter.Export(t, MaxTextureSize),
+                                  P2bTextureExporter.Export(t, cap),
                                   t.name);
+            }
+            foreach (byte[] fontPayload in fontPayloads)
+            {
+                writer.AddSection(P2bWriter.SectionFont, fontPayload);
             }
 
             // SCRP: deduplicated NUL-terminated script type names; SCEN
@@ -630,6 +689,10 @@ namespace Ps2.Editor
                 // .. LowerRight=8), so column and row fall out of div/mod.
                 record.AlignH = (int)text.alignment % 3;
                 record.AlignV = (int)text.alignment / 3;
+                // The REAL font, baked later per (font, size). TextScale
+                // above survives as the fallback path's size.
+                record.UsedFont = text.font;
+                record.UsedFontSize = Mathf.Max(1, text.fontSize);
                 drawable = true;
             }
             else if (image != null)
@@ -960,9 +1023,11 @@ namespace Ps2.Editor
                         uiIndexOf.TryGetValue(ui.SliderFill, out int fi))
                         link = fi;
                     p.U32((uint)link);
-                    // Low byte scale; bits 8-9 / 10-11 the Text alignment.
+                    // Low byte scale; bits 8-9 / 10-11 the Text alignment;
+                    // bits 16-23 the FONT index plus one (0 = builtin 8x8).
                     p.U32((uint)(ui.TextScale | (ui.AlignH << 8) |
-                                 (ui.AlignV << 10)));
+                                 (ui.AlignV << 10) |
+                                 ((ui.FontIndex + 1) << 16)));
                     if (ui.Role == 2)
                     {
                         p.F32(ui.SliderValue);

@@ -72,6 +72,7 @@ bool World::load(const io::P2bFile& file)
     m_listener_entity = -1;
     m_particle_count = 0;
     m_ui_count = 0;
+    m_font_count = 0;
     m_camera = Camera{};
     m_light = DirectionalLight{};
     m_error = "";
@@ -114,6 +115,51 @@ bool World::load(const io::P2bFile& file)
             m.transparent = (flags & 4u) != 0u;
         }
         m_material_count = count;
+    }
+
+    // --- Baked fonts (M12.5) ------------------------------------------------
+    //
+    // 32-byte header, then 12 bytes per glyph. The pixels live in the TEX
+    // section the header names, uploaded by the host like any texture.
+    const uint32_t font_sections = file.count_of(io::kSectionFont);
+    if (font_sections > kMaxUIFonts) {
+        m_error = "too many fonts";
+        return false;
+    }
+    for (uint32_t fi = 0; fi < font_sections; ++fi) {
+        const io::P2bSection* fs = file.find(io::kSectionFont, fi);
+        const View fv{fs->data, fs->size};
+        if (!fv.ok(0, 32u)) {
+            m_error = "font header truncated";
+            return false;
+        }
+        gfx::UIFont& font = m_fonts[fi];
+        font = gfx::UIFont{};
+        font.texture = fv.u32(0);
+        font.glyph_count = fv.u32(4);
+        font.ascent = fv.f32(8);
+        font.line_height = fv.f32(12);
+        font.first_char = fv.u32(16);
+        if (font.glyph_count > 96u) {
+            m_error = "font glyph count out of range";
+            return false;
+        }
+        if (!fv.ok(32u, font.glyph_count * 12u)) {
+            m_error = "font glyph table truncated";
+            return false;
+        }
+        for (uint32_t g = 0; g < font.glyph_count; ++g) {
+            const uint32_t at = 32u + g * 12u;
+            gfx::UIFontGlyph& glyph = font.glyphs[g];
+            glyph.u = fv.u16(at + 0);
+            glyph.v = fv.u16(at + 2);
+            glyph.w = fv.data[at + 4];
+            glyph.h = fv.data[at + 5];
+            glyph.bearing_x = static_cast<int8_t>(fv.data[at + 6]);
+            glyph.bearing_y = static_cast<int8_t>(fv.data[at + 7]);
+            glyph.advance_q4 = fv.u16(at + 8);
+        }
+        m_font_count = fi + 1u;
     }
 
     // --- Meshes -------------------------------------------------------------
@@ -764,8 +810,9 @@ bool World::load(const io::P2bFile& file)
                 ui.texture = v.u32(data_off + 24);
                 ui.link = v.i32(data_off + 28);
                 // Low byte: font scale. Bits 8-9 / 10-11: horizontal and
-                // vertical Text.alignment (old files carry zeros = the old
-                // top-left behaviour).
+                // vertical Text.alignment. Bits 16-23: FONT table index
+                // plus one, zero meaning the builtin 8x8 font (old files
+                // carry zeros everywhere = the old behaviour).
                 const uint32_t scale_bits = v.u32(data_off + 32);
                 ui.text_scale = scale_bits & 0xFFu;
                 if (ui.text_scale < 1u) {
@@ -773,6 +820,12 @@ bool World::load(const io::P2bFile& file)
                 }
                 ui.align_h = static_cast<uint8_t>((scale_bits >> 8) & 3u);
                 ui.align_v = static_cast<uint8_t>((scale_bits >> 10) & 3u);
+                const uint32_t font_ref = (scale_bits >> 16) & 0xFFu;
+                ui.font = static_cast<int16_t>(font_ref) - 1;
+                if (ui.font >= static_cast<int16_t>(m_font_count)) {
+                    m_error = "ui element names a missing font";
+                    return false;
+                }
                 for (uint32_t b = 0; b < kMaxUITextLength; ++b) {
                     ui.text[b] =
                         static_cast<char>(v.data[data_off + 36u + b]);
@@ -952,6 +1005,8 @@ bool World::append(const io::P2bFile& file)
     } else if (m_particle_count + incoming.m_particle_count >
                kMaxParticleSystems) {
         m_error = "additive scene does not fit: particle systems";
+    } else if (m_font_count + incoming.m_font_count > kMaxUIFonts) {
+        m_error = "additive scene does not fit: fonts";
     } else if (m_ui_count + incoming.m_ui_count > kMaxUIElements) {
         m_error = "additive scene does not fit: ui elements";
     } else if (animator_ref_base + incoming.m_animator_ref_count >
@@ -1053,11 +1108,21 @@ bool World::append(const io::P2bFile& file)
     }
 
     const uint32_t ui_base = m_ui_count;
+    const uint32_t font_base = m_font_count;
+    for (uint32_t i = 0; i < incoming.m_font_count; ++i) {
+        // Copied verbatim like materials: the texture index is relative to
+        // the incoming FILE's TEX sections, the same caveat additive
+        // material textures carry.
+        m_fonts[m_font_count++] = incoming.m_fonts[i];
+    }
     for (uint32_t i = 0; i < incoming.m_ui_count; ++i) {
         UIElement ui = incoming.m_ui[i];
         ui.entity += static_cast<int32_t>(entity_base);
         if (ui.link >= 0) {
             ui.link += static_cast<int32_t>(ui_base);
+        }
+        if (ui.font >= 0) {
+            ui.font = static_cast<int16_t>(ui.font + font_base);
         }
         m_ui[m_ui_count++] = ui;
     }

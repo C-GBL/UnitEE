@@ -282,6 +282,123 @@ void DebugOverlay::textured_rect(GsDevice& device, int32_t x, int32_t y,
     packet.add_ad(GsReg::TEST_1, gs_test(false, 0, 0, 0, false, 0, true, 2));
 }
 
+void DebugOverlay::draw_text_font(GsDevice& device, const UIFont& font,
+                                  int32_t x, int32_t y, int32_t w, int32_t h,
+                                  uint32_t align_h, uint32_t align_v,
+                                  uint8_t r, uint8_t g, uint8_t b, uint8_t a,
+                                  const char* text)
+{
+    if (!m_initialized || text == nullptr || font.glyph_count == 0) {
+        return;
+    }
+
+    // Measure the block: line count now, per-line widths as we go. The
+    // measure and the draw MUST share one advance rule (12.4 fixed point,
+    // out-of-range characters skipped) or alignment drifts by the
+    // difference.
+    uint32_t lines = 1;
+    for (const char* p = text; *p != '\0'; ++p) {
+        if (*p == '\n') {
+            ++lines;
+        }
+    }
+    const int32_t line_h = static_cast<int32_t>(font.line_height);
+    const int32_t total_h = static_cast<int32_t>(lines) * line_h;
+    int32_t line_top = y;
+    if (align_v == 1u) {
+        line_top += (h - total_h) / 2;
+    } else if (align_v == 2u) {
+        line_top += h - total_h;
+    }
+
+    // Count drawable glyphs for the GIF tag's NLOOP promise.
+    uint32_t drawable = 0;
+    for (const char* p = text; *p != '\0'; ++p) {
+        const unsigned char c = static_cast<unsigned char>(*p);
+        const uint32_t gi = static_cast<uint32_t>(c) - font.first_char;
+        if (c != '\n' && gi < font.glyph_count && font.glyphs[gi].w > 0 &&
+            font.glyphs[gi].h > 0) {
+            ++drawable;
+        }
+    }
+    if (drawable == 0) {
+        return;
+    }
+
+    GsPacket& packet = device.packet();
+    packet.begin_packed_ad(4);
+    packet.add_ad(GsReg::TEST_1, gs_test(false, 0, 0, 0, false, 0, false, 1));
+    packet.add_ad(GsReg::ALPHA_1, gs_alpha(0, 1, 0, 1));
+    packet.add_ad(GsReg::CLAMP_1, 5); // glyph UVs are exact; never wrap
+    packet.add_ad(GsReg::PRMODECONT, 1);
+
+    const uint64_t prim = gs_prim(GsPrim::Sprite, false, /*textured=*/true,
+                                  false, /*blend=*/true, false, /*FST*/ true,
+                                  0, false);
+    packet.begin_packed(drawable * 2u, 3,
+                        gs_reglist(GsReg::RGBAQ, GsReg::UV, GsReg::XYZ2),
+                        false, true, prim);
+
+    const char* p = text;
+    while (*p != '\0') {
+        // Measure this line (advance sum, 12.4), then walk it again to
+        // emit quads from the aligned pen.
+        const char* line_start = p;
+        int32_t line_w_q4 = 0;
+        for (; *p != '\0' && *p != '\n'; ++p) {
+            const uint32_t gi =
+                static_cast<uint32_t>(static_cast<unsigned char>(*p)) -
+                font.first_char;
+            if (gi < font.glyph_count) {
+                line_w_q4 += font.glyphs[gi].advance_q4;
+            }
+        }
+        int32_t pen_x = x;
+        if (align_h == 1u) {
+            pen_x += (w - (line_w_q4 >> 4)) / 2;
+        } else if (align_h == 2u) {
+            pen_x += w - (line_w_q4 >> 4);
+        }
+        const int32_t baseline = line_top + static_cast<int32_t>(font.ascent);
+
+        int32_t pen_q4 = pen_x << 4;
+        for (const char* q = line_start; q != p; ++q) {
+            const uint32_t gi =
+                static_cast<uint32_t>(static_cast<unsigned char>(*q)) -
+                font.first_char;
+            if (gi >= font.glyph_count) {
+                continue;
+            }
+            const UIFontGlyph& glyph = font.glyphs[gi];
+            if (glyph.w > 0 && glyph.h > 0) {
+                const int32_t gx = (pen_q4 >> 4) + glyph.bearing_x;
+                const int32_t gy = baseline - glyph.bearing_y;
+                const uint32_t u0 = static_cast<uint32_t>(glyph.u) << 4;
+                const uint32_t v0 = static_cast<uint32_t>(glyph.v) << 4;
+                packet.add_qword(gs_packed_rgbaq(r, g, b, a));
+                packet.add_qword(gs_packed_uv(u0, v0));
+                packet.add_qword(
+                    gs_packed_xyz(gs_coord(gx), gs_coord(gy), 0));
+                packet.add_qword(gs_packed_rgbaq(r, g, b, a));
+                packet.add_qword(gs_packed_uv(u0 + (glyph.w << 4),
+                                              v0 + (glyph.h << 4)));
+                packet.add_qword(gs_packed_xyz(gs_coord(gx + glyph.w),
+                                               gs_coord(gy + glyph.h), 0));
+            }
+            pen_q4 += glyph.advance_q4;
+        }
+        if (*p == '\n') {
+            ++p;
+        }
+        line_top += line_h;
+    }
+
+    // Restore the depth test and REPEAT wrapping for whatever draws next.
+    packet.begin_packed_ad(2);
+    packet.add_ad(GsReg::CLAMP_1, 0);
+    packet.add_ad(GsReg::TEST_1, gs_test(false, 0, 0, 0, false, 0, true, 2));
+}
+
 void DebugOverlay::textured_rect_sliced(GsDevice& device, int32_t x, int32_t y,
                                         int32_t w, int32_t h, uint32_t tex_w,
                                         uint32_t tex_h, float border_l,

@@ -140,31 +140,71 @@ std::vector<uint8_t> build_scene(uint32_t entity_count,
     return b;
 }
 
-// A single-section container around a SCEN payload, 2048-aligned like the
-// real writer.
-std::vector<uint8_t> wrap_scene(const std::vector<uint8_t>& payload)
+// A container around typed section payloads, 2048-aligned like the real
+// writer. One section was enough until FONT arrived; the single-section
+// wrap_scene below keeps the older tests unchanged.
+std::vector<uint8_t> wrap_sections(
+    const std::vector<std::pair<uint32_t, std::vector<uint8_t>>>& sections)
 {
-    std::vector<uint8_t> file(2048 + payload.size(), 0);
+    const uint32_t count = static_cast<uint32_t>(sections.size());
+    uint32_t offset = 2048;
+    std::vector<uint32_t> offsets;
+    for (const auto& s : sections) {
+        offsets.push_back(offset);
+        offset += (static_cast<uint32_t>(s.second.size()) + 2047u) & ~2047u;
+    }
+    std::vector<uint8_t> file(offset, 0);
     const char magic[4] = {'P', '2', 'B', 'C'};
     std::memcpy(file.data(), magic, 4);
     file[4] = 1; // version_major
     const uint32_t total = static_cast<uint32_t>(file.size());
     std::memcpy(file.data() + 8, &total, 4);
-    const uint32_t sections = 1;
-    std::memcpy(file.data() + 12, &sections, 4);
-
-    uint8_t* entry = file.data() + 32;
-    const uint32_t type = io::kSectionScene;
-    const uint32_t offset = 2048;
-    const uint32_t size = static_cast<uint32_t>(payload.size());
-    const uint32_t checksum = io::crc32(payload.data(), size);
-    std::memcpy(entry + 0, &type, 4);
-    std::memcpy(entry + 4, &offset, 4);
-    std::memcpy(entry + 8, &size, 4);
-    std::memcpy(entry + 12, &size, 4);
-    std::memcpy(entry + 16, &checksum, 4);
-    std::memcpy(file.data() + 2048, payload.data(), payload.size());
+    std::memcpy(file.data() + 12, &count, 4);
+    for (uint32_t i = 0; i < count; ++i) {
+        uint8_t* entry = file.data() + 32 + i * 32;
+        const uint32_t type = sections[i].first;
+        const uint32_t size = static_cast<uint32_t>(sections[i].second.size());
+        const uint32_t checksum = io::crc32(sections[i].second.data(), size);
+        std::memcpy(entry + 0, &type, 4);
+        std::memcpy(entry + 4, &offsets[i], 4);
+        std::memcpy(entry + 8, &size, 4);
+        std::memcpy(entry + 12, &size, 4);
+        std::memcpy(entry + 16, &checksum, 4);
+        std::memcpy(file.data() + offsets[i], sections[i].second.data(), size);
+    }
     return file;
+}
+
+std::vector<uint8_t> wrap_scene(const std::vector<uint8_t>& payload)
+{
+    return wrap_sections({{io::kSectionScene, payload}});
+}
+
+// A FONT section: 32-byte header, 12 bytes per glyph
+// (docs/formats/p2b-container.md).
+std::vector<uint8_t> build_font(uint32_t texture, uint32_t glyph_count,
+                                float ascent, float line_height)
+{
+    std::vector<uint8_t> b;
+    put_u32(b, texture);
+    put_u32(b, glyph_count);
+    put_f32(b, ascent);
+    put_f32(b, line_height);
+    put_u32(b, 32); // first_char
+    put_u32(b, 0);
+    put_u32(b, 0);
+    put_u32(b, 0);
+    for (uint32_t g = 0; g < glyph_count; ++g) {
+        put_u16(b, static_cast<uint16_t>(g * 12));      // u
+        put_u16(b, 4);                                  // v
+        b.push_back(static_cast<uint8_t>(10));          // w
+        b.push_back(static_cast<uint8_t>(14));          // h
+        b.push_back(static_cast<uint8_t>(1));           // bearing_x
+        b.push_back(static_cast<uint8_t>(12));          // bearing_y
+        put_u16(b, static_cast<uint16_t>(11u << 4));    // advance 11.0
+        put_u16(b, 0);                                  // pad
+    }
+    return b;
 }
 
 } // namespace
@@ -317,6 +357,65 @@ TEST(SceneUI, MoreElementsThanTheTableHoldsIsALoadFailure)
     static World world;
     EXPECT_FALSE(world.load(file));
     EXPECT_STREQ(world.error(), "too many ui elements");
+}
+
+TEST(SceneUI, AFontSectionRoundTripsMetricsAndAGlyph)
+{
+    UISpec text;
+    text.kind_role = 2u | (2u << 8);
+    // Scale 1, no alignment, FONT index 0 (encoded as 1 in bits 16-23).
+    text.text_scale = 1u | (1u << 16);
+    text.set_text("HELLO");
+
+    const std::vector<uint8_t> bytes = wrap_sections(
+        {{io::kSectionFont, build_font(3, 95, 18.0f, 24.0f)},
+         {io::kSectionScene, build_scene(1, {text})}});
+    io::P2bFile file;
+    ASSERT_TRUE(file.parse(bytes.data(), static_cast<uint32_t>(bytes.size())));
+    static World world;
+    ASSERT_TRUE(world.load(file)) << world.error();
+
+    ASSERT_EQ(world.ui_font_count(), 1u);
+    const gfx::UIFont& font = world.ui_font(0);
+    EXPECT_EQ(font.texture, 3u);
+    EXPECT_EQ(font.glyph_count, 95u);
+    EXPECT_FLOAT_EQ(font.ascent, 18.0f);
+    EXPECT_FLOAT_EQ(font.line_height, 24.0f);
+    EXPECT_EQ(font.first_char, 32u);
+    EXPECT_EQ(font.glyphs[2].u, 24u);
+    EXPECT_EQ(font.glyphs[2].w, 10u);
+    EXPECT_EQ(font.glyphs[2].bearing_y, 12);
+    EXPECT_EQ(font.glyphs[2].advance_q4, 11u << 4);
+    EXPECT_EQ(world.ui_element(0).font, 0);
+}
+
+TEST(SceneUI, ATruncatedFontGlyphTableIsRefused)
+{
+    std::vector<uint8_t> font = build_font(0, 95, 18.0f, 24.0f);
+    font.resize(font.size() - 4); // clip the last glyph
+    const std::vector<uint8_t> bytes = wrap_sections(
+        {{io::kSectionFont, font},
+         {io::kSectionScene, build_scene(1, {UISpec{}})}});
+    io::P2bFile file;
+    ASSERT_TRUE(file.parse(bytes.data(), static_cast<uint32_t>(bytes.size())));
+    static World world;
+    EXPECT_FALSE(world.load(file));
+    EXPECT_STREQ(world.error(), "font glyph table truncated");
+}
+
+TEST(SceneUI, AnElementNamingAMissingFontIsRefused)
+{
+    UISpec text;
+    text.kind_role = 2u | (2u << 8);
+    text.text_scale = 1u | (2u << 16); // font index 1; only font 0 exists
+    const std::vector<uint8_t> bytes = wrap_sections(
+        {{io::kSectionFont, build_font(0, 1, 18.0f, 24.0f)},
+         {io::kSectionScene, build_scene(1, {text})}});
+    io::P2bFile file;
+    ASSERT_TRUE(file.parse(bytes.data(), static_cast<uint32_t>(bytes.size())));
+    static World world;
+    EXPECT_FALSE(world.load(file));
+    EXPECT_STREQ(world.error(), "ui element names a missing font");
 }
 
 TEST(SceneUI, ASecondLoadDoesNotInheritTheFirstScenesElements)

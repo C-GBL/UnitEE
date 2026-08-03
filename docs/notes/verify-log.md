@@ -632,3 +632,35 @@ base-colour bug: the managed Graphic assumed white as its base, so
 unfocusing a COLOURED button would have "restored" it to white. A new
 bridge getter (ps2ur_ui_get_colour) seeds the managed colour from the
 authored tint at create, so focus restores the truth.
+
+## Baked Unity fonts (M12.5, 2026-08-03)
+
+The user asked for "the font and sizing Unity uses", and the honest PS2
+answer is to make UNITY do the rasterising: at export, every
+(font, fontSize) pair a Text uses goes through
+Font.RequestCharactersInTexture -- one request for all 95 printable
+ASCII glyphs, because a second request can rebuild the dynamic atlas
+and invalidate every CharacterInfo fetched before it -- and the glyphs
+are read back out (per-pixel UV interpolation between CharacterInfo's
+four corners, which quietly handles the rotated placements Unity's
+atlas packer produces) into a shelf-packed atlas of white pixels with
+coverage in alpha. That atlas rides the ORDINARY texture path: 256
+alpha levels of one colour quantise losslessly into the 256-entry CLUT,
+and TCC=1 (fixed earlier today) is what lets the coverage blend.
+Metrics travel in a new FONT section (reserved by the plan since
+section 8): 32-byte header, 12 bytes per glyph, advance in 12.4 fixed
+point so sub-pixel spacing survives the container.
+
+Runtime: World holds up to four gfx::UIFont tables; the text element
+names one in bits 16-23 of the scale word (zero = builtin 8x8, which is
+also the fallback when an atlas cannot bind -- degrade to READABLE, not
+to invisible); draw_text_font measures and draws per line with one
+shared advance rule. Orientation trap worth recording: the atlas is
+written BOTTOM-UP like every Unity texture, because the texture
+exporter flips rows on write -- store it top-down and every glyph
+arrives mirrored. Font atlases are exempt from Texture Max Size
+downscaling (every metric is a pixel coordinate into them), and
+kMaxGpuTextures rose 8 -> 12 to hold them.
+
+290 host tests (FONT round-trip, glyph-table truncation, missing-font
+ref). On-target visual awaits the user's rebuild.

@@ -198,8 +198,15 @@ These are listed prominently here and asserted in the conformance suite
     offsets are resolved against the profile's framebuffer (the CanvasScaler
     is ignored: the reference resolution IS the framebuffer), and the runtime
     holds finished screen rects. Scripts move elements in pixels; anchors do
-    not exist at runtime. Text uses one baked 8x8 bitmap font (fontSize maps
-    to an integer scale 1..4) with a 48-byte cap per element. Image supports
+    not exist at runtime. Text uses the scene's REAL fonts: every
+    (font, fontSize) pair a Text component uses is rasterised by Unity's
+    own font engine at export and baked into an atlas (up to four pairs
+    per scene; overflow and bake failures fall back to a builtin 8x8
+    font, loudly). Glyphs draw proportionally, antialiased, at 1:1 baked
+    pixels -- what the Editor shows at that size is what the console
+    draws. Consequences: fontSize is a BAKE-TIME property (a script
+    changing it at runtime keeps the baked glyphs), glyph coverage is
+    printable ASCII, and the 48-byte cap per element stands. Image supports
     Simple (stretch) and Sliced (real 9-slice from sprite.border, baked at
     export); Tiled draws as Sliced; Filled is not supported. Sprite-atlas
     SUB-RECTS are not supported -- the sprite's whole texture draws, so give

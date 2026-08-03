@@ -222,6 +222,25 @@ UIElement (M12.5 task 5, 84B) {
                                              // bottom (zeros = stretch)
 ```
 
+FONT (M12.5, one section per baked (font, size) pair):
+
+```
+u32 texture       // TEX index of the glyph atlas (white, coverage in
+                  // the CLUT alpha)
+u32 glyph_count   // <= 96
+f32 ascent        // px, line top -> baseline
+f32 line_height   // px per line
+u32 first_char    // 32 (printable ASCII)
+u32 reserved[3]   // header = 32 bytes
+then glyph_count * 12 bytes:
+  u16 u, v        // texel origin in the atlas (top-left origin)
+  u8  w, h        // glyph pixels
+  s8  bearing_x   // pen -> glyph left
+  s8  bearing_y   // baseline UP to glyph top
+  u16 advance_q4  // pen advance, 12.4 fixed point
+  u16 pad
+```
+
 Readers accept the 12-byte camera and default the M8 tail (old runtimes
 tolerate new exporters and vice versa).
 

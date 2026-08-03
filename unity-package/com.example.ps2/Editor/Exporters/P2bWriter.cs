@@ -22,6 +22,7 @@ namespace Ps2.Editor
         public const uint SectionSkinnedMesh = 0x534D4B53; // 'SKMS' (M9)
         public const uint SectionSound = 0x20444E53;      // 'SND ' (M10)
         public const uint SectionPhysics = 0x53594850;    // 'PHYS' (M11)
+        public const uint SectionFont = 0x544E4F46;       // 'FONT' (M12.5)
 
         private struct Section
         {

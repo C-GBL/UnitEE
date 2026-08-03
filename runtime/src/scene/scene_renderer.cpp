@@ -647,13 +647,36 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
                     m_ui_overlay.fill_rect(device, x, y, w, h, r, g, b, a);
                     break;
                 }
-                case 2: // text
-                    m_ui_overlay.set_colour(r, g, b);
-                    m_ui_overlay.set_scale(ui.text_scale);
-                    m_ui_overlay.draw_text_aligned(device, x, y, w, h,
-                                                   ui.align_h, ui.align_v,
-                                                   ui.text);
+                case 2: { // text
+                    // A baked Unity font when the element names one and its
+                    // atlas binds; the builtin 8x8 otherwise. The fallback
+                    // matters: a font whose texture did not fit in VRAM
+                    // degrades to readable, not to invisible.
+                    bool drew_baked = false;
+                    if (ui.font >= 0 &&
+                        static_cast<uint32_t>(ui.font) <
+                            world.ui_font_count() &&
+                        bind_texture != nullptr) {
+                        const gfx::UIFont& font =
+                            world.ui_font(static_cast<uint32_t>(ui.font));
+                        uint32_t tw = 0, th = 0;
+                        if (font.texture != 0xFFFFFFFFu &&
+                            bind_texture(bind_user, font.texture, &tw, &th)) {
+                            m_ui_overlay.draw_text_font(
+                                device, font, x, y, w, h, ui.align_h,
+                                ui.align_v, r, g, b, a, ui.text);
+                            drew_baked = true;
+                        }
+                    }
+                    if (!drew_baked) {
+                        m_ui_overlay.set_colour(r, g, b);
+                        m_ui_overlay.set_scale(ui.text_scale);
+                        m_ui_overlay.draw_text_aligned(device, x, y, w, h,
+                                                       ui.align_h, ui.align_v,
+                                                       ui.text);
+                    }
                     break;
+                }
                 default: // rect
                     m_ui_overlay.fill_rect(device, x, y, w, h, r, g, b, a);
                     break;

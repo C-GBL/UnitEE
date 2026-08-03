@@ -23,6 +23,28 @@ namespace gfx {
 // power-of-two height because TEX0 requires it.
 inline constexpr uint32_t DebugOverlayAtlasPixels = 128 * 64;
 
+// A baked Unity font (M12.5): one (font, size) pair rasterised by Unity's
+// own font engine at export, its glyphs packed into an ordinary TEX
+// section (white pixels, coverage in the CLUT alpha) and described here.
+// Text drawn with it is proportional, antialiased, and at 1:1 baked
+// pixels -- exactly what the Editor shows at that size.
+struct UIFontGlyph {
+    uint16_t u = 0, v = 0;   // texel origin in the atlas
+    uint8_t w = 0, h = 0;    // glyph pixels
+    int8_t bearing_x = 0;    // pen -> glyph left
+    int8_t bearing_y = 0;    // baseline UP to glyph top
+    uint16_t advance_q4 = 0; // pen advance, 12.4 fixed point
+};
+
+struct UIFont {
+    uint32_t texture = 0xFFFFFFFFu; // TEX index of the atlas
+    float ascent = 0;               // px, baseline below the line top
+    float line_height = 0;          // px per line
+    uint32_t first_char = 32;
+    uint32_t glyph_count = 0;
+    UIFontGlyph glyphs[96];
+};
+
 class DebugOverlay {
 public:
     // Reserves and uploads the font atlas. Call once, after GsDevice::init().
@@ -56,6 +78,15 @@ public:
     void draw_text_aligned(GsDevice& device, int32_t x, int32_t y, int32_t w,
                            int32_t h, uint32_t align_h, uint32_t align_v,
                            const char* text);
+
+    // Baked-font text (M12.5): proportional glyph run over the atlas the
+    // CALLER just bound (like textured_rect, the bind is the caller's).
+    // Aligned per line inside the rect; colour modulates the white glyph
+    // pixels, alpha rides the CLUT so edges blend, not cut.
+    void draw_text_font(GsDevice& device, const UIFont& font, int32_t x,
+                        int32_t y, int32_t w, int32_t h, uint32_t align_h,
+                        uint32_t align_v, uint8_t r, uint8_t g, uint8_t b,
+                        uint8_t a, const char* text);
 
     // Flat screen-space rectangle (M8 task 8: the uGUI Image primitive).
     // PS2 alpha: a < 0x80 blends, 0x80 is opaque. Depth test is off, like
