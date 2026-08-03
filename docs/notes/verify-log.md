@@ -402,3 +402,12 @@ Residual: 02-scene-graph produced ONE spurious mismatch immediately after
 its re-baseline and passed twice after. Intermittent, so not chased to
 ground; the suspect is IOP module load timing shifting the capture frame.
 If it recurs, that is where to look.
+
+Addendum (PlayerPrefs boot): "loadmodule: id -203" for mcman/mcserv on a
+build whose every step reported success. The Package step's IOP module list
+said "freemcman.irx"/"freemcserv.irx" -- names this sdk does not ship -- and
+its copy loop skipped missing files silently, while the runtime asks for
+"mcman.irx"/"mcserv.irx", which the sdk DOES ship and nothing copied. Names
+fixed, and a listed-but-missing module is now a build warning naming the
+boot symptom. The embedded-blob fallback in memcard.cpp is exactly what the
+list's own comment says cannot be trusted (SifExecModuleBuffer, M10).

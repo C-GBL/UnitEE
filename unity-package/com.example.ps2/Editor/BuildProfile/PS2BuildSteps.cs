@@ -848,16 +848,28 @@ namespace Ps2.Editor
             // symptom otherwise is a boot that stops dead after
             // "loadmodule: id -203" with no error.
             string irxDir = Path.Combine(ctx.Toolchain.Ps2SdkDir, "iop/irx");
+            // These names must match what platform::load_irx asks for at
+            // boot. The list once said "freemcman.irx"/"freemcserv.irx" --
+            // names this sdk does not ship -- and the loop below skipped
+            // them WITHOUT A WORD, so PlayerPrefs booted into "loadmodule:
+            // id -203" on a build every step of which reported success
+            // (verify-log M12.5).
             string[] modules =
             {
-                "freesio2.irx", "freepad.irx", "freemcserv.irx", "freemcman.irx",
+                "freesio2.irx", "freepad.irx", "mcman.irx", "mcserv.irx",
                 "audsrv.irx", "libsd.irx", "iomanX.irx", "fileXio.irx",
             };
             foreach (string module in modules)
             {
                 string source = Path.Combine(irxDir, module);
                 if (!File.Exists(source))
+                {
+                    ctx.Warn(
+                        $"IOP module '{module}' is not in '{irxDir}', so it " +
+                        "was not packaged. Whatever runtime feature loads it " +
+                        "will fail at boot with 'loadmodule: id -203'.");
                     continue;
+                }
                 File.Copy(source, Path.Combine(stage, module), true);
                 File.Copy(source, Path.Combine(ctx.OutputDirectory, module), true);
             }
