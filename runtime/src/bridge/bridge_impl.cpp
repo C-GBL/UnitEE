@@ -61,6 +61,7 @@ static PreLoadCounts g_pre_counts = {};
 
 unsigned int scene_swap_count() { return g_swap_count; }
 bool scene_last_load_additive() { return g_last_additive; }
+unsigned int scene_last_load_bytes() { return g_loader.bytes_read(); }
 const PreLoadCounts& scene_pre_load_counts() { return g_pre_counts; }
 
 void note_scene_activation() { ++g_swap_count; }

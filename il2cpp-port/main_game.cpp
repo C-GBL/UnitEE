@@ -801,9 +801,15 @@ int main(void)
             seen_swaps = swaps_now;
             const bool additive = bridge::scene_last_load_additive();
             const uint32_t loaded_arena = arena_holds_world ^ 1u;
+            // Parse with the EXACT byte count the loader read: the header's
+            // total_size must match the size handed to parse, so the arena
+            // capacity is refused (found on target: "total_size does not
+            // match the buffer" on the first real transition).
+            const uint32_t loaded_bytes = bridge::scene_last_load_bytes();
             io::P2bFile next;
             if (scene_arenas[loaded_arena] == nullptr ||
-                !next.parse(scene_arenas[loaded_arena], kBootSceneArenaBytes)) {
+                loaded_bytes > kBootSceneArenaBytes ||
+                !next.parse(scene_arenas[loaded_arena], loaded_bytes)) {
                 printf("[game] swapped scene container unreadable: %s\n",
                        next.error());
                 fatal("scene swap");

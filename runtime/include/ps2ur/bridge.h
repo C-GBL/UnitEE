@@ -64,6 +64,9 @@ void bind_scene_buffer(void* buffer, unsigned int capacity);
 // the world when it moves. The rest describe the completed load.
 unsigned int scene_swap_count();
 bool scene_last_load_additive();
+// Bytes the completed load actually read: the exact size P2bFile::parse
+// demands (it refuses a buffer-capacity guess -- total_size must MATCH).
+unsigned int scene_last_load_bytes();
 // World table sizes captured when the load BEGAN: for an additive load,
 // creates run from these counts to the new totals.
 struct PreLoadCounts {

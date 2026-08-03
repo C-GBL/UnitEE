@@ -608,3 +608,14 @@ Editor holds the project lock. The title screen scripts + a scene
 generator (PS2 > Create Title Screen) are in the user project; repo
 side is proven by 287 host tests and clean builds of all three
 toolchains.
+
+## The first real transition found the parse-size mismatch (M12.5, 2026-08-03)
+
+The user's title screen worked first try -- built, booted, navigated,
+START fired, the loader read SampleScene.p2b and activated -- and the
+host's post-swap re-parse refused the container: P2bFile::parse demands
+that the header's total_size EQUAL the size argument, and the host
+passed the arena capacity. The loader's bytes_read() now rides the
+bridge (scene_last_load_bytes) and the host parses with the exact
+count. The strict equality stays: it is the check that catches a
+truncated read, and the fix is to tell it the truth, not to loosen it.
