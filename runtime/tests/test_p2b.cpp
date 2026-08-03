@@ -327,7 +327,7 @@ TEST(P2bScene, LoadsAndResolvesHierarchy)
     ASSERT_TRUE(f.parse(bytes.data(), static_cast<uint32_t>(bytes.size())))
         << f.error();
 
-    scene::World world;
+    static scene::World world;
     ASSERT_TRUE(world.load(f)) << world.error();
     ASSERT_EQ(world.entity_count(), 2u);
 
@@ -369,7 +369,7 @@ TEST(P2bScene, RejectsForwardParentReferences)
     auto bytes = b.build();
     P2bFile f;
     ASSERT_TRUE(f.parse(bytes.data(), static_cast<uint32_t>(bytes.size())));
-    scene::World world;
+    static scene::World world;
     EXPECT_FALSE(world.load(f));
     EXPECT_STREQ(world.error(), "entity parent not before child");
 }
@@ -395,7 +395,7 @@ TEST(P2bScene, FuzzedSectionsNeverCrashTheLoader)
         auto bytes = b.build();
         P2bFile f;
         ASSERT_TRUE(f.parse(bytes.data(), static_cast<uint32_t>(bytes.size())));
-        scene::World world;
+        static scene::World world;
         (void)world.load(f); // accept or reject; must not fault
     }
     SUCCEED();

@@ -118,7 +118,7 @@ int main(void)
         SleepThread();
         return 1;
     }
-    scene::World world;
+    static scene::World world;
     if (!world.load(file)) {
         printf("PS2UR_TOKEN_P2B_FAIL world: %s\n", world.error());
         SleepThread();

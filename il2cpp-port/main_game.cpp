@@ -36,6 +36,7 @@
 #include <ps2ur/vu_program.h>
 
 #include <kernel.h>
+#include <malloc.h>
 #include <stdio.h>
 
 #include "il2cpp-api.h"
@@ -63,20 +64,23 @@ constexpr uint32_t kAddrLit = 700;
 
 // The scene arena.
 //
-// Deliberately NOT the profile's whole assetPoolMb. That budget covers every
-// resident asset across a session, but this is one static array in .bss and
-// it is claimed before il2cpp asks for anything. At the default 6 MB, on top
-// of an 11 MB development ELF, that is 17 MB of 32 committed before the
-// metadata (~1-2 MB) and the GC heap (4 MB) are allocated at all -- and
-// il2cpp's metadata loader writes through the null it gets back rather than
-// checking, so the symptom is stores to address 0x0 rather than an
-// out-of-memory message (verify-log M12).
+// This was a 2 MB static array, on the reasoning that .bss is claimed before
+// il2cpp asks for anything: at the profile's 6 MB default, on top of an 11 MB
+// development ELF, that is 17 MB of 32 committed before the metadata (~1-2 MB)
+// and the GC heap (4 MB) are allocated at all -- and il2cpp's metadata loader
+// writes through the null it gets back rather than checking, so the symptom
+// was stores to address 0x0 rather than an out-of-memory message
+// (verify-log M12).
 //
-// 2 MB is what M7 shipped and what a boot scene actually needs. Streaming
-// and additive loads take their memory from the platform heap at runtime,
-// which is where the rest of the asset budget belongs.
-constexpr uint32_t kBootSceneArenaBytes = 2 * 1024 * 1024;
-alignas(16) uint8_t g_file_arena_mem[kBootSceneArenaBytes];
+// The reasoning was right about .bss and wrong about 2 MB. A scene with one
+// imported character in it is 5-6 MB, so a fixed 2 MB does not fail at the
+// margin, it fails on the first real scene (verify-log M12.5).
+//
+// Taking it from the heap keeps what mattered -- nothing is committed that is
+// not used -- while letting the profile's assetPoolMb actually govern the
+// size, which it never did before. This runs before bridge::init(), so it is
+// still ahead of every il2cpp allocation.
+constexpr uint32_t kBootSceneArenaBytes = PS2_GAME_ASSET_POOL_BYTES;
 alignas(16) gfx::Qword g_constants[17];
 
 void set_float4(gfx::Qword& q, float x, float y, float z, float w)
@@ -156,7 +160,16 @@ int main(void)
 
     // --- Boot scene ---------------------------------------------------------
     Arena file_arena;
-    file_arena.init(g_file_arena_mem, sizeof(g_file_arena_mem));
+    void* file_arena_mem = memalign(16, kBootSceneArenaBytes);
+    if (file_arena_mem == nullptr) {
+        printf("[game] could not reserve the %u MB asset pool. Lower Asset "
+               "Pool in the PS2 build profile, or the managed heap beside "
+               "it.\n",
+               static_cast<unsigned>(kBootSceneArenaBytes / (1024u * 1024u)));
+        fatal("asset pool");
+        return 1;
+    }
+    file_arena.init(file_arena_mem, kBootSceneArenaBytes);
 
     // resolve_media_path tries host:, then the bare name, then
     // cdrom0:\NAME;1 -- so the same ELF runs from the emulator's host
@@ -174,6 +187,13 @@ int main(void)
     uint32_t file_size = 0;
     const void* file_data = io::load_file(scene_path, file_arena, &file_size);
     if (file_data == nullptr) {
+        // The overwhelmingly likely cause is that the scene is bigger than the
+        // pool, and the io layer has just printed both numbers. It cannot name
+        // the setting to change -- it knows nothing about Unity -- so do it
+        // here, where the profile that generated this build is known.
+        printf("[game] the boot scene did not fit in the %u MB asset pool. "
+               "Raise Asset Pool in the PS2 build profile.\n",
+               static_cast<unsigned>(kBootSceneArenaBytes / (1024u * 1024u)));
         fatal("boot scene unreadable");
         return 1;
     }

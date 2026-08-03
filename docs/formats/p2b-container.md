@@ -142,7 +142,8 @@ Entity[entity_count] {
 }
 ComponentRef[component_count] {
     u16 type_id             // 1 MeshRenderer, 2 Camera, 3 DirectionalLight,
-                            // 4 Script (M7)
+                            // 4 Script (M7), 5 SkinnedMeshRenderer (M9),
+                            // 6 Rigidbody (M11), 7 Animator (M12.5)
     u16 pad
     u32 data_offset         // from the start of this section
 }
@@ -161,10 +162,36 @@ Camera (M8, 64B) { ...v1...; u32 orthographic; f32 ortho_size;
                    u32 fog_enabled; u32 fog_rgb; f32 fog_near; f32 fog_far }
 DirectionalLight { f32 dir[3]; f32 colour[3] }   // dir points FROM the light
 Script (M7)      { u32 scrp_offset }             // into the SCRP section
+SkinnedMeshRenderer (M9, 16B) {
+                   u32 skms_index;
+                   u32 material_index;       // 0xFFFFFFFF = the mesh's own
+                   u32 animator_group;       // see below
+                   u32 controller_index }
+Rigidbody (M11, 16B) {
+                   f32 mass; f32 linear_damping; f32 angular_damping;
+                   u32 flags }               // bit0 gravity, bit1 kinematic,
+                                             // bit2 freeze rotation
+Animator (M12.5, 8B) {
+                   u32 controller_index; u32 layers_baked }
 ```
 
 Readers accept the 12-byte camera and default the M8 tail (old runtimes
 tolerate new exporters and vice versa).
+
+`animator_group` says which CHARACTER a skinned renderer belongs to.
+Renderers sharing a group share one `anim::Animator`; different groups
+animate independently. The runtime cannot infer this, and both mistakes are
+real: a character imported from a DCC tool is many renderers over one
+skeleton (Unity-chan is 19, one per material) and they must show the same
+pose, while several characters built from the same rig share skeleton and
+controller yet must not. The exporter groups by the `Animator` component
+that drives each renderer -- the same question Unity answers with
+`GetComponentInParent<Animator>()` -- falling back to the transform root.
+
+This field occupied the same offset in M9, where it was written as 0 and
+ignored (the skeleton index, which the runtime takes from the SKMS instead).
+A `.p2b` written before M12.5 that contains more than one character
+therefore reads as ONE animator and must be re-exported.
 
 ## SCRP section (M7)
 

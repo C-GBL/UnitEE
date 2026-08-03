@@ -11,7 +11,7 @@ using ps2ur::scene::World;
 
 TEST(WorldHandles, CreateResolveRoundtrip)
 {
-    World world;
+    static World world;
     const int32_t index = world.create_entity(-1);
     ASSERT_GE(index, 0);
     const int32_t handle = world.handle_of(index);
@@ -21,7 +21,7 @@ TEST(WorldHandles, CreateResolveRoundtrip)
 
 TEST(WorldHandles, ZeroAndGarbageHandlesResolveDead)
 {
-    World world;
+    static World world;
     EXPECT_EQ(world.resolve(0), -1);
     EXPECT_EQ(world.resolve(-1), -1);
     EXPECT_EQ(world.resolve(0x7FFFFFFF), -1);
@@ -31,7 +31,7 @@ TEST(WorldHandles, ZeroAndGarbageHandlesResolveDead)
 
 TEST(WorldHandles, DestroyRetiresHandleEvenAfterSlotReuse)
 {
-    World world;
+    static World world;
     const int32_t first = world.create_entity(-1);
     const int32_t stale = world.handle_of(first);
     world.destroy_entity(first);
@@ -46,7 +46,7 @@ TEST(WorldHandles, DestroyRetiresHandleEvenAfterSlotReuse)
 
 TEST(WorldHandles, DestroyCascadesToDescendants)
 {
-    World world;
+    static World world;
     const int32_t root = world.create_entity(-1);
     const int32_t child = world.create_entity(root);
     const int32_t grandchild = world.create_entity(child);
@@ -60,7 +60,7 @@ TEST(WorldHandles, DestroyCascadesToDescendants)
 
 TEST(WorldHandles, VisibilityWalksTheActiveChain)
 {
-    World world;
+    static World world;
     const int32_t root = world.create_entity(-1);
     const int32_t child = world.create_entity(root);
     EXPECT_TRUE(world.entity_visible(child));
@@ -75,7 +75,7 @@ TEST(WorldHandles, VisibilityWalksTheActiveChain)
 
 TEST(WorldHandles, WorldMatricesResolveOutOfOrderParents)
 {
-    World world;
+    static World world;
     // Create the CHILD first so its index precedes its future parent's:
     // exactly the forward reference the p2b loader forbids but runtime
     // reparenting can produce.
@@ -98,7 +98,7 @@ TEST(WorldHandles, WorldMatricesResolveOutOfOrderParents)
 
 TEST(WorldHandles, DeadEntitiesAreSkippedByTheMatrixPass)
 {
-    World world;
+    static World world;
     const int32_t a = world.create_entity(-1);
     const int32_t b = world.create_entity(-1);
     world.entity_mut(static_cast<uint32_t>(b)).pos = Vec3{1.0f, 2.0f, 3.0f};

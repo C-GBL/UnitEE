@@ -24,14 +24,31 @@
 namespace ps2ur {
 namespace anim {
 
-inline constexpr uint32_t kMaxBones = 64;
+// Skeleton-wide bone budget. 64 covered M9's hand-built rigs; an imported
+// character does not fit in it -- Unity-chan's body alone is 108 bones, and
+// the union across her 15 skinned renderers is 140, most of that the
+// spring-bone chains an artist adds for hair and cloth. 192 leaves headroom
+// above that without pretending a PS2 game should ship such a rig.
+//
+// This is a table size, not a hardware limit: the constraint the GS actually
+// imposes is kMaxPaletteBones, which is per BATCH. The cost of raising it is
+// three Pose arrays and a bone-matrix array per animator, so it is paid
+// kMaxAnimators times, not once per renderer.
+inline constexpr uint32_t kMaxBones = 192;
 // The VU1 data-memory palette (plan M9 task 3). 24 bones x 4 qwords sits at
-// qwords 18..113, leaving vertices from 114.
+// qwords 18..113, leaving vertices from 114. THIS one is hardware.
 inline constexpr uint32_t kMaxPaletteBones = 24;
-inline constexpr uint32_t kMaxTracks = 256;
-inline constexpr uint32_t kMaxClips = 8;
-inline constexpr uint32_t kMaxStates = 16;
-inline constexpr uint32_t kMaxTransitions = 32;
+// Tracks are per CLIP, and a clip animating a whole rig needs up to three
+// per bone. 256 was enough for a 24-bone rig; a 140-bone one needs room for
+// well over 400 before keyframe reduction drops the constant ones.
+inline constexpr uint32_t kMaxTracks = 640;
+// One clip per state, in the worst case, and an authored controller has many
+// more states than a hand-built one (Unity-chan's base layer is 24).
+inline constexpr uint32_t kMaxClips = 32;
+// A real authored controller is bigger than a hand-built one: Unity-chan's
+// ActionCheck has 24 states and correspondingly more transitions.
+inline constexpr uint32_t kMaxStates = 32;
+inline constexpr uint32_t kMaxTransitions = 64;
 inline constexpr uint32_t kMaxParams = 8;
 inline constexpr uint32_t kMaxLayers = 2;
 inline constexpr uint32_t kMaskWords = (kMaxBones + 31) / 32;

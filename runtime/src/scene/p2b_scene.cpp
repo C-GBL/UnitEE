@@ -64,6 +64,7 @@ bool World::load(const io::P2bFile& file)
     m_skeleton_count = 0;
     m_clip_count = 0;
     m_controller_count = 0;
+    m_animator_count = 0;
     m_camera = Camera{};
     m_light = DirectionalLight{};
     m_error = "";
@@ -596,7 +597,36 @@ bool World::load(const io::P2bFile& file)
                     mat_idx == 0xFFFFFFFFu ? -1 : static_cast<int32_t>(mat_idx);
                 renderer.skeleton = m_skinned_meshes[mesh_idx].skeleton;
                 renderer.controller = controller_idx;
-                renderer.animator = m_skinned_count;
+                renderer.animator_group = v.u32(data_off + 8);
+
+                // Renderers with the same GROUP are one character and share an
+                // animator; different groups are different characters and get
+                // their own. The exporter decides, because only it can see the
+                // hierarchy: it groups by the Animator component that drives
+                // each renderer, exactly as Unity does.
+                //
+                // Sharing cannot be inferred from the skeleton and controller
+                // alone -- three characters of the same rig playing different
+                // states have both in common and must NOT share -- and neither
+                // can separateness, since one imported character's 19
+                // renderers differ in nothing but their mesh.
+                const uint32_t group = v.u32(data_off + 8);
+                int32_t animator_idx = -1;
+                for (uint32_t r = 0; r < m_skinned_count; ++r) {
+                    if (m_skinned[r].animator_group == group) {
+                        animator_idx = static_cast<int32_t>(m_skinned[r].animator);
+                        break;
+                    }
+                }
+                if (animator_idx < 0) {
+                    if (m_animator_count >= kMaxAnimators) {
+                        m_error = "too many distinct animators";
+                        return false;
+                    }
+                    animator_idx = static_cast<int32_t>(m_animator_count);
+                    ++m_animator_count;
+                }
+                renderer.animator = static_cast<uint32_t>(animator_idx);
                 ++m_skinned_count;
             } else if (type == kComponentRigidbody) {
                 // 16 bytes: mass, linear damping, angular damping, flags.
@@ -621,7 +651,7 @@ bool World::load(const io::P2bFile& file)
                     m_error = "animator payload truncated";
                     return false;
                 }
-                if (m_animator_ref_count >= kMaxSkinnedRenderers) {
+                if (m_animator_ref_count >= kMaxAnimators) {
                     m_error = "too many animators";
                     return false;
                 }
@@ -706,6 +736,7 @@ bool World::append(const io::P2bFile& file)
     const uint32_t script_base = m_script_count;
     const uint32_t rigidbody_base = m_rigidbody_count;
     const uint32_t animator_ref_base = m_animator_ref_count;
+    const uint32_t animator_base = m_animator_count;
     const uint32_t skinned_mesh_base = m_skinned_mesh_count;
     const uint32_t skinned_base = m_skinned_count;
     const uint32_t skeleton_base = m_skeleton_count;
@@ -728,8 +759,10 @@ bool World::append(const io::P2bFile& file)
     } else if (rigidbody_base + incoming.m_rigidbody_count > kMaxRigidbodies) {
         m_error = "additive scene does not fit: rigidbodies";
     } else if (animator_ref_base + incoming.m_animator_ref_count >
-               kMaxSkinnedRenderers) {
+               kMaxAnimators) {
         m_error = "additive scene does not fit: animators";
+    } else if (animator_base + incoming.m_animator_count > kMaxAnimators) {
+        m_error = "additive scene does not fit: animator pool";
     } else if (skinned_mesh_base + incoming.m_skinned_mesh_count >
                kMaxSkinnedMeshes) {
         m_error = "additive scene does not fit: skinned meshes";
@@ -831,7 +864,9 @@ bool World::append(const io::P2bFile& file)
         }
         renderer.skeleton += skeleton_base;
         renderer.controller += controller_base;
-        renderer.animator += skinned_base;
+        // The animator pool is its own index space now, not a parallel array
+        // to the renderers, so it rebases on its own base.
+        renderer.animator += animator_base;
         m_skinned[skinned_base + i] = renderer;
     }
 
@@ -846,6 +881,7 @@ bool World::append(const io::P2bFile& file)
     m_controller_count += incoming.m_controller_count;
     m_skinned_mesh_count += incoming.m_skinned_mesh_count;
     m_skinned_count += incoming.m_skinned_count;
+    m_animator_count += incoming.m_animator_count;
 
     // Re-bind every animator, not just the new ones: the clip array is a
     // single block and the incoming clips may have moved it, so an animator
@@ -923,16 +959,41 @@ int32_t World::state_index(uint32_t controller, uint32_t name_hash) const
 
 void World::update_animators(float dt)
 {
+    // Advance each ANIMATOR once. Walking the renderers instead would step a
+    // shared animator once per renderer -- 19 times a frame for one imported
+    // character, which is not a slow clock but a fast one: time, transitions
+    // and exit conditions would all run 19x.
+    for (uint32_t a = 0; a < m_animator_count; ++a) {
+        if (m_animators[a].valid()) {
+            m_animators[a].update(dt);
+        }
+    }
+
+    // Root motion drives the entity, so a walk cycle actually travels (M9
+    // task 4). This IS per renderer -- each has its own entity to move -- but
+    // only for the first renderer of each animator, because the delta is
+    // consumed, not accumulated: applying one animator's delta to 19 entities
+    // is right only when they are 19 separate characters, and applying it 19
+    // times to the same entity would move it 19x as far.
     for (uint32_t i = 0; i < m_skinned_count; ++i) {
-        anim::Animator& animator = m_animators[m_skinned[i].animator];
+        const anim::Animator& animator = m_animators[m_skinned[i].animator];
         if (!animator.valid()) {
             continue;
         }
-        animator.update(dt);
-        // Root motion drives the entity, so a walk cycle actually travels
-        // (M9 task 4). The delta is zero unless root motion is enabled, so
-        // this is unconditional; it is expressed in the entity's local
-        // space, and the rotation delta composes on the entity's rotation.
+        bool first_for_animator = true;
+        for (uint32_t j = 0; j < i; ++j) {
+            if (m_skinned[j].animator == m_skinned[i].animator &&
+                m_skinned[j].entity == m_skinned[i].entity) {
+                first_for_animator = false;
+                break;
+            }
+        }
+        if (!first_for_animator) {
+            continue;
+        }
+        // The delta is zero unless root motion is enabled, so this is
+        // unconditional; it is expressed in the entity's local space, and the
+        // rotation delta composes on the entity's rotation.
         const int32_t entity = m_skinned[i].entity;
         if (entity >= 0) {
             const Entity& e = m_entities[entity];

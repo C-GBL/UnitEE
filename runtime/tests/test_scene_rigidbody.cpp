@@ -163,7 +163,7 @@ TEST(SceneRigidbody, RoundTripsEveryFieldAndFlag)
     const std::vector<uint8_t> bytes = wrap_scene(build_scene(3, {1}, spec));
     io::P2bFile file;
     ASSERT_TRUE(file.parse(bytes.data(), static_cast<uint32_t>(bytes.size())));
-    World world;
+    static World world;
     ASSERT_TRUE(world.load(file)) << world.error();
 
     ASSERT_EQ(world.rigidbody_count(), 1u);
@@ -182,7 +182,7 @@ TEST(SceneRigidbody, AnEntityWithoutOneContributesNothing)
     const std::vector<uint8_t> bytes = wrap_scene(build_scene(4, {}, BodySpec{}));
     io::P2bFile file;
     ASSERT_TRUE(file.parse(bytes.data(), static_cast<uint32_t>(bytes.size())));
-    World world;
+    static World world;
     ASSERT_TRUE(world.load(file)) << world.error();
     EXPECT_EQ(world.entity_count(), 4u);
     EXPECT_EQ(world.rigidbody_count(), 0u);
@@ -196,7 +196,7 @@ TEST(SceneRigidbody, ATruncatedPayloadIsRefusedRatherThanRead)
         wrap_scene(build_scene(2, {0}, BodySpec{}, /*payload_bytes=*/12u));
     io::P2bFile file;
     ASSERT_TRUE(file.parse(bytes.data(), static_cast<uint32_t>(bytes.size())));
-    World world;
+    static World world;
     EXPECT_FALSE(world.load(file));
     EXPECT_STREQ(world.error(), "rigidbody payload truncated");
 }
@@ -210,7 +210,7 @@ TEST(SceneRigidbody, ASecondLoadDoesNotInheritTheFirstScenesBodies)
     io::P2bFile file;
     ASSERT_TRUE(file.parse(bytes.data(), static_cast<uint32_t>(bytes.size())));
 
-    World world;
+    static World world;
     ASSERT_TRUE(world.load(file)) << world.error();
     ASSERT_EQ(world.rigidbody_count(), 2u);
     ASSERT_TRUE(world.load(file)) << world.error();
@@ -223,7 +223,7 @@ TEST(SceneRigidbody, AdditiveLoadRebasesTheEntityIndex)
     io::P2bFile file;
     ASSERT_TRUE(file.parse(bytes.data(), static_cast<uint32_t>(bytes.size())));
 
-    World world;
+    static World world;
     ASSERT_TRUE(world.load(file)) << world.error();
     ASSERT_EQ(world.rigidbody_count(), 1u);
     EXPECT_EQ(world.rigidbody(0).entity, 2);
@@ -247,7 +247,7 @@ TEST(SceneRigidbody, MoreBodiesThanTheTableHoldsIsALoadFailure)
     const std::vector<uint8_t> bytes = wrap_scene(build_scene(n, all, BodySpec{}));
     io::P2bFile file;
     ASSERT_TRUE(file.parse(bytes.data(), static_cast<uint32_t>(bytes.size())));
-    World world;
+    static World world;
     EXPECT_FALSE(world.load(file));
     EXPECT_STREQ(world.error(), "too many rigidbodies");
 }

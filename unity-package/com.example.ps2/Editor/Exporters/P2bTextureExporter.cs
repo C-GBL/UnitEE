@@ -14,7 +14,7 @@ namespace Ps2.Editor
 
         public static byte[] Export(Texture2D texture)
         {
-            Color32[] pixels = texture.GetPixels32();
+            Color32[] pixels = ReadPixels(texture);
             int w = texture.width;
             int h = texture.height;
 
@@ -50,6 +50,134 @@ namespace Ps2.Editor
             b.Bytes(flipped);
             return b.ToArray();
         }
+
+        // Texture pixels, whether or not the asset is marked Read/Write
+        // Enabled.
+        //
+        // Almost no real project enables it -- it keeps a second copy of every
+        // texture in CPU memory, so Unity defaults it off and imported art
+        // (Unity-chan included) ships with it off. GetPixels32 fails on those,
+        // and on block-compressed formats besides, which quietly limited this
+        // exporter to assets that had been prepared for it by hand.
+        internal static Color32[] ReadPixels(Texture2D texture)
+        {
+            // Prefer the direct read where the asset allows it: it is exact,
+            // it needs no GPU, and it keeps every already-golden texture
+            // byte-identical.
+            if (texture.isReadable)
+            {
+                return texture.GetPixels32();
+            }
+            VerifyBlitRoundTrip();
+            return ReadViaBlit(texture);
+        }
+
+        // Copy through the GPU, which can read any format, and read that back.
+        internal static Color32[] ReadViaBlit(Texture texture)
+        {
+            int w = texture.width;
+            int h = texture.height;
+
+            // sRGB, not Linear. In a linear-colour-space project the sampler
+            // converts sRGB->linear when it reads an sRGB texture, and an sRGB
+            // target converts back on write, so the two cancel and we recover
+            // the bytes the artist authored -- which is what the GS wants,
+            // having no linear pipeline of its own to undo. In a gamma project
+            // Unity performs neither conversion and this is a plain copy.
+            RenderTexture rt = RenderTexture.GetTemporary(
+                w, h, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
+            RenderTexture previous = RenderTexture.active;
+            Texture2D readable = null;
+            try
+            {
+                Graphics.Blit(texture, rt);
+                RenderTexture.active = rt;
+                readable = new Texture2D(w, h, TextureFormat.RGBA32, false, false);
+                readable.ReadPixels(new Rect(0, 0, w, h), 0, 0);
+                readable.Apply(false, false);
+                return readable.GetPixels32();
+            }
+            finally
+            {
+                RenderTexture.active = previous;
+                RenderTexture.ReleaseTemporary(rt);
+                if (readable != null)
+                {
+                    UnityEngine.Object.DestroyImmediate(readable);
+                }
+            }
+        }
+
+        // Blit-and-read-back is what every asset tool does, but two parts of it
+        // are decided by the graphics API rather than by this code: whether
+        // Blit flips vertically (its flip and ReadPixels' are meant to cancel)
+        // and whether the sRGB round trip is faithful. Get either wrong and the
+        // build ships textures that are upside down or subtly off in colour --
+        // a picture that still looks plausible, which is the worst failure this
+        // pipeline can produce. It also silently produces nothing at all under
+        // -nographics, where there is no GPU to blit with.
+        //
+        // So assert it once per domain reload, against a texture whose pixels
+        // are known and deliberately not symmetric in either axis.
+        private static bool s_BlitVerified;
+
+        private static void VerifyBlitRoundTrip()
+        {
+            if (s_BlitVerified)
+            {
+                return;
+            }
+            s_BlitVerified = true;
+
+            const int n = 8;
+            var expected = new Color32[n * n];
+            for (int y = 0; y < n; y++)
+            {
+                for (int x = 0; x < n; x++)
+                {
+                    // Distinct along x, along y, and between the two, so
+                    // neither a flip nor a transpose can pass for a copy.
+                    expected[y * n + x] = new Color32(
+                        (byte)(x * 32), (byte)(y * 8),
+                        (byte)(x == 0 && y == 0 ? 255 : 0), 255);
+                }
+            }
+
+            var probe = new Texture2D(n, n, TextureFormat.RGBA32, false, false);
+            try
+            {
+                probe.SetPixels32(expected);
+                probe.Apply(false, false);
+                Color32[] actual = ReadViaBlit(probe);
+
+                for (int i = 0; i < expected.Length; i++)
+                {
+                    // One LSB of tolerance: the sRGB->linear->sRGB round trip
+                    // happens in float and can land a step either side. That is
+                    // far below the median-cut quantiser's resolution, while a
+                    // flip or a transpose is off by whole channels.
+                    if (Diff(actual[i].r, expected[i].r) > 1 ||
+                        Diff(actual[i].g, expected[i].g) > 1 ||
+                        Diff(actual[i].b, expected[i].b) > 1 ||
+                        Diff(actual[i].a, expected[i].a) > 1)
+                    {
+                        throw new InvalidOperationException(
+                            "texture read-back does not round trip on this " +
+                            "graphics API (pixel " + i + " of the probe: wrote " +
+                            expected[i] + ", read back " + actual[i] + "). " +
+                            "Textures without Read/Write Enabled cannot be " +
+                            "exported correctly until this is resolved; is the " +
+                            "Editor running with -nographics?");
+                    }
+                }
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(probe);
+            }
+        }
+
+        private static int Diff(byte a, byte b) => a > b ? a - b : b - a;
 
         // Same permutation as runtime clut_csm1_reorder: within each group of
         // 8 blocks of 8 entries, blocks 1<->2 and 5<->6 swap.

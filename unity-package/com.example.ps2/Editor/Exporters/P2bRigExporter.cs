@@ -29,10 +29,10 @@ namespace Ps2.Editor
     internal static class P2bRigExporter
     {
         // Must match ps2ur::anim:: the same-named constants.
-        private const int MaxBones = 64;
-        private const int MaxClips = 8;
-        private const int MaxStates = 16;
-        private const int MaxTransitions = 32;
+        private const int MaxBones = 192;
+        private const int MaxClips = 32;
+        private const int MaxStates = 32;
+        private const int MaxTransitions = 64;
         private const int MaxParams = 8;
 
         // Sampling. 30 Hz matches the frame rate the runtime actually runs at;
@@ -45,10 +45,7 @@ namespace Ps2.Editor
         public static P2bSceneExporter.SkinPayload Bake(
             IEnumerable<GameObject> roots, List<string> warnings)
         {
-            SkinnedMeshRenderer renderer = null;
-            Animator animator = null;
-            int rigCount = 0;
-
+            var all = new List<SkinnedMeshRenderer>();
             foreach (GameObject root in roots)
             {
                 if (root == null)
@@ -56,68 +53,128 @@ namespace Ps2.Editor
                 foreach (SkinnedMeshRenderer smr in
                          root.GetComponentsInChildren<SkinnedMeshRenderer>(true))
                 {
-                    if (smr.sharedMesh == null)
+                    all.Add(smr);
+                }
+            }
+            if (all.Count == 0)
+                return null;
+
+            // Decide which renderers are usable BEFORE committing to any of
+            // them. This used to keep only the first one found and abandon the
+            // whole scene if that one was unusable, which meant an imported
+            // character could be dropped entirely because of the first thing
+            // the traversal happened to reach -- on Unity-chan, a bone-less
+            // eyebrow plane (verify-log M12.5).
+            var usable = new List<SkinnedMeshRenderer>();
+            foreach (SkinnedMeshRenderer smr in all)
+            {
+                if (smr.sharedMesh == null)
+                {
+                    warnings.Add(
+                        $"{PathOf(smr.gameObject)}: SkinnedMeshRenderer with no mesh, " +
+                        "skipped.");
+                    continue;
+                }
+                if (smr.bones == null || smr.bones.Length == 0)
+                {
+                    // Not a broken rig: imported characters use bone-less
+                    // SkinnedMeshRenderers as static props parented into the
+                    // skeleton -- eyes, brows, mouth planes. They cannot be
+                    // skinned, and they must not stop the rest of the
+                    // character from exporting.
+                    warnings.Add(
+                        $"{PathOf(smr.gameObject)}: SkinnedMeshRenderer with no bones. " +
+                        "It is parented to the rig but not skinned by it, so it is not " +
+                        "exported; give it a MeshFilter + MeshRenderer to draw it.");
+                    continue;
+                }
+                if (!smr.sharedMesh.isReadable)
+                {
+                    warnings.Add(
+                        $"{PathOf(smr.gameObject)}: mesh '{smr.sharedMesh.name}' is not " +
+                        "readable, so its bone weights cannot be exported. Enable " +
+                        "Read/Write in the model importer.");
+                    continue;
+                }
+                bool nullBone = false;
+                foreach (Transform bone in smr.bones)
+                {
+                    if (bone == null) { nullBone = true; break; }
+                }
+                if (nullBone)
+                {
+                    warnings.Add(
+                        $"{PathOf(smr.gameObject)}: the bones array has a missing entry, " +
+                        "so its vertex weights cannot be resolved. Re-import the model.");
+                    continue;
+                }
+                usable.Add(smr);
+            }
+
+            if (usable.Count == 0)
+            {
+                warnings.Add(
+                    $"None of the {all.Count} SkinnedMeshRenderers in the scene could " +
+                    "be exported, so no character will be drawn. The reasons are " +
+                    "above, one per renderer.");
+                return null;
+            }
+
+            // ONE skeleton, shared. Every usable renderer contributes its bones
+            // to a union: this is how a character is actually authored, with
+            // each material a separate renderer over the same rig.
+            var unionBones = new List<Transform>();
+            var unionBind = new List<Matrix4x4>();
+            var boneAt = new Dictionary<Transform, int>();
+            foreach (SkinnedMeshRenderer smr in usable)
+            {
+                Transform[] bones = smr.bones;
+                Matrix4x4[] binds = smr.sharedMesh.bindposes;
+                for (int i = 0; i < bones.Length; i++)
+                {
+                    Matrix4x4 bind = i < binds.Length ? binds[i] : Matrix4x4.identity;
+                    int at;
+                    if (boneAt.TryGetValue(bones[i], out at))
                     {
-                        warnings.Add(
-                            $"{PathOf(smr.gameObject)}: SkinnedMeshRenderer with no " +
-                            "mesh, skipped.");
+                        // The bind pose maps MESH space to bone space, so two
+                        // renderers agree only if they share a mesh space. An
+                        // import does; a hand-assembled rig might not, and the
+                        // result would be one piece skinned off its axis --
+                        // visible, but easy to blame on the animation.
+                        if (!BindposesAgree(unionBind[at], bind))
+                        {
+                            warnings.Add(
+                                $"{PathOf(smr.gameObject)}: bone '{bones[i].name}' has a " +
+                                "different bind pose here than on an earlier renderer of " +
+                                "the same rig. One shared skeleton is exported, so this " +
+                                "mesh may be skinned off its axis. Re-import both meshes " +
+                                "from the same model.");
+                        }
                         continue;
                     }
-                    rigCount++;
-                    if (renderer != null)
-                        continue;
-                    renderer = smr;
-                    animator = smr.GetComponentInParent<Animator>();
+                    boneAt[bones[i]] = unionBones.Count;
+                    unionBones.Add(bones[i]);
+                    unionBind.Add(bind);
                 }
             }
 
-            if (renderer == null)
-                return null;
-
-            // ONE rig per scene, for now, and said out loud rather than
-            // discovered on target. The runtime's skeleton/controller tables
-            // are sized for a handful (kMaxSkeletons = 2), and the M9
-            // acceptance ran three characters off ONE skeleton and one
-            // controller -- which is the case worth supporting first, since
-            // it is also how a crowd of the same character is authored.
-            if (rigCount > 1)
+            if (unionBones.Count > MaxBones)
             {
                 warnings.Add(
-                    $"The scene has {rigCount} SkinnedMeshRenderers. This export " +
-                    $"carries one rig ('{PathOf(renderer.gameObject)}'); the others " +
-                    "will not be drawn. Several characters SHARING that rig are " +
-                    "fine -- give them the same mesh and controller.");
+                    $"The rig needs {unionBones.Count} bones across " +
+                    $"{usable.Count} renderers, over the runtime's limit of " +
+                    $"{MaxBones} (anim::kMaxBones). The character will not be " +
+                    "exported; reduce the rig, or raise the limit and rebuild " +
+                    "the runtime.");
+                return null;
             }
 
-            if (renderer.bones == null || renderer.bones.Length == 0)
-            {
-                warnings.Add(
-                    $"{PathOf(renderer.gameObject)}: the SkinnedMeshRenderer has no " +
-                    "bones, so there is nothing to skin. Re-import the model with a " +
-                    "rig, or use a MeshRenderer.");
-                return null;
-            }
-            if (renderer.bones.Length > MaxBones)
-            {
-                warnings.Add(
-                    $"{PathOf(renderer.gameObject)}: {renderer.bones.Length} bones, " +
-                    $"over the runtime's limit of {MaxBones} (anim::kMaxBones). " +
-                    "Reduce the rig; the character will not be exported.");
-                return null;
-            }
-            if (!renderer.sharedMesh.isReadable)
-            {
-                warnings.Add(
-                    $"{PathOf(renderer.gameObject)}: mesh '{renderer.sharedMesh.name}' " +
-                    "is not readable, so its bone weights cannot be exported. Enable " +
-                    "Read/Write in the model importer.");
-                return null;
-            }
+            Animator animator = usable[0].GetComponentInParent<Animator>();
 
             var payload = new P2bSceneExporter.SkinPayload();
 
             P2bAnimExporter.SkeletonExport skeleton = P2bAnimExporter.ExportSkeleton(
-                renderer.bones, renderer.sharedMesh.bindposes);
+                unionBones.ToArray(), unionBind.ToArray());
             payload.Skeleton = skeleton.Bytes;
 
             // The clips, and the controller that names them. A rig with an
@@ -137,7 +194,7 @@ namespace Ps2.Editor
             }
 
             GameObject clipRoot = animator != null ? animator.gameObject
-                                                   : renderer.gameObject;
+                                                   : usable[0].gameObject;
             var states = new List<P2bAnimExporter.StateExport>();
             var transitions = new List<P2bAnimExporter.TransitionExport>();
             var parameters = new List<string>();
@@ -182,24 +239,52 @@ namespace Ps2.Editor
             payload.Controller = P2bAnimExporter.ExportController(
                 states.ToArray(), transitions.ToArray(), parameters.ToArray());
 
-            payload.SkinnedMesh = P2bAnimExporter.ExportSkinnedMesh(
-                renderer.sharedMesh, 0, FallbackColour(renderer),
-                skeleton.Ordered, skeleton.Index, renderer.bones, 0);
-
-            // Every renderer sharing this mesh draws it, so a crowd of the
-            // same character costs one mesh and one controller.
-            foreach (GameObject root in roots)
+            // One SKMS per distinct mesh; renderers sharing a mesh share the
+            // entry, so a crowd of the same character costs one mesh.
+            var meshAt = new Dictionary<Mesh, int>();
+            var groupAt = new Dictionary<Transform, int>();
+            foreach (SkinnedMeshRenderer smr in usable)
             {
-                if (root == null)
-                    continue;
-                foreach (SkinnedMeshRenderer smr in
-                         root.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+                int at;
+                if (!meshAt.TryGetValue(smr.sharedMesh, out at))
                 {
-                    if (smr.sharedMesh == renderer.sharedMesh)
-                        payload.Renderers.Add(smr);
+                    at = payload.SkinnedMeshes.Count;
+                    payload.SkinnedMeshes.Add(P2bAnimExporter.ExportSkinnedMesh(
+                        smr.sharedMesh, 0, FallbackColour(smr),
+                        skeleton.Ordered, skeleton.Index, smr.bones, 0));
+                    meshAt[smr.sharedMesh] = at;
                 }
+                payload.RendererMesh[smr] = at;
+
+                // Group by the Animator that drives this renderer -- the same
+                // question Unity answers with GetComponentInParent. Without an
+                // Animator anywhere above it, the transform root stands in, so
+                // separately rooted characters still animate independently.
+                Animator owner = smr.GetComponentInParent<Animator>();
+                Transform key = owner != null ? owner.transform
+                                              : smr.transform.root;
+                int group;
+                if (!groupAt.TryGetValue(key, out group))
+                {
+                    group = groupAt.Count;
+                    groupAt[key] = group;
+                }
+                payload.RendererGroup[smr] = group;
             }
             return payload;
+        }
+
+        // Bind poses are inverse bind MATRICES; comparing them elementwise
+        // with a loose epsilon is enough to tell "the same import" from "two
+        // different mesh spaces", which is the only distinction that matters.
+        private static bool BindposesAgree(Matrix4x4 a, Matrix4x4 b)
+        {
+            for (int i = 0; i < 16; i++)
+            {
+                if (Mathf.Abs(a[i] - b[i]) > 1e-4f)
+                    return false;
+            }
+            return true;
         }
 
         // ---- controller -----------------------------------------------------

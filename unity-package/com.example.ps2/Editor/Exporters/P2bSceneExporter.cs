@@ -37,10 +37,23 @@ namespace Ps2.Editor
             public byte[] Skeleton;
             public List<byte[]> Clips = new List<byte[]>();
             public byte[] Controller;
-            public byte[] SkinnedMesh;
-            // Renderers that use SkinnedMesh index 0 / Controller index 0.
-            public HashSet<SkinnedMeshRenderer> Renderers =
-                new HashSet<SkinnedMeshRenderer>();
+            // One SKMS section per exported renderer. A character imported
+            // from a DCC tool is many renderers over one skeleton -- body,
+            // hair, each cloth piece -- because that is how its materials are
+            // assigned, so this is a list, not a single mesh.
+            public List<byte[]> SkinnedMeshes = new List<byte[]>();
+            // Which SkinnedMeshes index each renderer draws. Several renderers
+            // may share one entry: a crowd of the same character costs one
+            // mesh and one controller.
+            public Dictionary<SkinnedMeshRenderer, int> RendererMesh =
+                new Dictionary<SkinnedMeshRenderer, int>();
+            // Which CHARACTER each renderer belongs to. Renderers in one group
+            // share an animator; separate groups animate independently. The
+            // runtime cannot work this out for itself -- one character's many
+            // renderers and many characters of one rig look identical from
+            // the skeleton and controller alone.
+            public Dictionary<SkinnedMeshRenderer, int> RendererGroup =
+                new Dictionary<SkinnedMeshRenderer, int>();
         }
 
         internal static SkinPayload PendingSkin;
@@ -169,7 +182,10 @@ namespace Ps2.Editor
                     writer.AddSection(P2bWriter.SectionClip, clip);
                 }
                 writer.AddSection(P2bWriter.SectionController, PendingSkin.Controller);
-                writer.AddSection(P2bWriter.SectionSkinnedMesh, PendingSkin.SkinnedMesh);
+                foreach (byte[] skinned in PendingSkin.SkinnedMeshes)
+                {
+                    writer.AddSection(P2bWriter.SectionSkinnedMesh, skinned);
+                }
             }
 
             if (PendingSound != null)
@@ -298,7 +314,7 @@ namespace Ps2.Editor
 
             var skinned = t.GetComponent<SkinnedMeshRenderer>();
             if (skinned != null && PendingSkin != null &&
-                PendingSkin.Renderers.Contains(skinned))
+                PendingSkin.RendererMesh.ContainsKey(skinned))
             {
                 record.Skinned = skinned;
             }
@@ -469,9 +485,12 @@ namespace Ps2.Editor
                 if (e.Skinned != null)
                 {
                     var p = new ByteBuffer();
-                    p.U32(0);          // skinned mesh index
+                    int group;
+                    if (!PendingSkin.RendererGroup.TryGetValue(e.Skinned, out group))
+                        group = 0;
+                    p.U32((uint)PendingSkin.RendererMesh[e.Skinned]);
                     p.U32(0xFFFFFFFF); // no material override
-                    p.U32(0);          // skeleton (the mesh names its own)
+                    p.U32((uint)group); // which character -> which animator
                     p.U32(0);          // controller index
                     comps.Add((5, p.ToArray()));
                 }

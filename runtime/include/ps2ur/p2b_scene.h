@@ -30,11 +30,21 @@ inline constexpr uint32_t kMaxScripts = 64;
 // Skinning (M9). A 1,500-triangle character at 16 triangles per batch (the
 // VIF NUM ceiling for 5-qword vertices) is ~94 batches, so skinned meshes
 // need a far larger batch budget than rigid ones -- hence separate storage.
-inline constexpr uint32_t kMaxSkinnedMeshes = 4;
-inline constexpr uint32_t kMaxSkinBatches = 128;
+// A character imported from a DCC tool arrives as MANY renderers over ONE
+// skeleton -- body, hair, each cloth piece, each facial plane -- because that
+// is how the material assignment is authored. Unity-chan is 19. Sizing these
+// for the count of renderers a scene has (rather than the count of
+// characters) is what makes an ordinary imported model loadable.
+inline constexpr uint32_t kMaxSkinnedMeshes = 24;
+inline constexpr uint32_t kMaxSkinBatches = 256;
 inline constexpr uint32_t kMaxSkeletons = 2;
 inline constexpr uint32_t kMaxControllers = 2;
-inline constexpr uint32_t kMaxSkinnedRenderers = 4;
+inline constexpr uint32_t kMaxSkinnedRenderers = 24;
+// Animators are NOT per renderer. An anim::Animator carries three poses, a
+// bone-matrix array and four clip cursors -- tens of kilobytes -- and every
+// renderer on one character must show the SAME pose, so they share one.
+// Bound at load, one per distinct (skeleton, controller) pair.
+inline constexpr uint32_t kMaxAnimators = 4;
 
 inline constexpr uint16_t kComponentMeshRenderer = 1;
 inline constexpr uint16_t kComponentCamera = 2;
@@ -170,6 +180,11 @@ struct SkinnedRenderer {
     int32_t material = -1;  // override; -1 = the mesh's own
     uint32_t skeleton = 0;
     uint32_t controller = 0;
+    // Which CHARACTER this renderer belongs to, as the exporter grouped them
+    // (by the Animator component that drives each). Renderers sharing a group
+    // share one animator; renderers of different groups animate independently
+    // even when they share a skeleton and a controller.
+    uint32_t animator_group = 0;
     uint32_t animator = 0;  // index into the world's animator pool
 };
 
@@ -266,9 +281,12 @@ public:
         return m_controllers[i];
     }
 
-    // One animator per skinned renderer, bound at load. Advancing them is
-    // the caller's call (the frame loop runs animation between the managed
-    // Update and LateUpdate phases -- M9 task 4).
+    // One animator per distinct (skeleton, controller) pair, bound at load,
+    // SHARED by every renderer that names it -- the 19 renderers of one
+    // imported character are one animator, not 19 that would have to be kept
+    // in step. Advancing them is the caller's call (the frame loop runs
+    // animation between the managed Update and LateUpdate phases, M9 task 4).
+    uint32_t animator_count() const { return m_animator_count; }
     anim::Animator& animator(uint32_t i) { return m_animators[i]; }
     const anim::Animator& animator(uint32_t i) const { return m_animators[i]; }
     void update_animators(float dt);
@@ -304,7 +322,7 @@ private:
     RigidbodyRef m_rigidbodies[kMaxRigidbodies];
     uint32_t m_rigidbody_count = 0;
 
-    AnimatorRef m_animator_refs[kMaxSkinnedRenderers];
+    AnimatorRef m_animator_refs[kMaxAnimators];
     uint32_t m_animator_ref_count = 0;
 
     LoadedSkinnedMesh m_skinned_meshes[kMaxSkinnedMeshes];
@@ -317,7 +335,8 @@ private:
     uint32_t m_clip_count = 0;
     anim::Controller m_controllers[kMaxControllers];
     uint32_t m_controller_count = 0;
-    anim::Animator m_animators[kMaxSkinnedRenderers];
+    anim::Animator m_animators[kMaxAnimators];
+    uint32_t m_animator_count = 0;
 
     LoadedMesh m_meshes[kMaxMeshes];
     uint32_t m_mesh_count = 0;
@@ -328,6 +347,17 @@ private:
     DirectionalLight m_light;
     const char* m_error = "";
 };
+
+// A World is over a megabyte of fixed-size tables and MUST live in BSS or the
+// arena, never on a stack -- an automatic one overflows the default stack and
+// crashes before load() is even entered, which is exactly how raising the
+// M12.5 skinning limits first showed up (16 tests segfaulting at once).
+//
+// The bound is a tripwire, not a target: it exists so that growing a table
+// makes someone look at the total instead of finding out on hardware.
+static_assert(sizeof(World) < 2u * 1024u * 1024u,
+              "scene::World has outgrown its budget; check the skinning and "
+              "animation table sizes before raising this");
 
 } // namespace scene
 } // namespace ps2ur

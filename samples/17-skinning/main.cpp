@@ -177,7 +177,7 @@ int main(void)
         scene_data = io::load_file("skinscene.p2b", scene_arena, &scene_size);
     }
     io::P2bFile file;
-    scene::World world;
+    static scene::World world;
     if (scene_data == nullptr || !file.parse(scene_data, scene_size)) {
         printf("PS2UR_TOKEN_SKIN_FAIL scene load/parse\n");
         SleepThread();

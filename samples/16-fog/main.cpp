@@ -74,7 +74,7 @@ int main(void)
         file_data = io::load_file("fogscene.p2b", file_arena, &file_size);
     }
     io::P2bFile file;
-    scene::World world;
+    static scene::World world;
     if (file_data == nullptr || !file.parse(file_data, file_size) ||
         !world.load(file)) {
         printf("PS2UR_TOKEN_FOG_FAIL load/parse/world\n");

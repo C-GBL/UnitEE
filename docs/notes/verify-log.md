@@ -283,3 +283,65 @@ Verified by running the whole pipeline headlessly against the user project:
 | Docker image + CI (M0 tasks 1, 7) | OPEN: Docker is not available on this machine and there is no CI runner. `tools/ci/README.md` tracks it. The plan's note that emulator tests need an out-of-band BIOS still stands -- never download one. |
 | Host SDL2 rasteriser stand-in (M1 task 4) | OPEN: deferred until M2 defines the `gfx::Device` interface it must stand in for. The rest of the host build (platform layer, allocators, math, tests) is done. |
 | Section 7.2 | OPEN: section 7 jumps from 7.1 to 7.3 in `ps2port.txt`; the "not supported" list appears to be missing. Sections 9-18 are now present. |
+
+## Imported characters (M12.5, 2026-08-02)
+
+Found by running the user's own scene, not by a test. Every one of these was
+green at the unit level.
+
+1. **An imported character exported as nothing at all.** `P2bRigExporter.Bake`
+   kept the FIRST `SkinnedMeshRenderer` it found and returned `null` if that
+   one was unusable. Unity-chan's first in traversal order is `BLW_DEF`, a
+   bone-less eyebrow plane, so the whole character was dropped and the `.p2b`
+   had no `SKEL`/`ANIM`/`CTRL`/`SKMS` section at all. The scene loaded, the
+   ground drew, and nothing said anything was missing. Diagnosis came from
+   dumping the built container's section table -- start there, not in the
+   exporter.
+
+2. **A character is many renderers over one skeleton.** 19 for Unity-chan,
+   one per material; 15 of them skinned. The exporter now unions their bones
+   into one skeleton and emits one `SKMS` each. Bone-less renderers are
+   skipped with a warning naming the fix rather than aborting the scene.
+
+3. **Sharing an animator cannot be inferred from skeleton + controller.**
+   One character's 19 renderers must share one `anim::Animator` (they show one
+   pose); three characters built from one rig must NOT (M9's sample drives
+   `world.animator(1)` through a crossfade while animator 0 holds the golden
+   pose). Both cases have the same skeleton and controller. The exporter now
+   groups by the `Animator` component driving each renderer and writes the
+   group into the `SkinnedMeshRenderer` payload -- the field that used to hold
+   an ignored skeleton index. **Any `.p2b` written before this with more than
+   one character reads as one animator and must be re-exported.**
+
+4. **A shared animator must be advanced once, not once per renderer.**
+   `update_animators` walked renderers. With sharing that ticks one animator
+   19 times a frame: not a slow clock, a 19x fast one.
+
+5. **The real limits were nowhere near a real character.** 64 bones (needed
+   140, union across renderers), 8 clips (24), 16 states (24), 256 tracks
+   (140 bones x 3). Raised to 192/32/32/640. `kMaxPaletteBones` = 24 is
+   untouched: that one is the VU1 data-memory layout, i.e. actual hardware.
+
+6. **`scene::World` went to 1.17 MB and 16 tests segfaulted at once.** They
+   allocated it on the stack. `test_scene_load.cpp` already used `static` --
+   someone had hit this before and fixed it locally instead of preventing it.
+   Now `static_assert(sizeof(World) < 2 MB)` and every site is `static`.
+
+7. **The boot-scene arena was a hardcoded 2 MB while the profile's
+   `assetPoolMb` governed nothing.** A scene with one character in it is
+   5.5 MB, so this failed on the first real scene rather than at the margin.
+   The M12 reasoning behind the 2 MB (a big `.bss` array is committed before
+   il2cpp allocates, and its metadata loader writes through the null it gets
+   back) was right about `.bss` and wrong about the size: it is now a heap
+   allocation of `PS2_GAME_ASSET_POOL_BYTES`, taken before `bridge::init()`,
+   so nothing unused is committed and the profile setting finally means
+   something.
+
+8. **Texture export required Read/Write Enabled**, which almost no imported
+   art has, and failed on block-compressed formats besides. Non-readable
+   textures now go through a RenderTexture blit. Two parts of that are decided
+   by the graphics API rather than by our code -- whether `Blit` flips
+   vertically, and whether the sRGB round trip is faithful -- so
+   `VerifyBlitRoundTrip` asserts both once per domain reload against a probe
+   that is asymmetric in both axes. It also catches `-nographics`, where the
+   blit silently produces nothing.

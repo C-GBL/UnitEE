@@ -120,10 +120,13 @@ namespace Ps2.Editor
                 clipB, reference, skeleton.Ordered, skeleton.Index, 30.0f,
                 /*loop=*/true, 0.0002f, 0.9999999f, 0.001f));
 
-            payload.SkinnedMesh = P2bAnimExporter.ExportSkinnedMesh(
+            payload.SkinnedMeshes.Add(P2bAnimExporter.ExportSkinnedMesh(
                 smr.sharedMesh, 0, new Color32(220, 190, 150, 255),
-                skeleton.Ordered, skeleton.Index, smr.bones, 0);
-            payload.Renderers.Add(smr);
+                skeleton.Ordered, skeleton.Index, smr.bones, 0));
+            payload.RendererMesh[smr] = 0;
+            // Group 0: the reference character, which check 1 compares against
+            // the Unity-sampled golden through world.animator(0).
+            payload.RendererGroup[smr] = 0;
 
             // The golden trace, sampled from Unity itself.
             WriteGolden(golden, reference, skeleton.Ordered, clipA, clipB);
@@ -136,7 +139,13 @@ namespace Ps2.Editor
                                                   out Transform[] extraBones,
                                                   out SkinnedMeshRenderer extraSmr);
                 extra.transform.position = new Vector3(i == 0 ? -3.6f : 3.6f, 0, 0);
-                payload.Renderers.Add(extraSmr);
+                // Same mesh index -- three characters cost one SKMS -- but a
+                // group of their own, because they are three CHARACTERS and
+                // must animate independently. Check 2 drives world.animator(1)
+                // through a crossfade while animator 0 holds the golden pose;
+                // one shared animator would make that test meaningless.
+                payload.RendererMesh[extraSmr] = 0;
+                payload.RendererGroup[extraSmr] = i + 1;
             }
 
             // A material for the skinned kind (7): the classifier keys off
