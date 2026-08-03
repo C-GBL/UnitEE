@@ -34,6 +34,11 @@ struct PadState {
     uint8_t lx = 128, ly = 128, rx = 128, ry = 128;
     uint8_t pressures[16] = {};
     uint32_t settle_frames = 0;
+    // The DualShock capability handshake, one asynchronous request at a
+    // time: 0 request analog, 1 verify it, 2 request pressure, 3 confirm,
+    // 4 request actuator alignment, 5 confirm, 6 configured. Reset on
+    // disconnect so a re-plugged pad negotiates again.
+    uint8_t config_stage = 0;
 };
 
 PadState g_pads[kMaxPorts];
@@ -165,34 +170,71 @@ void update()
             pad.settle_frames = 0;
         }
 
-        // Ask for DualShock 2 mode once the pad is stable. This has to be
-        // retried: the request is refused while the pad is still executing
-        // an earlier command.
-        if (!pad.analog && pad.settle_frames < 120u) {
+        // The DualShock capability handshake. Every pad command here is
+        // ASYNCHRONOUS: issuing one and immediately reading the result sees
+        // the state from BEFORE the command ran. The first version of this
+        // re-issued padSetMainMode on every retry and then asked for the
+        // mode -- so the answer always described a request still in flight,
+        // the loop never settled, and the emulator logged a config sequence
+        // five times a second for 24 seconds (verify-log M12.5). One
+        // request at a time, verified only after the driver reports it
+        // complete.
+        if (pad.config_stage < 6u && pad.settle_frames < 240u) {
             ++pad.settle_frames;
-            if (padGetState(static_cast<int>(port), 0) == PAD_STATE_STABLE) {
-                padSetMainMode(static_cast<int>(port), 0, PAD_MMODE_DUALSHOCK,
-                               PAD_MMODE_LOCK);
-                if (padInfoMode(static_cast<int>(port), 0, PAD_MODECURID, 0) ==
-                    PAD_TYPE_DUALSHOCK) {
-                    pad.analog = true;
-                    // Pressure and rumble are separate capabilities.
-                    if (padInfoPressMode(static_cast<int>(port), 0) != 0 &&
-                        padEnterPressMode(static_cast<int>(port), 0) == 1) {
-                        pad.pressure = true;
-                    }
-                    const int actuators =
-                        padInfoAct(static_cast<int>(port), 0, -1, 0);
-                    if (actuators > 0) {
-                        g_act_align[port][0] = 0; // small motor
-                        g_act_align[port][1] = 1; // large motor
-                        for (int i = 2; i < 6; ++i) {
-                            g_act_align[port][i] = 0xFF;
+            const int rstat = padGetReqState(static_cast<int>(port), 0);
+            if (rstat == PAD_RSTAT_FAILED &&
+                (pad.config_stage == 1u || pad.config_stage == 3u ||
+                 pad.config_stage == 5u)) {
+                --pad.config_stage; // re-issue the request that failed
+            } else if (rstat == PAD_RSTAT_COMPLETE &&
+                       padGetState(static_cast<int>(port), 0) ==
+                           PAD_STATE_STABLE) {
+                switch (pad.config_stage) {
+                    case 0: // ask for analog mode, locked
+                        padSetMainMode(static_cast<int>(port), 0,
+                                       PAD_MMODE_DUALSHOCK, PAD_MMODE_LOCK);
+                        pad.config_stage = 1;
+                        break;
+                    case 1: // did it take? (a digital pad never will; the
+                            // frame budget gives up on those quietly)
+                        if (padInfoMode(static_cast<int>(port), 0,
+                                        PAD_MODECURID, 0) ==
+                            PAD_TYPE_DUALSHOCK) {
+                            pad.analog = true;
+                            pad.config_stage = 2;
                         }
-                        pad.rumble = padSetActAlign(static_cast<int>(port), 0,
-                                                    reinterpret_cast<char*>(
-                                                        g_act_align[port])) == 1;
-                    }
+                        break;
+                    case 2: // pressure-sensitive buttons
+                        if (padInfoPressMode(static_cast<int>(port), 0) != 0) {
+                            padEnterPressMode(static_cast<int>(port), 0);
+                            pad.config_stage = 3;
+                        } else {
+                            pad.config_stage = 4;
+                        }
+                        break;
+                    case 3:
+                        pad.pressure = true;
+                        pad.config_stage = 4;
+                        break;
+                    case 4: // rumble actuators
+                        if (padInfoAct(static_cast<int>(port), 0, -1, 0) > 0) {
+                            g_act_align[port][0] = 0; // small motor
+                            g_act_align[port][1] = 1; // large motor
+                            for (int i = 2; i < 6; ++i) {
+                                g_act_align[port][i] = 0xFF;
+                            }
+                            padSetActAlign(
+                                static_cast<int>(port), 0,
+                                reinterpret_cast<char*>(g_act_align[port]));
+                            pad.config_stage = 5;
+                        } else {
+                            pad.config_stage = 6;
+                        }
+                        break;
+                    default:
+                        pad.rumble = true;
+                        pad.config_stage = 6;
+                        break;
                 }
             }
         }

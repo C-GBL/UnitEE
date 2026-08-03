@@ -525,3 +525,27 @@ and every glyph sampled uninitialised VRAM; init_ui now frames its own
 upload. Each of these four defects was invisible until a REAL canvas
 with REAL art hit the screen -- the acceptance run keeps out-earning
 the layer tests.
+
+## The pad config flood was a handshake livelock (M12.5, 2026-08-03)
+
+PCSX2 logged "Pad: DS2 Config Finished" five times a second for 24
+seconds of every boot. Ours, not the emulator's: every pad command is
+asynchronous, and input::update() re-issued padSetMainMode on each retry
+and then immediately asked for the current mode -- so the answer always
+described a request still in flight, the "did it take" check could never
+pass, and all 120 retries ran their course as back-to-back config
+sequences. Worse than the noise: padEnterPressMode was being issued in
+the same breath as the busy main-mode request, so pressure mode NEVER
+actually engaged -- the pad reported RB: D (digital response bytes only)
+forever while pad.pressure claimed otherwise.
+
+Now a staged handshake: one request in flight, verified only after
+padGetReqState reports it complete; failed requests re-issue, a
+240-frame budget gives up quietly on pads that cannot comply, and a
+disconnect resets the stage so a re-plugged pad renegotiates. A boot now
+logs exactly five config lines -- boot default, analog locked, press
+mode entry, response bytes switching to D+A+P (0x0003FFFF, pressure
+genuinely active for the first time), actuator alignment -- and then
+nothing. Real-hardware caveat stands per plan 14.5: PCSX2's pad model
+is forgiving about timing, so the staging discipline matters MORE on a
+real DualShock, not less.
