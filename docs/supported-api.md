@@ -199,8 +199,11 @@ These are listed prominently here and asserted in the conformance suite
     is ignored: the reference resolution IS the framebuffer), and the runtime
     holds finished screen rects. Scripts move elements in pixels; anchors do
     not exist at runtime. Text uses one baked 8x8 bitmap font (fontSize maps
-    to an integer scale 1..4) with a 48-byte cap per element; Image supports
-    Simple stretch only, no 9-slice.
+    to an integer scale 1..4) with a 48-byte cap per element. Image supports
+    Simple (stretch) and Sliced (real 9-slice from sprite.border, baked at
+    export); Tiled draws as Sliced; Filled is not supported. Sprite-atlas
+    SUB-RECTS are not supported -- the sprite's whole texture draws, so give
+    UI sprites standalone textures (the exporter warns).
 31. **`PS2UINavigation` replaces `EventSystem`.** A DualShock 2 has no
     pointer, so focus moves with the D-pad in hierarchy order, Cross submits
     the focused Button, Left/Right step the focused Slider by a tenth of its

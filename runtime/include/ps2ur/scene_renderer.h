@@ -52,7 +52,13 @@ public:
     // Rebinding textures is device- and sample-specific (VRAM allocations
     // live with the caller), so it arrives as a callback invoked between
     // kicks, never during PATH1 traffic.
-    typedef void (*BindTextureFn)(void* user, uint32_t texture_index);
+    // Binds 'texture_index' for the next textured draw and reports its
+    // pixel size through the out parameters (always non-null). Returns
+    // false when the index cannot be bound -- the UI pass then falls back
+    // to an untextured rect, because drawing with whatever texture was
+    // bound LAST is how a menu turns to noise.
+    typedef bool (*BindTextureFn)(void* user, uint32_t texture_index,
+                                  uint32_t* out_w, uint32_t* out_h);
 
     // Invoked inside the frame packet after the clear: the 2D/UI pass
     // (overlay text, HUD sprites) rides the same PATH3 packet as the clear.

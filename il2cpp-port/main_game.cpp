@@ -100,15 +100,18 @@ struct BindContext {
     uint32_t count;
 };
 
-void bind_texture(void* user, uint32_t index)
+bool bind_texture(void* user, uint32_t index, uint32_t* out_w, uint32_t* out_h)
 {
     BindContext* ctx = static_cast<BindContext*>(user);
     if (index >= ctx->count) {
-        return;
+        return false; // not resident (over the 8-slot budget); say so
     }
     GpuTexture& t = ctx->textures[index];
     ctx->device->set_texture_indexed(t.tex, t.w, t.h, gfx::PixelFormat::PSMT8,
                                      t.clut, 256);
+    *out_w = t.w;
+    *out_h = t.h;
+    return true;
 }
 
 uint32_t rd_u32(const uint8_t* p)

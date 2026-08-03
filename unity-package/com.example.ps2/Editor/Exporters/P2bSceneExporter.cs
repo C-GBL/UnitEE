@@ -99,6 +99,7 @@ namespace Ps2.Editor
             public Transform SliderFill;
             public float SliderValue;
             public float SliderMaxW;
+            public Vector4 Border;    // 9-slice L,B,R,T (sprite.border px)
         }
 
         private sealed class MeshKey
@@ -633,6 +634,25 @@ namespace Ps2.Editor
                 record.DrawKind = record.Texture != null ? 1 : 0;
                 record.ManagedKind = 0;
                 drawable = true;
+                if (image.sprite != null &&
+                    (image.type == UnityEngine.UI.Image.Type.Sliced ||
+                     image.type == UnityEngine.UI.Image.Type.Tiled))
+                {
+                    // sprite.border is (L, B, R, T) in sprite pixels; the
+                    // runtime draws real 9-slice from it. Tiled gets the
+                    // sliced look -- the closest this hardware path has.
+                    record.Border = image.sprite.border;
+                }
+                if (image.sprite != null && record.Texture != null &&
+                    (image.sprite.rect.width < record.Texture.width ||
+                     image.sprite.rect.height < record.Texture.height))
+                {
+                    Debug.LogWarning(
+                        "[PS2] Image on '" + t.name + "' uses a sub-rect of " +
+                        "a sprite atlas; the PS2 path draws the sprite's " +
+                        "WHOLE texture (no 9-slice, no atlas UVs -- " +
+                        "deviation 30). Give it a standalone sprite.");
+                }
             }
             else if (raw != null)
             {
@@ -940,6 +960,20 @@ namespace Ps2.Editor
                         p.F32(ui.SliderValue);
                         p.F32(ui.SliderMaxW);
                         for (int tb = 8; tb < 48; tb++) p.U8(0);
+                    }
+                    else if (ui.DrawKind == 1)
+                    {
+                        // Images carry no text, so the text bytes carry the
+                        // 9-slice borders instead: four f32, runtime order
+                        // L, T, R, B (sprite.border is L, B, R, T). Zeros =
+                        // Image.Type.Simple = plain stretch. A slider
+                        // background that is ALSO an image keeps its
+                        // value/maxW above and loses its border.
+                        p.F32(ui.Border.x); // left
+                        p.F32(ui.Border.w); // top
+                        p.F32(ui.Border.z); // right
+                        p.F32(ui.Border.y); // bottom
+                        for (int tb = 16; tb < 48; tb++) p.U8(0);
                     }
                     else
                     {

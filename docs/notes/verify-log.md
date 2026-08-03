@@ -486,3 +486,42 @@ was right and every build was green -- but the file was invisible to
 text search, which is how the class of tool that would find the next bug
 gets blinded. ASCII-only means checking for it; the fix was a byte-level
 replace.
+
+## Texture alpha never existed, and the overlays hid it for six milestones (M12.5 task 5, 2026-08-03)
+
+The user's first Canvas screenshot showed text glyphs in solid black
+cells and UI sprites with their dead corners filled in. Root cause:
+set_texture and set_texture_indexed have passed TCC=0 since M2, which
+tells the GS to take fragment alpha from the VERTEX (always 0x80) and
+ignore the texture's alpha entirely. The font's alpha test therefore
+discarded nothing, and sprite transparency could not exist. Nothing ever
+caught it because the two consumers of texture alpha until now were the
+debug overlays -- white text on dark translucent panels, where black
+glyph cells are nearly invisible -- and because the golden readback
+captures the framebuffer before the overlay pass draws. TCC is now 1 in
+both binds. All five goldens pass UNCHANGED: the exporter has always
+baked CLUT alpha in the PS2 0..0x80 range with opaque = 0x80, so
+MODULATE's At x Af is the identity on every opaque texture; the change
+lands only where alpha is real.
+
+Same session, same screenshot: 9-slice. Unity's rounded UI sprites are
+authored as Sliced and look smeared under a whole-texture stretch. The
+sprite's border rides the image record's unused text bytes (four f32,
+L T R B -- sliders already overload those bytes, so an image that is
+ALSO a slider background keeps value/maxW and loses its border), and
+the overlay draws up to nine patches in one packed GIF with clamp on.
+Borders map 1:1 to framebuffer pixels like every other canvas
+measurement (deviation 30). A byte-order test pins the packing against
+the renderer's memcpy order. Scenes exported before this change carry
+zero borders and simply keep the old stretch until re-exported.
+
+Also from the same screenshot: the bind callback now reports texture
+dimensions and can refuse. textured_rect had been told every texture
+was 256x256 -- a 32 px sprite tiled eight times across its rect (the
+"row of blobs") -- and a bind of a non-resident index silently drew
+with whatever texture was bound last. And the font atlas upload inside
+init_ui ran with no frame open, so the upload died in a stale packet
+and every glyph sampled uninitialised VRAM; init_ui now frames its own
+upload. Each of these four defects was invisible until a REAL canvas
+with REAL art hit the screen -- the acceptance run keeps out-earning
+the layer tests.

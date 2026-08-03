@@ -57,6 +57,18 @@ public:
                        int32_t h, uint32_t tex_w, uint32_t tex_h, uint8_t r,
                        uint8_t g, uint8_t b, uint8_t a);
 
+    // The 9-slice version (uGUI Image.Type.Sliced): corners keep their
+    // authored pixel size, edges stretch along one axis, the centre
+    // stretches both. Borders are in SOURCE pixels (Unity sprite.border)
+    // and map 1:1 to screen pixels, the same 1:1 the canvas bake uses
+    // (deviation 30). Borders that do not fit are scaled down pairwise,
+    // which is what Unity does when a sliced image shrinks.
+    void textured_rect_sliced(GsDevice& device, int32_t x, int32_t y,
+                              int32_t w, int32_t h, uint32_t tex_w,
+                              uint32_t tex_h, float border_l, float border_t,
+                              float border_r, float border_b, uint8_t r,
+                              uint8_t g, uint8_t b, uint8_t a);
+
     void fill_rect(GsDevice& device, int32_t x, int32_t y, int32_t w,
                    int32_t h, uint8_t r, uint8_t g, uint8_t b,
                    uint8_t a = 0x80);

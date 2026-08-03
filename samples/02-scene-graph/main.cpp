@@ -66,12 +66,15 @@ struct OverlayContext {
     scene::RenderStats stats;
 };
 
-void bind_texture(void* user, uint32_t index)
+bool bind_texture(void* user, uint32_t index, uint32_t* out_w, uint32_t* out_h)
 {
     BindContext* ctx = static_cast<BindContext*>(user);
     GpuTexture& t = ctx->textures[index];
     ctx->device->set_texture_indexed(t.tex, t.w, t.h, gfx::PixelFormat::PSMT8,
                                      t.clut, 256);
+    *out_w = t.w;
+    *out_h = t.h;
+    return true;
 }
 
 void draw_overlay(void* user)

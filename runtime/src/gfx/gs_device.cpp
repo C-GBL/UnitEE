@@ -359,9 +359,15 @@ void GsDevice::set_texture(const VramAlloc& tex, uint32_t w, uint32_t h, PixelFo
     m_packet.begin_packed_ad(3);
     // MODULATE so vertex colour still lights the texel, which is what the
     // fixed material model in plan section 7.3 expects of Unlit/VertexLit.
+    // TCC=1: the texture SUPPLIES alpha (At x Af). It was 0 from M2 until
+    // the first real Canvas, which made every texture's alpha invisible --
+    // font glyphs drew their transparent cells as black, sprites drew
+    // their dead corners -- and the debug overlays hid it for six
+    // milestones by putting white text on dark panels (verify-log M12.5).
     m_packet.add_ad(GsReg::TEX0_1,
                     gs_tex0(tex.block(), buffer_width_units(w), fmt, log2_pot(w),
-                            log2_pot(h), false, /*MODULATE*/ 0, 0, 0, 0, 0, 0));
+                            log2_pot(h), /*TCC*/ true, /*MODULATE*/ 0, 0, 0, 0,
+                            0, 0));
     m_packet.add_ad(GsReg::TEX1_1, gs_tex1_nearest());
     m_packet.add_ad(GsReg::TEXA, gs_texa(0x80, false, 0x80));
 }
@@ -396,9 +402,11 @@ void GsDevice::set_texture_indexed(const VramAlloc& tex, uint32_t w, uint32_t h,
     // CLD=1 loads the CLUT from CBP into the GS's palette cache on this draw.
     // CSM=0 is CSM1 (the mode whose 32-entry block shuffle the exporter must
     // pre-apply); CPSM=PSMCT32; CSA=0 (no entry offset).
+    // TCC=1: alpha comes from the CLUT entry (the exporter bakes it in the
+    // PS2 0..0x80 range), not the vertex -- see set_texture above.
     m_packet.add_ad(GsReg::TEX0_1,
                     gs_tex0(tex.block(), buffer_width_units(w), fmt, log2_pot(w),
-                            log2_pot(h), false, /*MODULATE*/ 0,
+                            log2_pot(h), /*TCC*/ true, /*MODULATE*/ 0,
                             clut.block(), static_cast<uint32_t>(PixelFormat::PSMCT32) & 0xFu,
                             /*CSM1*/ 0, /*CSA*/ 0, /*CLD=load*/ 1));
     m_packet.add_ad(GsReg::TEX1_1, gs_tex1_nearest());

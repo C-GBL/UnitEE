@@ -208,9 +208,13 @@ UIElement (M12.5 task 5, 84B) {
                    u32 texture;              // TEX index; -1 untextured
                    i32 link;                 // slider: fill element index
                    u32 text_scale;           // baked-font integer scale
-                   u8  text[48] }            // NUL text; for a slider these
-                                             // carry f32 value, f32 max fill
-                                             // width instead
+                   u8  text[48] }            // NUL text. Overloads: a slider
+                                             // (role 2) carries f32 value,
+                                             // f32 max fill width; an image
+                                             // (draw kind 1, role != 2)
+                                             // carries its 9-slice borders
+                                             // as f32 left, top, right,
+                                             // bottom (zeros = stretch)
 ```
 
 Readers accept the 12-byte camera and default the M8 tail (old runtimes

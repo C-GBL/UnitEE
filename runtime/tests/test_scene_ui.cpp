@@ -248,6 +248,33 @@ TEST(SceneUI, ASliderCarriesItsValueAndFillWidthInTheTextBytes)
     EXPECT_FLOAT_EQ(max_w, 118.0f);
 }
 
+TEST(SceneUI, AnImageCarriesItsNineSliceBordersInTheTextBytes)
+{
+    // The renderer reads these with memcpy in L, T, R, B order; a drift
+    // between the exporter's packing and this order draws corners from the
+    // wrong side of the sprite.
+    UISpec image;
+    image.kind_role = 1u; // draw image, managed Image, no role
+    image.texture = 0;
+    std::memset(image.text, 0, sizeof(image.text));
+    const float borders[4] = {6.0f, 7.0f, 8.0f, 9.0f}; // L, T, R, B
+    std::memcpy(image.text, borders, 16);
+
+    const std::vector<uint8_t> bytes = wrap_scene(build_scene(1, {image}));
+    io::P2bFile file;
+    ASSERT_TRUE(file.parse(bytes.data(), static_cast<uint32_t>(bytes.size())));
+    static World world;
+    ASSERT_TRUE(world.load(file)) << world.error();
+
+    const UIElement& ui = world.ui_element(0);
+    float out[4];
+    std::memcpy(out, ui.text, 16);
+    EXPECT_FLOAT_EQ(out[0], 6.0f);
+    EXPECT_FLOAT_EQ(out[1], 7.0f);
+    EXPECT_FLOAT_EQ(out[2], 8.0f);
+    EXPECT_FLOAT_EQ(out[3], 9.0f);
+}
+
 TEST(SceneUI, AZeroTextScaleIsClampedToOne)
 {
     UISpec e;

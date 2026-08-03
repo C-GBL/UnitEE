@@ -200,9 +200,12 @@ void DebugOverlay::textured_rect(GsDevice& device, int32_t x, int32_t y,
         return;
     }
     GsPacket& packet = device.packet();
-    packet.begin_packed_ad(3);
+    packet.begin_packed_ad(4);
     packet.add_ad(GsReg::TEST_1, gs_test(false, 0, 0, 0, false, 0, false, 1));
     packet.add_ad(GsReg::ALPHA_1, gs_alpha(0, 1, 0, 1));
+    // WMS=WMT=CLAMP: UI art never tiles, and the exact-fit UVs below must
+    // not bleed the opposite edge in when filtering.
+    packet.add_ad(GsReg::CLAMP_1, 5);
     packet.add_ad(GsReg::PRMODECONT, 1);
 
     const uint64_t prim = gs_prim(GsPrim::Sprite, false, /*textured=*/true,
@@ -217,8 +220,112 @@ void DebugOverlay::textured_rect(GsDevice& device, int32_t x, int32_t y,
     packet.add_qword(gs_packed_uv(tex_w << 4, tex_h << 4));
     packet.add_qword(gs_packed_xyz(gs_coord(x + w), gs_coord(y + h), 0));
 
-    // Restore the depth test for whatever draws next.
-    packet.begin_packed_ad(1);
+    // Restore the depth test and REPEAT wrapping for whatever draws next.
+    packet.begin_packed_ad(2);
+    packet.add_ad(GsReg::CLAMP_1, 0);
+    packet.add_ad(GsReg::TEST_1, gs_test(false, 0, 0, 0, false, 0, true, 2));
+}
+
+void DebugOverlay::textured_rect_sliced(GsDevice& device, int32_t x, int32_t y,
+                                        int32_t w, int32_t h, uint32_t tex_w,
+                                        uint32_t tex_h, float border_l,
+                                        float border_t, float border_r,
+                                        float border_b, uint8_t r, uint8_t g,
+                                        uint8_t b, uint8_t a)
+{
+    if (!m_initialized || w <= 0 || h <= 0 || tex_w == 0 || tex_h == 0) {
+        return;
+    }
+
+    // Borders in source pixels; clamp each axis pair so they fit both the
+    // texture and the destination (Unity shrinks them pairwise too).
+    float bl = border_l < 0.0f ? 0.0f : border_l;
+    float bt = border_t < 0.0f ? 0.0f : border_t;
+    float br = border_r < 0.0f ? 0.0f : border_r;
+    float bb = border_b < 0.0f ? 0.0f : border_b;
+    const float fw = static_cast<float>(w);
+    const float fh = static_cast<float>(h);
+    const float tw = static_cast<float>(tex_w);
+    const float th = static_cast<float>(tex_h);
+    if (bl + br > tw) {
+        const float s = tw / (bl + br);
+        bl *= s;
+        br *= s;
+    }
+    if (bt + bb > th) {
+        const float s = th / (bt + bb);
+        bt *= s;
+        bb *= s;
+    }
+    if (bl + br > fw) {
+        const float s = fw / (bl + br);
+        bl *= s;
+        br *= s;
+    }
+    if (bt + bb > fh) {
+        const float s = fh / (bt + bb);
+        bt *= s;
+        bb *= s;
+    }
+
+    // Column and row edges, destination in whole pixels, source in texels.
+    const int32_t dx[4] = {x, x + static_cast<int32_t>(bl),
+                           x + w - static_cast<int32_t>(br), x + w};
+    const int32_t dy[4] = {y, y + static_cast<int32_t>(bt),
+                           y + h - static_cast<int32_t>(bb), y + h};
+    const float sx[4] = {0.0f, bl, tw - br, tw};
+    const float sy[4] = {0.0f, bt, th - bb, th};
+
+    // Count non-degenerate patches first: the GIF tag must promise exactly
+    // the vertex count that follows.
+    uint32_t patches = 0;
+    for (int py = 0; py < 3; ++py) {
+        for (int px = 0; px < 3; ++px) {
+            if (dx[px + 1] > dx[px] && dy[py + 1] > dy[py]) {
+                ++patches;
+            }
+        }
+    }
+    if (patches == 0) {
+        return;
+    }
+
+    GsPacket& packet = device.packet();
+    packet.begin_packed_ad(4);
+    packet.add_ad(GsReg::TEST_1, gs_test(false, 0, 0, 0, false, 0, false, 1));
+    packet.add_ad(GsReg::ALPHA_1, gs_alpha(0, 1, 0, 1));
+    packet.add_ad(GsReg::CLAMP_1, 5); // WMS=WMT=CLAMP, like textured_rect
+    packet.add_ad(GsReg::PRMODECONT, 1);
+
+    const uint64_t prim = gs_prim(GsPrim::Sprite, false, /*textured=*/true,
+                                  false, /*blend=*/true, false, /*FST*/ true,
+                                  0, false);
+    packet.begin_packed(patches * 2u, 3,
+                        gs_reglist(GsReg::RGBAQ, GsReg::UV, GsReg::XYZ2),
+                        false, true, prim);
+    for (int py = 0; py < 3; ++py) {
+        for (int px = 0; px < 3; ++px) {
+            if (dx[px + 1] <= dx[px] || dy[py + 1] <= dy[py]) {
+                continue;
+            }
+            const uint32_t u0 = static_cast<uint32_t>(sx[px] * 16.0f);
+            const uint32_t v0 = static_cast<uint32_t>(sy[py] * 16.0f);
+            const uint32_t u1 = static_cast<uint32_t>(sx[px + 1] * 16.0f);
+            const uint32_t v1 = static_cast<uint32_t>(sy[py + 1] * 16.0f);
+            packet.add_qword(gs_packed_rgbaq(r, g, b, a));
+            packet.add_qword(gs_packed_uv(u0, v0));
+            packet.add_qword(
+                gs_packed_xyz(gs_coord(dx[px]), gs_coord(dy[py]), 0));
+            packet.add_qword(gs_packed_rgbaq(r, g, b, a));
+            packet.add_qword(gs_packed_uv(u1, v1));
+            packet.add_qword(
+                gs_packed_xyz(gs_coord(dx[px + 1]), gs_coord(dy[py + 1]), 0));
+        }
+    }
+
+    // Restore the depth test and REPEAT wrapping for whatever draws next.
+    packet.begin_packed_ad(2);
+    packet.add_ad(GsReg::CLAMP_1, 0);
     packet.add_ad(GsReg::TEST_1, gs_test(false, 0, 0, 0, false, 0, true, 2));
 }
 

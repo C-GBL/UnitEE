@@ -3,6 +3,8 @@
 #include "ps2ur/gs_batch.h"
 #include "ps2ur/log.h"
 
+#include <cstring>
+
 namespace ps2ur {
 namespace scene {
 
@@ -76,7 +78,14 @@ inline gfx::Qword qword4f(float x, float y, float z, float w)
 
 bool SceneRenderer::init_ui(gfx::GsDevice& device)
 {
+    // Call BETWEEN frames. The font atlas upload is GS packet data, and
+    // packet writes only reach VRAM inside a kicked frame -- framing the
+    // upload here removes the trap. The first real Canvas hit it: init_ui
+    // ran with no frame open, the upload died in a stale buffer, and every
+    // glyph sampled whatever the atlas address happened to hold.
+    device.begin_frame();
     m_ui_ready = m_ui_overlay.init(device);
+    device.end_frame(/*flip=*/false);
     return m_ui_ready;
 }
 
@@ -202,7 +211,6 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
 
     for (uint32_t i = 0; i < m_queue.count(); ++i) {
         const gfx::DrawCommand& cmd = m_queue.command(i);
-        const Entity& ent = world.entity(cmd.entity);
         const LoadedMesh& mesh = world.mesh(cmd.mesh);
         const LoadedMaterial& mat = world.material(cmd.material);
         const uint32_t tex1 =
@@ -225,7 +233,8 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
             device.set_material_state(mat.gs_test, mat.gs_alpha, mat.blend,
                                       mat.zwrite);
             if (tex1 != 0u && bind_texture != nullptr) {
-                bind_texture(bind_user, mat.texture_index);
+                uint32_t tw = 0, th = 0;
+                bind_texture(bind_user, mat.texture_index, &tw, &th);
             }
             device.flush_packet();
             current_group = group;
@@ -358,7 +367,8 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
             const LoadedMaterial& sm =
                 world.material(static_cast<uint32_t>(skin_mat));
             if (sm.texture_index != 0xFFFFFFFFu) {
-                bind_texture(bind_user, sm.texture_index);
+                uint32_t tw = 0, th = 0;
+                bind_texture(bind_user, sm.texture_index, &tw, &th);
             }
         }
         const uint32_t skin_program =
@@ -458,10 +468,11 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
             const bool world_space = (emitter.flags & 8u) != 0u;
             const Mat4& model =
                 world.world_matrix(static_cast<uint32_t>(emitter.entity));
-            const bool textured =
+            bool textured =
                 emitter.texture != 0xFFFFFFFFu && bind_texture != nullptr;
             if (textured) {
-                bind_texture(bind_user, emitter.texture);
+                uint32_t tw = 0, th = 0;
+                textured = bind_texture(bind_user, emitter.texture, &tw, &th);
             }
             // Transparent-pass state: Z test on through the default TEST,
             // no Z write, blend on. 0x44 = (Cs-Cd)*As+Cd, 0x48 = Cs*As+Cd.
@@ -602,21 +613,40 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
             // class (Image/RawImage/Text) for the bridge, so an unmasked
             // switch would send Text (0x202) to the default rect case.
             switch (ui.kind & 0xFFu) {
-                case 1: // image
-                    if (ui.texture != 0xFFFFFFFFu && bind_texture != nullptr) {
-                        bind_texture(bind_user, ui.texture);
-                        // The bind callback cannot say the texture's size;
-                        // 256x256 is the profile ceiling and UV clamps make
-                        // smaller textures stretch correctly via their own
-                        // TEX0 dimensions -- the bind sets those.
-                        m_ui_overlay.textured_rect(device, x, y, w, h, 256,
-                                                   256, r, g, b, a);
+                case 1: { // image
+                    // The UV span must be the texture's REAL size: a 256
+                    // guess over a 32px sprite tiles it eight times (the
+                    // first Canvas drew a row of blobs; verify-log M12.5).
+                    uint32_t tw = 0, th = 0;
+                    if (ui.texture != 0xFFFFFFFFu && bind_texture != nullptr &&
+                        bind_texture(bind_user, ui.texture, &tw, &th) &&
+                        tw > 0 && th > 0) {
+                        // Image records carry the sprite's 9-slice borders
+                        // as four f32s in the text bytes (L, T, R, B; zeros
+                        // for Image.Type.Simple). Corners keep their pixel
+                        // size instead of stretching -- rounded UI sprites
+                        // look broken without this.
+                        float bl, bt, br2, bb;
+                        memcpy(&bl, ui.text + 0, 4);
+                        memcpy(&bt, ui.text + 4, 4);
+                        memcpy(&br2, ui.text + 8, 4);
+                        memcpy(&bb, ui.text + 12, 4);
+                        if (bl > 0.0f || bt > 0.0f || br2 > 0.0f ||
+                            bb > 0.0f) {
+                            m_ui_overlay.textured_rect_sliced(
+                                device, x, y, w, h, tw, th, bl, bt, br2, bb,
+                                r, g, b, a);
+                        } else {
+                            m_ui_overlay.textured_rect(device, x, y, w, h, tw,
+                                                       th, r, g, b, a);
+                        }
                         break;
                     }
-                    // An image with no texture is Unity's white sprite: a
-                    // tinted rect.
+                    // An image with no texture is Unity's white sprite, and
+                    // a FAILED bind falls back the same way: a tinted rect.
                     m_ui_overlay.fill_rect(device, x, y, w, h, r, g, b, a);
                     break;
+                }
                 case 2: // text
                     m_ui_overlay.set_colour(r, g, b);
                     m_ui_overlay.set_scale(ui.text_scale);
