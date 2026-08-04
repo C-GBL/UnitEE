@@ -512,6 +512,18 @@ bool instantiate_managed(scene::World& world, const RuntimeMethods& rm,
                static_cast<unsigned>(world.rigidbody_count()));
     }
 
+    // The breadcrumb for a dropped character. The exporter says exactly WHY
+    // a renderer was dropped -- in the Unity console, which is not where
+    // anyone looks when the screen is empty. Point from the log they DO
+    // watch to the one with the answer.
+    if (world.animator_ref_count() > 0 && world.mesh_count() == 0 &&
+        world.skinned_renderer_count() == 0) {
+        printf("[game] the scene has an Animator but NOTHING to draw: every "
+               "renderer was dropped at export. The Unity console's [PS2] "
+               "warnings say why, one per renderer (a downloaded model "
+               "usually needs Read/Write enabled in its import settings).\n");
+    }
+
     for (uint32_t s = from.scripts; s < world.script_count(); ++s) {
         const scene::ScriptRef& script = world.script(s);
         Il2CppString* type_name = il2cpp_string_new(script.type_name);
