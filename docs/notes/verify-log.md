@@ -1041,3 +1041,24 @@ humanoid clip's sampled rotations keep >=90% of bones at the bind
 pose, with the remedy in the message (restart the Editor or reimport
 the character). The clean-session export is warning-free and
 unchanged: 19 posed tracks, bit-for-bit healthy.
+
+FOLLOW-UP, same day: Rebind() was NOT enough. The user's next clean
+rebuild ran the fixed exporter -- the guard fired twice in their
+Editor.log ("60 of 64 bones never leave the BIND pose"), proving the
+new code executed -- and still produced a bit-identical frozen
+container. Two lessons. (1) A warning in a build log is not a defense;
+the user never saw it, twice. (2) The staleness survives Rebind, so it
+lives in the imported avatar/clip objects, not the Animator's binding
+table. The exporter now repairs the session itself: it stops any
+active Animation/Timeline preview before sampling (AnimationMode pins
+bound transforms at the preview pose -- exactly the partial-freeze
+signature, and Rebind cannot clear it), and when the guard still
+trips it force-reimports the avatar and clip assets synchronously,
+re-resolves, rebinds and resamples, reporting "recovered" or, only if
+that too fails, the restart-the-Editor warning. Paths whose reimport
+did not help are blacklisted for the session so a 6-clip export does
+not pay six futile imports. Heal mechanics verified in a live editor
+by dropping FreezeThresholdPercent to 0 via a probe: every clip took
+the reimport path (character + 6 clip FBXs reimported mid-export,
+once each) and the container still decoded healthy, byte-equal to the
+normal path (WAIT00: 19 rotation tracks posed off bind).

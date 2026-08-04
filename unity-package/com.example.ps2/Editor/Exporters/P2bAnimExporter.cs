@@ -182,6 +182,23 @@ namespace Ps2.Editor
                                         List<string> warnings = null)
         {
             int sampleCount = Mathf.Max(2, Mathf.RoundToInt(clip.length * sampleRate) + 1);
+            // An active Animation window / Timeline preview (AnimationMode)
+            // pins every previewed transform at the PREVIEW pose: the bake
+            // graph writes a sample and the pin writes it straight back, so
+            // bones read back frozen -- and Rebind cannot clear it, only
+            // stopping the preview can. A build is allowed to.
+            if (UnityEditor.AnimationMode.InAnimationMode())
+            {
+                UnityEditor.AnimationMode.StopAnimationMode();
+                if (warnings != null)
+                {
+                    warnings.Add(
+                        "an Animation window / Timeline preview was active; " +
+                        "the exporter stopped it (an active preview pins " +
+                        "bones at the preview pose and corrupts clip " +
+                        "sampling).");
+                }
+            }
             // The scene pose IS the bind pose when clips are exported (the
             // rig exporter requires it); captured before sampling moves
             // anything, it is the reference the partial-freeze guard below
@@ -215,9 +232,6 @@ namespace Ps2.Editor
             Animator animator = root.GetComponent<Animator>();
             bool viaGraph = animator != null && animator.isHuman &&
                             clip.isHumanMotion;
-            PlayableGraph graph = default;
-            AnimationClipPlayable playable = default;
-            bool wasLegacy = clip.legacy;
             // The graph writes its pose THROUGH the Animator, and the
             // Animator honours its culling mode even for a manual Evaluate.
             // A headless build renders nothing, so with Cull Update
@@ -240,68 +254,75 @@ namespace Ps2.Editor
                 // and makes sampling immune to session history.
                 animator.Rebind();
             }
-            if (viaGraph)
+            SampleTracks(clip, root, ordered, restRef, animator, viaGraph,
+                         sampleCount, tracks);
+
+            // The partial-freeze signature: most rotation tracks pinned at
+            // the bind pose for the whole clip. Rebind alone has been seen
+            // NOT to cure it -- a session can hold the freeze in the
+            // imported avatar/clip objects themselves -- so when it shows
+            // up the exporter repairs the session the way a human would,
+            // with a forced synchronous reimport of the assets involved,
+            // and samples again, instead of shipping a frozen character
+            // under a warning nobody reads.
+            bool frozen = viaGraph && ordered.Length > 0 &&
+                          clip.length > 0.05f &&
+                          CountRotationTracksAtBind(tracks, bindRot,
+                                                    sampleCount) * 100 >=
+                              ordered.Length * FreezeThresholdPercent;
+            bool healed = false;
+            if (frozen)
             {
-                graph = PlayableGraph.Create("ps2-clip-bake");
-                graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
-                var output = AnimationPlayableOutput.Create(graph, "bake", animator);
-                playable = AnimationClipPlayable.Create(graph, clip);
-                // Raw motion: IK would re-solve feet against nothing and
-                // bend what the clip actually says.
-                playable.SetApplyFootIK(false);
-                playable.SetApplyPlayableIK(false);
-                output.SetSourcePlayable(playable);
-            }
-            else
-            {
-                clip.legacy = true; // SampleAnimation needs it outside play mode
-            }
-            for (int s = 0; s < sampleCount; s++)
-            {
-                float t = clip.length * s / (sampleCount - 1);
-                if (viaGraph)
+                string clipPath = UnityEditor.AssetDatabase.GetAssetPath(clip);
+                string clipName = clip.name;
+                string avatarPath = animator.avatar != null
+                    ? UnityEditor.AssetDatabase.GetAssetPath(animator.avatar)
+                    : null;
+                var paths = new List<string>();
+                if (!string.IsNullOrEmpty(avatarPath)) paths.Add(avatarPath);
+                if (!string.IsNullOrEmpty(clipPath) && clipPath != avatarPath)
                 {
-                    playable.SetTime(t);
-                    graph.Evaluate(0f);
+                    paths.Add(clipPath);
                 }
-                else
+                bool attempted = false;
+                foreach (string p in paths)
                 {
-                    clip.SampleAnimation(root, t);
+                    if (s_healFailed.Contains(p)) continue;
+                    UnityEditor.AssetDatabase.ImportAsset(
+                        p, UnityEditor.ImportAssetOptions.ForceUpdate |
+                           UnityEditor.ImportAssetOptions.ForceSynchronousImport);
+                    attempted = true;
                 }
-                for (int i = 0; i < ordered.Length; i++)
+                if (attempted)
                 {
-                    // Keys in the SAME space as the rest pose: relative to
-                    // the runtime parent (nearest bone ancestor, or the
-                    // Animator for roots). A hips track sampled as a raw
-                    // Unity local is relative to the ARMATURE node, and
-                    // playback through a chain that folded the armature
-                    // away would re-apply the wrong space every frame.
-                    Transform refT = restRef != null ? restRef[i] : null;
-                    if (refT != null)
+                    if (clip == null && !string.IsNullOrEmpty(clipPath))
                     {
-                        Matrix4x4 rel = refT.worldToLocalMatrix *
-                                        ordered[i].localToWorldMatrix;
-                        Decompose(rel, out Vector3 kp, out Quaternion kr,
-                                  out Vector3 ks);
-                        tracks[i].Position[s] = kp;
-                        tracks[i].Rotation[s] = kr;
-                        tracks[i].Scale[s] = ks;
+                        // The reimport replaced the native clip object.
+                        foreach (UnityEngine.Object o in UnityEditor
+                                     .AssetDatabase.LoadAllAssetsAtPath(clipPath))
+                        {
+                            if (o is AnimationClip c && c.name == clipName)
+                            {
+                                clip = c;
+                                break;
+                            }
+                        }
                     }
-                    else
+                    if (clip != null)
                     {
-                        tracks[i].Position[s] = ordered[i].localPosition;
-                        tracks[i].Rotation[s] = ordered[i].localRotation;
-                        tracks[i].Scale[s] = ordered[i].localScale;
+                        animator.Rebind();
+                        SampleTracks(clip, root, ordered, restRef, animator,
+                                     viaGraph, sampleCount, tracks);
+                        frozen = CountRotationTracksAtBind(tracks, bindRot,
+                                                           sampleCount) * 100 >=
+                                 ordered.Length * FreezeThresholdPercent;
+                        healed = !frozen;
+                    }
+                    if (!healed)
+                    {
+                        foreach (string p in paths) s_healFailed.Add(p);
                     }
                 }
-            }
-            if (viaGraph)
-            {
-                graph.Destroy();
-            }
-            else
-            {
-                clip.legacy = wasLegacy;
             }
             if (animator != null)
             {
@@ -313,39 +334,19 @@ namespace Ps2.Editor
             // deliberate pose clip and a defect for everything else, and
             // the difference is invisible in the container -- so say it
             // here, where the clip still has a name.
-            //
-            // The PARTIAL form is sneakier and shipped once: a humanoid
-            // clip sampled through a stale Animator poses a few bones and
-            // leaves the rest AT THE BIND POSE -- arms straight out, walk
-            // in the legs. Detected by counting rotation tracks whose
-            // whole sampled range stays at the rest rotation: a real
-            // humanoid clip poses most mapped bones off bind.
             if (warnings != null && clip.length > 0.05f)
             {
                 bool moved = false;
-                int rotAtRest = 0;
-                int rotTracks = 0;
-                for (int i = 0; i < ordered.Length; i++)
+                for (int i = 0; i < ordered.Length && !moved; i++)
                 {
-                    bool thisMoved = false;
-                    for (int s = 1; s < sampleCount && !thisMoved; s++)
+                    for (int s = 1; s < sampleCount && !moved; s++)
                     {
-                        thisMoved =
+                        moved =
                             (tracks[i].Position[s] - tracks[i].Position[0])
                                 .sqrMagnitude > 1e-10f ||
                             Quaternion.Dot(tracks[i].Rotation[s],
                                            tracks[i].Rotation[0]) < 0.999999f;
                     }
-                    moved |= thisMoved;
-
-                    rotTracks++;
-                    bool atRest = true;
-                    for (int s = 0; s < sampleCount && atRest; s++)
-                    {
-                        atRest = Mathf.Abs(Quaternion.Dot(tracks[i].Rotation[s],
-                                                          bindRot[i])) > 0.995f;
-                    }
-                    if (atRest) rotAtRest++;
                 }
                 if (!moved)
                 {
@@ -355,16 +356,24 @@ namespace Ps2.Editor
                         "Mode, the export sampler could not drive this rig " +
                         "(check the Animator's avatar and culling mode).");
                 }
-                else if (viaGraph && rotTracks > 0 &&
-                         rotAtRest * 100 >= rotTracks * 90)
+                else if (healed)
                 {
                     warnings.Add(
-                        $"clip '{clip.name}': {rotAtRest} of {rotTracks} bones " +
-                        "never leave the BIND pose over the whole clip -- the " +
-                        "character will play half frozen (arms out). This is " +
-                        "an Editor-session state, not an asset problem: " +
-                        "restart the Unity Editor (or reimport the character) " +
-                        "and rebuild.");
+                        $"clip '{clip.name}': the Editor session had gone " +
+                        "stale and sampled most bones at the BIND pose; the " +
+                        "exporter force-reimported the character and " +
+                        "recovered the motion. Nothing to do.");
+                }
+                else if (frozen)
+                {
+                    warnings.Add(
+                        $"clip '{clip.name}': " +
+                        $"{CountRotationTracksAtBind(tracks, bindRot, sampleCount)} " +
+                        $"of {ordered.Length} bones never leave the BIND pose " +
+                        "over the whole clip, even after a forced reimport of " +
+                        "the character -- it will play half frozen (arms " +
+                        "out). This is Editor-session state, not an asset " +
+                        "problem: restart the Unity Editor and rebuild.");
                 }
             }
 
@@ -443,6 +452,119 @@ namespace Ps2.Editor
             b.Bytes(keyStream.ToArray());
             return b.ToArray();
         }
+
+        // One full sampling pass over the fixed grid. The graph and playable
+        // live entirely inside it, so a caller that has just repaired the
+        // Editor session (reimport, rebind) gets a genuinely fresh pass, not
+        // a re-evaluation through stale playable state.
+        private static void SampleTracks(AnimationClip clip, GameObject root,
+                                         Transform[] ordered,
+                                         Transform[] restRef,
+                                         Animator animator, bool viaGraph,
+                                         int sampleCount, SampledTrack[] tracks)
+        {
+            PlayableGraph graph = default;
+            AnimationClipPlayable playable = default;
+            bool wasLegacy = clip.legacy;
+            if (viaGraph)
+            {
+                graph = PlayableGraph.Create("ps2-clip-bake");
+                graph.SetTimeUpdateMode(DirectorUpdateMode.Manual);
+                var output = AnimationPlayableOutput.Create(graph, "bake", animator);
+                playable = AnimationClipPlayable.Create(graph, clip);
+                // Raw motion: IK would re-solve feet against nothing and
+                // bend what the clip actually says.
+                playable.SetApplyFootIK(false);
+                playable.SetApplyPlayableIK(false);
+                output.SetSourcePlayable(playable);
+            }
+            else
+            {
+                clip.legacy = true; // SampleAnimation needs it outside play mode
+            }
+            for (int s = 0; s < sampleCount; s++)
+            {
+                float t = clip.length * s / (sampleCount - 1);
+                if (viaGraph)
+                {
+                    playable.SetTime(t);
+                    graph.Evaluate(0f);
+                }
+                else
+                {
+                    clip.SampleAnimation(root, t);
+                }
+                for (int i = 0; i < ordered.Length; i++)
+                {
+                    // Keys in the SAME space as the rest pose: relative to
+                    // the runtime parent (nearest bone ancestor, or the
+                    // Animator for roots). A hips track sampled as a raw
+                    // Unity local is relative to the ARMATURE node, and
+                    // playback through a chain that folded the armature
+                    // away would re-apply the wrong space every frame.
+                    Transform refT = restRef != null ? restRef[i] : null;
+                    if (refT != null)
+                    {
+                        Matrix4x4 rel = refT.worldToLocalMatrix *
+                                        ordered[i].localToWorldMatrix;
+                        Decompose(rel, out Vector3 kp, out Quaternion kr,
+                                  out Vector3 ks);
+                        tracks[i].Position[s] = kp;
+                        tracks[i].Rotation[s] = kr;
+                        tracks[i].Scale[s] = ks;
+                    }
+                    else
+                    {
+                        tracks[i].Position[s] = ordered[i].localPosition;
+                        tracks[i].Rotation[s] = ordered[i].localRotation;
+                        tracks[i].Scale[s] = ordered[i].localScale;
+                    }
+                }
+            }
+            if (viaGraph)
+            {
+                graph.Destroy();
+            }
+            else
+            {
+                clip.legacy = wasLegacy;
+            }
+        }
+
+        // Rotation tracks whose whole sampled range stays at the bind
+        // rotation -- the partial-freeze signature. A real humanoid clip
+        // poses most mapped bones off bind; a stale session samples most of
+        // them AT it (arms straight out, motion only in the stragglers).
+        private static int CountRotationTracksAtBind(SampledTrack[] tracks,
+                                                     Quaternion[] bindRot,
+                                                     int sampleCount)
+        {
+            int atBind = 0;
+            for (int i = 0; i < tracks.Length; i++)
+            {
+                bool pinned = true;
+                for (int s = 0; s < sampleCount && pinned; s++)
+                {
+                    pinned = Mathf.Abs(Quaternion.Dot(tracks[i].Rotation[s],
+                                                      bindRot[i])) > 0.995f;
+                }
+                if (pinned) atBind++;
+            }
+            return atBind;
+        }
+
+        // Asset paths whose forced reimport did NOT clear a partial freeze
+        // this session: do not repeat a multi-second import per clip when it
+        // has been shown not to help. An Editor restart -- the remaining
+        // remedy -- clears statics too.
+        private static readonly HashSet<string> s_healFailed =
+            new HashSet<string>();
+
+        // Percent of rotation tracks pinned at bind before a clip counts as
+        // partially frozen. A field (not a literal) so a verification probe
+        // can drop it to 0 and drive the reimport-and-resample path in a
+        // session that is not actually stale.
+        internal static int FreezeThresholdPercent = 90;
 
         private static byte[] TrackRecord(int bone, int channel, int keyCount,
                                           int keyFirst, float quantScale)
