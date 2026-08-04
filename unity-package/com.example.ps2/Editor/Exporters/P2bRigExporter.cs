@@ -224,8 +224,15 @@ namespace Ps2.Editor
 
             var payload = new P2bSceneExporter.SkinPayload();
 
+            // The rig's runtime space: the entity the renderer records bind
+            // to, and the space every rest transform and clip key is
+            // exported in. One skeleton means one reference; a scene with
+            // characters under DIFFERENT animators shares group 0's.
+            Transform reference = animator != null ? animator.transform
+                                : usable.Count > 0 ? usable[0].transform.root
+                                : hierarchyAnimator.transform;
             P2bAnimExporter.SkeletonExport skeleton = P2bAnimExporter.ExportSkeleton(
-                unionBones.ToArray(), unionBind.ToArray());
+                unionBones.ToArray(), unionBind.ToArray(), reference);
             payload.Skeleton = skeleton.Bytes;
 
             // The clips, and the controller that names them. A rig with an
@@ -268,8 +275,9 @@ namespace Ps2.Editor
                 {
                     payload.Clips.Add(P2bAnimExporter.ExportClip(
                         StaticPoseClip(), clipRoot, skeleton.Ordered,
-                        skeleton.Index, SampleRate, false, PositionTolerance,
-                        RotationDotTolerance, ScaleTolerance));
+                        skeleton.Index, skeleton.RestRef, SampleRate, false,
+                        PositionTolerance, RotationDotTolerance,
+                        ScaleTolerance));
                     clipLengths.Add(0.0f);
                     if (controller != null)
                     {
@@ -311,7 +319,9 @@ namespace Ps2.Editor
                     payload.SkinnedMeshes.Add(P2bAnimExporter.ExportSkinnedMesh(
                         smr.sharedMesh, 0, FallbackColour(smr),
                         skeleton.Ordered, skeleton.Index, smr.bones, 0,
-                        textured));
+                        textured,
+                        reference.worldToLocalMatrix *
+                            smr.transform.localToWorldMatrix));
                     payload.MeshTextures.Add(textured ? tex : null);
                     meshAt[smr.sharedMesh] = at;
                 }
@@ -329,6 +339,13 @@ namespace Ps2.Editor
                 {
                     group = groupAt.Count;
                     groupAt[key] = group;
+                    payload.GroupAnimators.Add(key);
+                    if (group > 0)
+                        warnings.Add(
+                            $"'{key.name}': a second animated character in " +
+                            "one scene shares the first one's skeleton " +
+                            "reference space; if their transforms differ, " +
+                            "this one may sit or scale wrong.");
                 }
                 payload.RendererGroup[smr] = group;
             }
@@ -454,8 +471,9 @@ namespace Ps2.Editor
                     ci = payload.Clips.Count;
                     payload.Clips.Add(P2bAnimExporter.ExportClip(
                         clip, clipRoot, skeleton.Ordered, skeleton.Index,
-                        SampleRate, clip.isLooping, PositionTolerance,
-                        RotationDotTolerance, ScaleTolerance));
+                        skeleton.RestRef, SampleRate, clip.isLooping,
+                        PositionTolerance, RotationDotTolerance,
+                        ScaleTolerance));
                     clipLengths.Add(clip.length);
                     clipIndex.Add(clip, ci);
                 }

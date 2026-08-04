@@ -46,6 +46,12 @@ namespace Ps2.Editor
             // hair, each cloth piece -- because that is how its materials are
             // assigned, so this is a list, not a single mesh.
             public List<byte[]> SkinnedMeshes = new List<byte[]>();
+            // Group index -> the transform whose ENTITY the group's renderer
+            // records bind to (the Animator, or the character root). The
+            // rest pose and every clip key are exported relative to it, so
+            // the runtime's palette-times-entity-world composition is exact
+            // whatever non-bone nodes the FBX parked in between.
+            public List<Transform> GroupAnimators = new List<Transform>();
             // The texture each SkinnedMeshes entry samples, or null for the
             // vertex-coloured 5-qword format. The scene exporter turns these
             // into TEX sections and MATL records and patches each mesh's
@@ -872,17 +878,32 @@ namespace Ps2.Editor
                     p.F32(e.Light.color.b * e.Light.intensity);
                     comps.Add((3, p.ToArray()));
                 }
-                if (e.Skinned != null)
+                // Skinned renderer records live on the entity the rig's rest
+                // pose and clips were exported RELATIVE TO -- the Animator's
+                // entity -- because the runtime multiplies the palette by
+                // that entity's world matrix. They used to sit on each
+                // SkinnedMeshRenderer node, and an FBX whose SMR nodes carry
+                // import scaling (x100 is routine) drew the character in the
+                // wrong space entirely: submitted every frame, every
+                // triangle behind the near plane (verify-log M12.5).
+                if (PendingSkin != null)
                 {
-                    var p = new ByteBuffer();
-                    int group;
-                    if (!PendingSkin.RendererGroup.TryGetValue(e.Skinned, out group))
-                        group = 0;
-                    p.U32((uint)PendingSkin.RendererMesh[e.Skinned]);
-                    p.U32(0xFFFFFFFF); // no material override
-                    p.U32((uint)group); // which character -> which animator
-                    p.U32(0);          // controller index
-                    comps.Add((5, p.ToArray()));
+                    for (int g = 0; g < PendingSkin.GroupAnimators.Count; g++)
+                    {
+                        if (PendingSkin.GroupAnimators[g] != e.Transform)
+                            continue;
+                        foreach (var kv in PendingSkin.RendererGroup)
+                        {
+                            if (kv.Value != g)
+                                continue;
+                            var p = new ByteBuffer();
+                            p.U32((uint)PendingSkin.RendererMesh[kv.Key]);
+                            p.U32(0xFFFFFFFF); // no material override
+                            p.U32((uint)g);    // which character -> animator
+                            p.U32(0);          // controller index
+                            comps.Add((5, p.ToArray()));
+                        }
+                    }
                 }
                 if (e.Animator != null && PendingSkin != null)
                 {

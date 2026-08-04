@@ -683,3 +683,41 @@ CONSTRUCTION (256 levels of white), so it is now encoded directly:
 index = coverage byte, CLUT = ramp, lossless with no quantiser in the
 path. The offline decoder earns a note: five minutes of reading the
 actual bytes replaced an afternoon of speculating about GS state.
+
+## The invisible skinned character: a space the samples never tested (M12.5, 2026-08-03)
+
+The user's imported PSX-style model exported cleanly (3 renderers, 64
+bones, 24 clips) and drew NOTHING -- while the frame stats said
+"skinned 3 in 56 batches, culled 0". Submitted every frame, zero
+pixels. Offline simulation of the full vertex path (SKEL rest chain x
+inverse binds x renderer entity world x camera, all decoded from the
+built container) showed the vertices landing at world Y ~80 and BEHIND
+the near plane: every triangle near-rejected inside VU1, which is the
+one failure mode that renders as a clean empty frame.
+
+Root cause: the runtime composes vertices as palette x renderer-entity
+world, where the palette comes from the SKEL rest/clip chain. That is
+Unity-equivalent ONLY if the rest chain's root space equals the bound
+entity's space. The exporter wrote raw Unity LOCALS for rest and keys
+and bound renderers to the SMR node entities -- and this FBX, like most
+real imports, parks scaled non-bone nodes between the Animator and the
+rig (a x100 unit-conversion node on the SMRs, a x12 armature). M9's
+procedural rigs had identity everywhere, so the substitution was
+silently exact for six milestones.
+
+Fix, all export-side (no runtime change, no new ELF): rest transforms
+and every clip key are exported relative to the bone's NEAREST BONE
+ANCESTOR (composing through non-bone gaps) with the ANIMATOR as the
+root reference; renderer records moved to the Animator's entity so the
+runtime multiplies by the transform the data is relative to; culling
+bounds mapped into the same space (a centimetre-authored mesh under a
+x100 node has 0.01-unit mesh bounds -- wrong in either direction).
+Root-bone clip keys matter as much as rests: hips tracks sampled as raw
+locals are armature-relative, and playback through the folded chain
+would re-apply the wrong space every frame.
+
+Diagnosis chain worth keeping: exporter drop (Read/Write) -> container
+decode (renderers present, entities x376) -> direct-boot variant ELF
+(bypasses the title screen for a headless SampleScene boot: stats said
+DRAWN) -> offline transform simulation (behind the near plane). Each
+step replaced a guess with a number.

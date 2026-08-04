@@ -79,7 +79,8 @@ namespace Ps2.Editor
             AnimationClip clipB = BuildCoilClip(bones, ClipBLength);
 
             P2bAnimExporter.SkeletonExport skeleton =
-                P2bAnimExporter.ExportSkeleton(smr.bones, smr.sharedMesh.bindposes);
+                P2bAnimExporter.ExportSkeleton(smr.bones, smr.sharedMesh.bindposes,
+                                               reference.transform);
 
             var payload = new P2bSceneExporter.SkinPayload
             {
@@ -114,10 +115,12 @@ namespace Ps2.Editor
                     new[] { "ToCoil", "ToWave" }),
             };
             payload.Clips.Add(P2bAnimExporter.ExportClip(
-                clipA, reference, skeleton.Ordered, skeleton.Index, 30.0f,
+                clipA, reference, skeleton.Ordered, skeleton.Index,
+                skeleton.RestRef, 30.0f,
                 /*loop=*/false, 0.0002f, 0.9999999f, 0.001f));
             payload.Clips.Add(P2bAnimExporter.ExportClip(
-                clipB, reference, skeleton.Ordered, skeleton.Index, 30.0f,
+                clipB, reference, skeleton.Ordered, skeleton.Index,
+                skeleton.RestRef, 30.0f,
                 /*loop=*/true, 0.0002f, 0.9999999f, 0.001f));
 
             payload.SkinnedMeshes.Add(P2bAnimExporter.ExportSkinnedMesh(
@@ -127,6 +130,7 @@ namespace Ps2.Editor
             // Group 0: the reference character, which check 1 compares against
             // the Unity-sampled golden through world.animator(0).
             payload.RendererGroup[smr] = 0;
+            payload.GroupAnimators.Add(reference.transform);
 
             // The golden trace, sampled from Unity itself.
             WriteGolden(golden, reference, skeleton.Ordered, clipA, clipB);
@@ -146,6 +150,7 @@ namespace Ps2.Editor
                 // one shared animator would make that test meaningless.
                 payload.RendererMesh[extraSmr] = 0;
                 payload.RendererGroup[extraSmr] = i + 1;
+                payload.GroupAnimators.Add(extra.transform);
             }
 
             // A material for the skinned kind (7): the classifier keys off

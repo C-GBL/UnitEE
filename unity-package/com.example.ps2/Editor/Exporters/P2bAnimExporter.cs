@@ -38,12 +38,34 @@ namespace Ps2.Editor
             public byte[] Bytes;
             public Transform[] Ordered;              // parent-before-child
             public Dictionary<Transform, int> Index; // bone -> new index
+            // The transform each bone's rest (and every clip key) is
+            // RELATIVE TO: its nearest bone ancestor, or the reference for
+            // roots. Never the raw Unity parent -- an FBX routinely parks
+            // scaled non-bone nodes (the armature) between the Animator and
+            // the rig, and raw locals silently drop them, which put a whole
+            // character behind the near plane (verify-log M12.5).
+            public Transform[] RestRef;
+        }
+
+        // Position/rotation/scale out of a TRS matrix. Exact for the
+        // uniform-ish scales rigs actually carry.
+        private static void Decompose(Matrix4x4 m, out Vector3 pos,
+                                      out Quaternion rot, out Vector3 scale)
+        {
+            pos = new Vector3(m.m03, m.m13, m.m23);
+            rot = m.rotation;
+            scale = m.lossyScale;
         }
 
         // ---- skeleton ------------------------------------------------------
 
+        // 'reference' is the space the whole rig lives in at runtime: the
+        // entity whose world matrix the renderer multiplies the palette by
+        // (the Animator's transform). Root bones are exported relative to
+        // it, composing THROUGH any non-bone nodes in between.
         public static SkeletonExport ExportSkeleton(Transform[] bones,
-                                                    Matrix4x4[] bindposes)
+                                                    Matrix4x4[] bindposes,
+                                                    Transform reference)
         {
             var known = new HashSet<Transform>(bones);
             var ordered = new List<Transform>(bones.Length);
@@ -77,6 +99,7 @@ namespace Ps2.Editor
                 index[ordered[i]] = i;
             }
 
+            var restRef = new Transform[ordered.Count];
             var b = new ByteBuffer();
             b.U32((uint)ordered.Count);
             b.U32(0);
@@ -95,22 +118,34 @@ namespace Ps2.Editor
                 {
                     b.F32(bind[m]);
                 }
-                b.F32(bone.localPosition.x);
-                b.F32(bone.localPosition.y);
-                b.F32(bone.localPosition.z);
-                b.F32(bone.localRotation.x);
-                b.F32(bone.localRotation.y);
-                b.F32(bone.localRotation.z);
-                b.F32(bone.localRotation.w);
-                b.F32(bone.localScale.x);
-                b.F32(bone.localScale.y);
-                b.F32(bone.localScale.z);
+                // Rest RELATIVE TO the runtime parent, not the Unity parent:
+                // they differ whenever a non-bone node (a scaled armature, a
+                // grouping null) sits between them, and its transform must
+                // fold in here or vanish from the character entirely.
+                Transform refT = parent != null ? parent : reference;
+                restRef[i] = refT;
+                Matrix4x4 rel = refT != null
+                    ? refT.worldToLocalMatrix * bone.localToWorldMatrix
+                    : bone.localToWorldMatrix;
+                Decompose(rel, out Vector3 rp, out Quaternion rr,
+                          out Vector3 rs);
+                b.F32(rp.x);
+                b.F32(rp.y);
+                b.F32(rp.z);
+                b.F32(rr.x);
+                b.F32(rr.y);
+                b.F32(rr.z);
+                b.F32(rr.w);
+                b.F32(rs.x);
+                b.F32(rs.y);
+                b.F32(rs.z);
             }
             return new SkeletonExport
             {
                 Bytes = b.ToArray(),
                 Ordered = ordered.ToArray(),
                 Index = index,
+                RestRef = restRef,
             };
         }
 
@@ -139,6 +174,7 @@ namespace Ps2.Editor
         public static byte[] ExportClip(AnimationClip clip, GameObject root,
                                         Transform[] ordered,
                                         Dictionary<Transform, int> index,
+                                        Transform[] restRef,
                                         float sampleRate, bool loop,
                                         float positionTolerance,
                                         float rotationDotTolerance,
@@ -199,9 +235,29 @@ namespace Ps2.Editor
                 }
                 for (int i = 0; i < ordered.Length; i++)
                 {
-                    tracks[i].Position[s] = ordered[i].localPosition;
-                    tracks[i].Rotation[s] = ordered[i].localRotation;
-                    tracks[i].Scale[s] = ordered[i].localScale;
+                    // Keys in the SAME space as the rest pose: relative to
+                    // the runtime parent (nearest bone ancestor, or the
+                    // Animator for roots). A hips track sampled as a raw
+                    // Unity local is relative to the ARMATURE node, and
+                    // playback through a chain that folded the armature
+                    // away would re-apply the wrong space every frame.
+                    Transform refT = restRef != null ? restRef[i] : null;
+                    if (refT != null)
+                    {
+                        Matrix4x4 rel = refT.worldToLocalMatrix *
+                                        ordered[i].localToWorldMatrix;
+                        Decompose(rel, out Vector3 kp, out Quaternion kr,
+                                  out Vector3 ks);
+                        tracks[i].Position[s] = kp;
+                        tracks[i].Rotation[s] = kr;
+                        tracks[i].Scale[s] = ks;
+                    }
+                    else
+                    {
+                        tracks[i].Position[s] = ordered[i].localPosition;
+                        tracks[i].Rotation[s] = ordered[i].localRotation;
+                        tracks[i].Scale[s] = ordered[i].localScale;
+                    }
                 }
             }
             if (viaGraph)
@@ -448,13 +504,19 @@ namespace Ps2.Editor
         // 'textured' selects the 6-qword vertex layout (a texcoord qword after
         // the weights) and the ST+RGBAQ+XYZ2 batch tags for vu_skin_tex. The
         // header's flags bit0 records the choice for the loader.
+        // 'boundsTransform' maps MESH space to the space the skinned verts
+        // land in at runtime (the Animator's space): the culling sphere must
+        // live where the character actually is, not at the raw mesh scale --
+        // an FBX authored in centimetres has 0.01-unit mesh bounds under a
+        // x100 node, and either mis-scale culls wrong.
         public static byte[] ExportSkinnedMesh(Mesh mesh, uint materialIndex,
                                                Color32 fallbackColour,
                                                Transform[] bones,
                                                Dictionary<Transform, int> boneIndex,
                                                Transform[] originalBones,
                                                int skeletonIndex,
-                                               bool textured = false)
+                                               bool textured = false,
+                                               Matrix4x4? boundsTransform = null)
         {
             Vector3[] positions = mesh.vertices;
             Vector3[] normals = mesh.normals;
@@ -558,10 +620,16 @@ namespace Ps2.Editor
             header.U32((uint)batches.Count);
             header.U32(materialIndex);
             Bounds bounds = mesh.bounds;
-            header.F32(bounds.center.x);
-            header.F32(bounds.center.y);
-            header.F32(bounds.center.z);
-            header.F32(bounds.extents.magnitude);
+            Matrix4x4 bt = boundsTransform ?? Matrix4x4.identity;
+            Vector3 bc = bt.MultiplyPoint3x4(bounds.center);
+            Vector3 bs = bt.lossyScale;
+            float bscale = Mathf.Max(Mathf.Abs(bs.x),
+                                     Mathf.Max(Mathf.Abs(bs.y),
+                                               Mathf.Abs(bs.z)));
+            header.F32(bc.x);
+            header.F32(bc.y);
+            header.F32(bc.z);
+            header.F32(bounds.extents.magnitude * bscale);
             header.U32((uint)skeletonIndex);
             header.U32(textured ? 1u : 0u); // flags: bit0 = 6-qword vertices
 
