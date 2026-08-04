@@ -97,3 +97,57 @@ TEST(ScaledRig, BoneWorldsMatchUnitysMeasuredMatrices)
     EXPECT_NEAR(column_scale(spine, 1), 12.25f, 0.25f);
     EXPECT_NEAR(column_scale(spine, 2), 12.25f, 0.25f);
 }
+
+// The character must MOVE. Two exporter-side freezes shipped T-posing
+// characters that every per-layer test passed (frozen clip keys; then a
+// runtime state-entry bug) -- this asserts the staged scene's animator
+// leaves its rest pose within a second of play, which catches the whole
+// class regardless of which layer freezes.
+TEST(ScaledRig, AnimatorLeavesTheRestPose)
+{
+    const std::string path = find_scene("SampleScene.p2b");
+    if (path.empty()) {
+        GTEST_SKIP() << "SampleScene.p2b not staged in build/";
+    }
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+    ASSERT_NE(f, nullptr);
+    std::fseek(f, 0, SEEK_END);
+    const long size = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    static std::vector<uint8_t> bytes;
+    bytes.resize(static_cast<size_t>(size));
+    ASSERT_EQ(std::fread(bytes.data(), 1, bytes.size(), f), bytes.size());
+    std::fclose(f);
+
+    io::P2bFile file;
+    ASSERT_TRUE(file.parse(bytes.data(), static_cast<uint32_t>(bytes.size())));
+    static World world;
+    ASSERT_TRUE(world.load(file)) << world.error();
+    if (world.skinned_renderer_count() == 0 || world.animator_count() == 0) {
+        GTEST_SKIP() << "staged scene has no animated character";
+    }
+
+    const anim::Animator& animator =
+        world.animator(world.skinned_renderer(0).animator);
+    ASSERT_TRUE(animator.valid());
+    const anim::Skeleton& skeleton = *animator.skeleton();
+
+    float max_dev = 0.0f;
+    for (int step = 0; step < 30; ++step) {
+        world.update_animators(1.0f / 30.0f);
+        for (uint32_t b = 0; b < skeleton.bone_count; ++b) {
+            const Quat rest = skeleton.bones[b].rest_rot;
+            const Quat posed = animator.pose().rot[b];
+            const float dot = std::fabs(rest.x * posed.x + rest.y * posed.y +
+                                        rest.z * posed.z + rest.w * posed.w);
+            const float dev = 1.0f - (dot > 1.0f ? 1.0f : dot);
+            if (dev > max_dev) {
+                max_dev = dev;
+            }
+        }
+    }
+    // A playing idle sways well past quantisation noise; a frozen character
+    // sits at exactly zero.
+    EXPECT_GT(max_dev, 1e-4f)
+        << "no bone left the rest pose in a second of playback";
+}

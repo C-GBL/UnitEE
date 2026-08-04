@@ -186,7 +186,10 @@ int main(void)
     BindContext bind_ctx{&device, textures, tex_count < 64u ? tex_count : 64u};
 
     renderer.debug_next_frame();
-    for (uint32_t frame = 0; frame < 8; ++frame) {
+    // 4 seconds of playback: enough for any idle to visibly leave the bind
+    // pose, so a T-posed character in the dumped frame means FROZEN, not
+    // merely slow.
+    for (uint32_t frame = 0; frame < 120; ++frame) {
         world.update_animators(1.0f / 30.0f);
         world.update_world_matrices();
         scene::RenderStats stats;
@@ -197,7 +200,7 @@ int main(void)
             SleepThread();
             return 1;
         }
-        if (frame == 0 || frame == 7) {
+        if (frame == 0 || frame == 119) {
             printf("[22-scene-debug] frame %u: drawn %u culled %u kicks %u "
                    "skinned %u\n",
                    static_cast<unsigned>(frame),
@@ -205,6 +208,24 @@ int main(void)
                    static_cast<unsigned>(stats.culled),
                    static_cast<unsigned>(stats.kicks),
                    static_cast<unsigned>(stats.skinned_drawn));
+        }
+        if (world.skinned_renderer_count() > 0 && frame % 30 == 0) {
+            const anim::Animator& a =
+                world.animator(world.skinned_renderer(0).animator);
+            const anim::Skeleton& sk = *a.skeleton();
+            float dev = 0.0f;
+            for (uint32_t b = 0; b < sk.bone_count; ++b) {
+                const Quat r = a.pose().rot[b];
+                const Quat rest = sk.bones[b].rest_rot;
+                const float d = r.x * rest.x + r.y * rest.y + r.z * rest.z +
+                                r.w * rest.w;
+                const float e = 1.0f - (d < 0.0f ? -d : d);
+                if (e > dev) dev = e;
+            }
+            printf("[dbg-anim] f%u state %u pose-vs-rest %f world13 %f\n",
+                   static_cast<unsigned>(frame),
+                   static_cast<unsigned>(a.state()), dev,
+                   a.bone_world(5).m[13]);
         }
     }
     // The rendered frame itself, written back through the emulator's host

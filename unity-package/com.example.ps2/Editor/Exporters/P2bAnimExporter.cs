@@ -182,6 +182,18 @@ namespace Ps2.Editor
                                         List<string> warnings = null)
         {
             int sampleCount = Mathf.Max(2, Mathf.RoundToInt(clip.length * sampleRate) + 1);
+            // The scene pose IS the bind pose when clips are exported (the
+            // rig exporter requires it); captured before sampling moves
+            // anything, it is the reference the partial-freeze guard below
+            // compares against.
+            var bindRot = new Quaternion[ordered.Length];
+            for (int i = 0; i < ordered.Length; i++)
+            {
+                Transform refT0 = restRef != null ? restRef[i] : null;
+                bindRot[i] = refT0 != null
+                    ? Quaternion.Inverse(refT0.rotation) * ordered[i].rotation
+                    : ordered[i].localRotation;
+            }
             var tracks = new SampledTrack[ordered.Length];
             for (int i = 0; i < ordered.Length; i++)
             {
@@ -219,6 +231,14 @@ namespace Ps2.Editor
             if (animator != null)
             {
                 animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+                // A long-running Editor session can leave the Animator's
+                // internal bindings STALE -- an asset reimport under the
+                // open scene is enough -- and a graph evaluated through
+                // stale bindings poses only part of the skeleton: most
+                // tracks sample as the bind pose and the character ships
+                // half frozen, with nothing failing. Rebinding is cheap
+                // and makes sampling immune to session history.
+                animator.Rebind();
             }
             if (viaGraph)
             {
@@ -293,18 +313,39 @@ namespace Ps2.Editor
             // deliberate pose clip and a defect for everything else, and
             // the difference is invisible in the container -- so say it
             // here, where the clip still has a name.
+            //
+            // The PARTIAL form is sneakier and shipped once: a humanoid
+            // clip sampled through a stale Animator poses a few bones and
+            // leaves the rest AT THE BIND POSE -- arms straight out, walk
+            // in the legs. Detected by counting rotation tracks whose
+            // whole sampled range stays at the rest rotation: a real
+            // humanoid clip poses most mapped bones off bind.
             if (warnings != null && clip.length > 0.05f)
             {
                 bool moved = false;
-                for (int i = 0; i < ordered.Length && !moved; i++)
+                int rotAtRest = 0;
+                int rotTracks = 0;
+                for (int i = 0; i < ordered.Length; i++)
                 {
-                    for (int s = 1; s < sampleCount && !moved; s++)
+                    bool thisMoved = false;
+                    for (int s = 1; s < sampleCount && !thisMoved; s++)
                     {
-                        moved = (tracks[i].Position[s] - tracks[i].Position[0])
-                                    .sqrMagnitude > 1e-10f ||
-                                Quaternion.Dot(tracks[i].Rotation[s],
-                                               tracks[i].Rotation[0]) < 0.999999f;
+                        thisMoved =
+                            (tracks[i].Position[s] - tracks[i].Position[0])
+                                .sqrMagnitude > 1e-10f ||
+                            Quaternion.Dot(tracks[i].Rotation[s],
+                                           tracks[i].Rotation[0]) < 0.999999f;
                     }
+                    moved |= thisMoved;
+
+                    rotTracks++;
+                    bool atRest = true;
+                    for (int s = 0; s < sampleCount && atRest; s++)
+                    {
+                        atRest = Mathf.Abs(Quaternion.Dot(tracks[i].Rotation[s],
+                                                          bindRot[i])) > 0.995f;
+                    }
+                    if (atRest) rotAtRest++;
                 }
                 if (!moved)
                 {
@@ -313,6 +354,17 @@ namespace Ps2.Editor
                         "bone moves anywhere in it. If it animates in Play " +
                         "Mode, the export sampler could not drive this rig " +
                         "(check the Animator's avatar and culling mode).");
+                }
+                else if (viaGraph && rotTracks > 0 &&
+                         rotAtRest * 100 >= rotTracks * 90)
+                {
+                    warnings.Add(
+                        $"clip '{clip.name}': {rotAtRest} of {rotTracks} bones " +
+                        "never leave the BIND pose over the whole clip -- the " +
+                        "character will play half frozen (arms out). This is " +
+                        "an Editor-session state, not an asset problem: " +
+                        "restart the Unity Editor (or reimport the character) " +
+                        "and rebuild.");
                 }
             }
 

@@ -1011,3 +1011,33 @@ Pinned by three host tests: bracketing-pair selection with exact
 blend values, clamping outside the threshold range, and a 40-step
 parameter sweep across several loop wraps (the phase bookkeeping is
 where such code rots).
+
+## The half-frozen character: a stale Animator in a long editor session (M12.5, 2026-08-04)
+
+"Back to T-posing" after nothing relevant changed. The elimination run
+was long and every layer cleared itself: the container's clips carried
+motion (moving-track counts identical to the working build), the
+runtime played them (on-target instrumentation: state 0, clip clock
+advancing, wrapping at 2.9 s), the avatar mapped 45 human bones, all
+three Editor samplers posed the arm correctly in isolation, and the
+FULL build pipeline in a fresh batch session exported healthy arms
+(19 rotation tracks posed off bind). The user's INTERACTIVE build was
+the only reproduction: 1 of 64 rotation tracks posed, the rest pinned
+at the bind pose -- arms straight out with the legs walking. Assets
+hash-identical on both sides; even forcing AnimationMode during a
+batch export failed to reproduce it.
+
+What remains between a fresh session and theirs is Animator SESSION
+state, and the timeline names a trigger: an asset reimport under the
+open scene (the kit FBX's Read/Write flip landed in the live project
+that morning). An Animator whose internal bindings went stale that
+way evaluates a PlayableGraph HALF-way: some bones pose, most sample
+at bind, nothing errors.
+
+Two defenses shipped: ExportClip calls animator.Rebind() before
+building the sampling graph -- cheap, and immune to whatever the
+session did before -- and a partial-freeze guard warns BY NAME when a
+humanoid clip's sampled rotations keep >=90% of bones at the bind
+pose, with the remedy in the message (restart the Editor or reimport
+the character). The clean-session export is warning-free and
+unchanged: 19 posed tracks, bit-for-bit healthy.
