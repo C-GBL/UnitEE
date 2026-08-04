@@ -205,11 +205,6 @@ namespace Ps2.Editor
                 }
             }
 
-            if (usable.Count > 0)
-            {
-                BuildDiagnosis(payload, usable, reference);
-            }
-
             if (hierarchyAnimator != null)
             {
                 CollectRigidBones(hierarchyAnimator.transform, unionBones,
@@ -252,6 +247,10 @@ namespace Ps2.Editor
             P2bAnimExporter.SkeletonExport skeleton = P2bAnimExporter.ExportSkeleton(
                 unionBones.ToArray(), unionBind.ToArray(), reference);
             payload.Skeleton = skeleton.Bytes;
+            if (usable.Count > 0)
+            {
+                BuildDiagnosis(payload, usable, reference);
+            }
 
             // The clips, and the controller that names them. A rig with an
             // Animator but no controller still exports its skeleton and mesh:
