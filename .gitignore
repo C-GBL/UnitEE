@@ -4,14 +4,11 @@ build/
 obj/
 bin/
 
-# IDE / editor state, and local assistant/tooling notes. The developer manual
-# these used to hold now lives in docs/development.md, which is versioned.
+# IDE / editor state. Personal, machine-specific ignore rules belong in
+# .git/info/exclude rather than here, so this file stays about the project.
 *.user
 .vs/
 .idea/
-CLAUDE.md
-AGENTS.md
-.claude/
 
 # The internal engineering plan. Kept locally as the authority for the work,
 # not distributed with the source. Documentation cites it as "plan section N".
