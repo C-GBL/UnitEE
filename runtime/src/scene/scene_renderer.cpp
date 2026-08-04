@@ -159,6 +159,8 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
     device.end_frame(/*flip=*/false);
 
     // --- Cull + queue (M8 tasks 3/4) ----------------------------------------
+    const bool dbg = m_debug_frame;
+    m_debug_frame = false;
     m_queue.clear();
     const float inv_depth_range = 1.0f / (cam.zfar - cam.znear);
     for (uint32_t e = 0; e < world.entity_count(); ++e) {
@@ -167,11 +169,20 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
             continue;
         }
         if (!world.entity_visible(static_cast<int32_t>(e))) {
+            if (dbg) {
+                log(LogLevel::Info, "rdbg: e%u mesh %d INACTIVE",
+                    static_cast<unsigned>(e), static_cast<int>(ent.mesh));
+            }
             continue;
         }
         ++local.considered;
         if (((1u << (ent.layer & 31u)) & cam.layer_mask) == 0u) {
             ++local.culled;
+            if (dbg) {
+                log(LogLevel::Info, "rdbg: e%u mesh %d LAYER %u masked",
+                    static_cast<unsigned>(e), static_cast<int>(ent.mesh),
+                    static_cast<unsigned>(ent.layer));
+            }
             continue;
         }
         const LoadedMesh& mesh = world.mesh(static_cast<uint32_t>(ent.mesh));
@@ -187,7 +198,24 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
         const float radius = world_radius(w, mesh.bounds_radius);
         if (frustum_culls_sphere(frustum, Vec3{c.x, c.y, c.z}, radius)) {
             ++local.culled;
+            if (dbg) {
+                log(LogLevel::Info,
+                    "rdbg: e%u mesh %d FRUSTUM-CULLED c=(%d,%d,%d) r=%d",
+                    static_cast<unsigned>(e), static_cast<int>(ent.mesh),
+                    static_cast<int>(c.x), static_cast<int>(c.y),
+                    static_cast<int>(c.z), static_cast<int>(radius));
+            }
             continue;
+        }
+        if (dbg) {
+            log(LogLevel::Info,
+                "rdbg: e%u mesh %d mat %u kind %u tex %d QUEUED",
+                static_cast<unsigned>(e), static_cast<int>(ent.mesh),
+                static_cast<unsigned>(mat_index),
+                static_cast<unsigned>(mat.kind),
+                mat.texture_index == 0xFFFFFFFFu
+                    ? -1
+                    : static_cast<int>(mat.texture_index));
         }
 
         const Vec4 vz = mat4_mul_vec4(flipped_view, c);
@@ -236,11 +264,20 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
             device.packet().reset();
             device.set_material_state(mat.gs_test, mat.gs_alpha, mat.blend,
                                       mat.zwrite);
+            bool bound = false;
             if (tex1 != 0u && bind_texture != nullptr) {
                 uint32_t tw = 0, th = 0;
-                bind_texture(bind_user, mat.texture_index, &tw, &th);
+                bound = bind_texture(bind_user, mat.texture_index, &tw, &th);
             }
             device.flush_packet();
+            if (dbg) {
+                log(LogLevel::Info,
+                    "rdbg: group mat %u kind %u tex %d bind=%d",
+                    static_cast<unsigned>(cmd.material),
+                    static_cast<unsigned>(mat.kind),
+                    tex1 == 0u ? -1 : static_cast<int>(mat.texture_index),
+                    bound ? 1 : 0);
+            }
             current_group = group;
         }
         if (!chain_open) {
@@ -550,6 +587,16 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
                     }
                     // PS2 alpha: 0x80 is opaque, so halve the 0..255 ramp.
                     col[3] *= 0.5f;
+                    // Textured quads MODULATE (0x80 = 1.0): RGB halves too,
+                    // or the texture renders doubled -- the same rule the
+                    // exporters follow for textured vertex colours
+                    // (verify-log M12.5). Untextured quads keep 0..255:
+                    // the colour IS the pixel.
+                    if (textured) {
+                        col[0] *= 0.5f;
+                        col[1] *= 0.5f;
+                        col[2] *= 0.5f;
+                    }
 
                     const Vec3 rx{cam_right.x * size, cam_right.y * size,
                                   cam_right.z * size};

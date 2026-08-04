@@ -933,3 +933,32 @@ identity local transform, parent's layer, name hash 0, one mesh
 component. The runtime needed no new concept -- parent-before-child
 ordering holds because synthetics append after every walked entity.
 The physics baker and UI walker skip records with no Transform.
+
+## Flat-white concrete: every textured draw was twice as bright since M5 (M12.5, 2026-08-04)
+
+The remaining white surfaces (concrete plaza, parking lot) decoded
+CORRECT in the container -- textures present, UVs sane, binds
+succeeding. The new render diagnostics (renderer.debug_next_frame +
+samples/22-scene-debug, which loads any exported container through the
+production render path, logs cull/queue/bind decisions, and writes the
+rendered frame back through host: as an image) reproduced the defect
+headlessly and put EYES on it without an emulator session.
+
+The cause was arithmetic, and it was never these meshes: GS modulate
+treats 0x80 as 1.0, and the exporters write vertex colours as 0..255.
+A white vertex colour therefore multiplies every texel by ~2, and any
+texel brighter than mid-grey clips to flat white. Dark asphalt, grass
+and tree bark shrugged it off -- every texture the samples had ever
+used was dark enough -- and the goldens pinned the doubled look as
+correct from M5 on (a golden pins determinism, not correctness; sixth
+instance). Bright concrete and parking sheets were simply the first
+textures with nowhere to clip to but white.
+
+Fix, one rule everywhere: TEXTURED vertex colours are exported (and
+staged, for particles) in the 0..128 range so a white vertex is
+modulate-identity; untextured layouts keep 0..255 because there the
+vertex colour IS the final colour. Applied to the rigid tex layout,
+the textured skinned layout (the character's blown-out white shirt was
+this too), and textured particles. Sample containers pinned by goldens
+still carry doubled colours until re-exported; parity with the Editor
+now exists for fresh exports.

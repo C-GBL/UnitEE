@@ -211,9 +211,18 @@ namespace Ps2.Editor
                     }
 
                     Color32 c = v.C;
-                    blobs.F32(c.r);
-                    blobs.F32(c.g);
-                    blobs.F32(c.b);
+                    // GS modulate treats 0x80 as 1.0, so TEXTURED vertex
+                    // colours live in the 0..128 range: a white vertex must
+                    // be 128, or every texel is DOUBLED and anything brighter
+                    // than mid-grey clips to flat white -- which is exactly
+                    // what bright concrete and parking-lot sheets did, while
+                    // dark asphalt hid it since M5 (verify-log M12.5).
+                    // Untextured layouts keep 0..255: there the vertex colour
+                    // IS the final colour.
+                    float cscale = UsesTexLayout(kind) ? 128.0f / 255.0f : 1.0f;
+                    blobs.F32(c.r * cscale);
+                    blobs.F32(c.g * cscale);
+                    blobs.F32(c.b * cscale);
                     // PS2 alpha range: 0x80 is opaque. Blend kinds carry the
                     // material/vertex alpha; opaque kinds pin fully opaque.
                     blobs.F32(UsesBlend(kind) ? c.a * 128.0f / 255.0f : 128.0f);

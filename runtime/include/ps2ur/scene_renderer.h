@@ -77,10 +77,16 @@ public:
                 void* bind_user, RenderStats* stats,
                 OverlayFn overlay = nullptr, void* overlay_user = nullptr);
 
+    // Render diagnostics: the NEXT render() logs one line per entity it
+    // culls (and why), queues, and binds. "Why is my mesh not drawn" is a
+    // question the log should answer without an emulator debugger.
+    void debug_next_frame() { m_debug_frame = true; }
+
 private:
     gfx::RenderQueue m_queue;
     gfx::DebugOverlay m_ui_overlay;
     bool m_ui_ready = false;
+    bool m_debug_frame = false;
 };
 
 } // namespace scene

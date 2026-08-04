@@ -748,9 +748,15 @@ namespace Ps2.Editor
                         blobs.F32(0.0f);
 
                         Color32 c = colours.Length > src ? colours[src] : fallbackColour;
-                        blobs.F32(c.r);
-                        blobs.F32(c.g);
-                        blobs.F32(c.b);
+                        // Textured characters MODULATE: the lit vertex colour
+                        // multiplies the texel with 0x80 as 1.0, so it lives
+                        // in 0..128 (same rule as the rigid tex layout;
+                        // verify-log M12.5). Untextured characters keep
+                        // 0..255 -- there the lit colour IS the final colour.
+                        float cscale = textured ? 128.0f / 255.0f : 1.0f;
+                        blobs.F32(c.r * cscale);
+                        blobs.F32(c.g * cscale);
+                        blobs.F32(c.b * cscale);
                         blobs.F32(128.0f); // PS2 alpha: 0x80 is opaque
 
                         // Palette offsets are INTEGERS the microprogram feeds
