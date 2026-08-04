@@ -985,3 +985,29 @@ LATCH -- it holds only until the capsule first stands on real
 collision, then slopes and steps own the ground (the flat clamp was
 exactly why inclines clipped: the visual floor rose, the clamp did
 not).
+
+## 1D blend trees (M12.5, 2026-08-04)
+
+The locomotion warning ("state 'Locomotion' uses a BlendTree... first
+clip 'WALK00_F' is used instead") became a feature instead of a
+caveat. The runtime already owned every ingredient -- crossfades blend
+two poses, ClipPlayer seeks, parameters exist -- so a 1D tree is a
+THIRD ClipPlayer and a master phase: pick the two children whose
+thresholds bracket the parameter, play them phase-locked (each sampled
+at phase x its own duration, the phase advancing at the blended rate,
+which is Unity's Simple1D rule), and blend_pose by the segment weight.
+
+Format: an optional table appended to CTRL after the params. Old
+readers stop at the params and the state's clip field holds child 0,
+so the addition is compatible in BOTH directions -- an old runtime
+plays the first clip exactly as it did yesterday.
+
+Deliberately not modelled: 2D trees (the pose math is a different
+animal), nested trees, direct-blend trees -- all keep the first-clip
+degradation and its warning. Crossfading FROM a tree fades its
+dominant child only; at 0.2 s fades the difference is invisible.
+
+Pinned by three host tests: bracketing-pair selection with exact
+blend values, clamping outside the threshold range, and a 40-step
+parameter sweep across several loop wraps (the phase bookkeeping is
+where such code rots).

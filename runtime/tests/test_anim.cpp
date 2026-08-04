@@ -664,3 +664,122 @@ TEST(Palette, OutOfRangeBonesFallBackToIdentity)
     EXPECT_NEAR(palette[0].m[0], 1.0f, 1e-6f);
     EXPECT_NEAR(palette[0].m[1], 0.0f, 1e-6f);
 }
+
+// ---- 1D blend trees (M12.5) -----------------------------------------------
+
+namespace {
+
+// Three constant-pose clips (root x = 0 / 2 / 6) on one state's blend tree
+// with thresholds 0 / 0.5 / 1: the locomotion shape.
+struct BlendTreeFixture {
+    std::vector<uint8_t> keys0, keys1, keys2;
+    Clip clips[3];
+    Controller controller{};
+    Skeleton skeleton = two_bone_skeleton();
+    static constexpr uint32_t kSpeedHash = 0xC0FFEEu;
+
+    static void constant_clip(Clip& clip, std::vector<uint8_t>& keys, float x)
+    {
+        put_key(keys, 0.0f, x, 0, 0, 0, 8.0f);
+        put_key(keys, 1.0f, x, 0, 0, 0, 8.0f);
+        clip.duration = 1.0f;
+        clip.keys = keys.data();
+        clip.key_count = 2;
+        clip.track_count = 1;
+        clip.tracks[0].bone = 0;
+        clip.tracks[0].channel = kChannelTranslation;
+        clip.tracks[0].key_count = 2;
+        clip.tracks[0].quant_scale = 8.0f;
+    }
+
+    BlendTreeFixture()
+    {
+        constant_clip(clips[0], keys0, 0.0f);
+        constant_clip(clips[1], keys1, 2.0f);
+        constant_clip(clips[2], keys2, 6.0f);
+
+        controller.state_count = 1;
+        controller.states[0].clip = 0;
+        controller.states[0].speed = 1.0f;
+        controller.states[0].loop = true;
+        controller.param_count = 1;
+        controller.param_hash[0] = kSpeedHash;
+        controller.tree_count = 1;
+        controller.trees[0].state = 0;
+        controller.trees[0].param = 0;
+        controller.trees[0].child_count = 3;
+        controller.trees[0].clip[0] = 0;
+        controller.trees[0].clip[1] = 1;
+        controller.trees[0].clip[2] = 2;
+        controller.trees[0].threshold[0] = 0.0f;
+        controller.trees[0].threshold[1] = 0.5f;
+        controller.trees[0].threshold[2] = 1.0f;
+    }
+};
+
+} // namespace
+
+TEST(BlendTree1D, BlendsTheBracketingPairByTheParameter)
+{
+    BlendTreeFixture fixture;
+    Animator animator;
+    animator.bind(&fixture.skeleton, &fixture.controller, fixture.clips, 3);
+
+    animator.set_float(BlendTreeFixture::kSpeedHash, 0.0f);
+    animator.update(0.016f);
+    EXPECT_NEAR(animator.pose().pos[0].x, 0.0f, 0.01f);
+
+    // Midway through the FIRST segment: half of clips 0 and 1.
+    animator.set_float(BlendTreeFixture::kSpeedHash, 0.25f);
+    animator.update(0.016f);
+    EXPECT_NEAR(animator.pose().pos[0].x, 1.0f, 0.02f);
+
+    // Exactly at the middle threshold: pure clip 1.
+    animator.set_float(BlendTreeFixture::kSpeedHash, 0.5f);
+    animator.update(0.016f);
+    EXPECT_NEAR(animator.pose().pos[0].x, 2.0f, 0.02f);
+
+    // Midway through the SECOND segment: half of clips 1 and 2.
+    animator.set_float(BlendTreeFixture::kSpeedHash, 0.75f);
+    animator.update(0.016f);
+    EXPECT_NEAR(animator.pose().pos[0].x, 4.0f, 0.03f);
+
+    animator.set_float(BlendTreeFixture::kSpeedHash, 1.0f);
+    animator.update(0.016f);
+    EXPECT_NEAR(animator.pose().pos[0].x, 6.0f, 0.03f);
+}
+
+TEST(BlendTree1D, ClampsOutsideTheThresholdRange)
+{
+    BlendTreeFixture fixture;
+    Animator animator;
+    animator.bind(&fixture.skeleton, &fixture.controller, fixture.clips, 3);
+
+    animator.set_float(BlendTreeFixture::kSpeedHash, -5.0f);
+    animator.update(0.016f);
+    EXPECT_NEAR(animator.pose().pos[0].x, 0.0f, 0.01f);
+
+    animator.set_float(BlendTreeFixture::kSpeedHash, 42.0f);
+    animator.update(0.016f);
+    EXPECT_NEAR(animator.pose().pos[0].x, 6.0f, 0.03f);
+}
+
+TEST(BlendTree1D, LoopsAndKeepsPlayingAcrossParameterSweeps)
+{
+    BlendTreeFixture fixture;
+    Animator animator;
+    animator.bind(&fixture.skeleton, &fixture.controller, fixture.clips, 3);
+
+    // Sweep the parameter while advancing past several loop lengths: the
+    // pose must always be the blend the CURRENT parameter selects, with no
+    // stalls or runaway values from the phase bookkeeping.
+    for (int i = 0; i <= 40; ++i) {
+        const float p = static_cast<float>(i % 11) / 10.0f;
+        animator.set_float(BlendTreeFixture::kSpeedHash, p);
+        animator.update(0.1f);
+        const float expected =
+            p <= 0.5f ? p * 4.0f : 2.0f + (p - 0.5f) * 8.0f;
+        EXPECT_NEAR(animator.pose().pos[0].x, expected, 0.05f)
+            << "param " << p << " at step " << i;
+    }
+}

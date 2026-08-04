@@ -261,3 +261,14 @@ These are listed prominently here and asserted in the conformance suite
     triangles at export and need Read/Write enabled on the source
     model; convex MeshColliders are refused (baked collision is
     static).
+
+35. **1D blend trees bake; nothing else does.** A state whose motion is a
+    Simple1D BlendTree of DIRECT AnimationClip children (up to 6) becomes
+    a real blend-tree state: the runtime blends the two children whose
+    thresholds bracket the parameter, phase-locked by normalized time --
+    idle/walk/run driven by Speed works as authored. 2D trees, nested
+    trees, and trees on unexported parameters degrade to their first
+    clip with a build warning, as before. A crossfade FROM a tree state
+    fades out its dominant child only. Layers beyond the first are still
+    not baked (the second layer in stock controllers is usually facial
+    animation, which needs blendshapes this runtime does not model).

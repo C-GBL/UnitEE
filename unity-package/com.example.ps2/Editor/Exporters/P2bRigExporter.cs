@@ -270,6 +270,7 @@ namespace Ps2.Editor
                                                    : usable[0].gameObject;
             var states = new List<P2bAnimExporter.StateExport>();
             var transitions = new List<P2bAnimExporter.TransitionExport>();
+            var trees = new List<P2bAnimExporter.BlendTreeExport>();
             var parameters = new List<string>();
             var stateIndex = new Dictionary<AnimatorState, int>();
             var clipLengths = new List<float>();
@@ -278,7 +279,7 @@ namespace Ps2.Editor
             {
                 ReadController(controller, clipRoot, skeleton, payload, states,
                                transitions, parameters, stateIndex, clipLengths,
-                               warnings);
+                               trees, warnings);
             }
 
             // A rig with no usable controller still needs one state, because
@@ -311,7 +312,8 @@ namespace Ps2.Editor
             }
 
             payload.Controller = P2bAnimExporter.ExportController(
-                states.ToArray(), transitions.ToArray(), parameters.ToArray());
+                states.ToArray(), transitions.ToArray(), parameters.ToArray(),
+                trees);
 
             // One SKMS per distinct mesh; renderers sharing a mesh share the
             // entry, so a crowd of the same character costs one mesh.
@@ -471,7 +473,8 @@ namespace Ps2.Editor
             List<P2bAnimExporter.StateExport> states,
             List<P2bAnimExporter.TransitionExport> transitions,
             List<string> parameters, Dictionary<AnimatorState, int> stateIndex,
-            List<float> clipLengths, List<string> warnings)
+            List<float> clipLengths,
+            List<P2bAnimExporter.BlendTreeExport> trees, List<string> warnings)
         {
             foreach (AnimatorControllerParameter p in controller.parameters)
             {
@@ -530,6 +533,30 @@ namespace Ps2.Editor
                         "any after it are dropped.");
                     break;
                 }
+                // A 1D blend tree of plain clips becomes a real blend-tree
+                // state: every child clip exports, the runtime blends the
+                // bracketing pair by the tree's parameter. Anything else
+                // (2D, nested, missing param) falls through to ResolveClip's
+                // first-clip degradation with its warning.
+                P2bAnimExporter.BlendTreeExport treeExport =
+                    TryReadBlendTree(state, controller, clipRoot, skeleton,
+                                     payload, parameters, clipIndex,
+                                     clipLengths, warnings);
+                if (treeExport != null)
+                {
+                    treeExport.State = states.Count;
+                    trees.Add(treeExport);
+                    stateIndex[state] = states.Count;
+                    states.Add(new P2bAnimExporter.StateExport
+                    {
+                        Name = state.name,
+                        Clip = treeExport.Children[0].clip,
+                        Speed = state.speed,
+                        Loop = true, // locomotion trees cycle
+                    });
+                    continue;
+                }
+
                 AnimationClip clip = ResolveClip(state, controller, warnings);
                 if (clip == null)
                     continue;
@@ -574,6 +601,12 @@ namespace Ps2.Editor
                 {
                     if (stateIndex[key] == 0) stateIndex[key] = defaultAt;
                     else if (stateIndex[key] == defaultAt) stateIndex[key] = 0;
+                }
+                // Blend trees name states by index; the swap moves them too.
+                foreach (P2bAnimExporter.BlendTreeExport tree in trees)
+                {
+                    if (tree.State == 0) tree.State = defaultAt;
+                    else if (tree.State == defaultAt) tree.State = 0;
                 }
             }
 
@@ -706,6 +739,112 @@ namespace Ps2.Editor
             }
             return false;
         }
+
+        // Reads a state's motion as a bakeable 1D blend tree: Simple1D, at
+        // least two DIRECT AnimationClip children, and a parameter the
+        // controller exports. Returns null (leaving the ResolveClip
+        // degradation to run) for anything else. State index is filled by
+        // the caller.
+        private static P2bAnimExporter.BlendTreeExport TryReadBlendTree(
+            AnimatorState state, AnimatorController controller,
+            GameObject clipRoot, P2bAnimExporter.SkeletonExport skeleton,
+            P2bSceneExporter.SkinPayload payload, List<string> parameters,
+            Dictionary<AnimationClip, int> clipIndex, List<float> clipLengths,
+            List<string> warnings)
+        {
+            if (!(state.motion is BlendTree tree))
+                return null;
+            if (tree.blendType != BlendTreeType.Simple1D)
+                return null; // ResolveClip warns and takes the first clip
+            int paramAt = parameters.IndexOf(tree.blendParameter);
+            if (paramAt < 0)
+            {
+                warnings.Add(
+                    $"BlendTree '{tree.name}' blends on '{tree.blendParameter}', " +
+                    "which is not among the exported parameters; its first clip " +
+                    "plays instead.");
+                return null;
+            }
+            var children = new List<(int clip, float threshold)>();
+            foreach (ChildMotion child in tree.children)
+            {
+                // A NESTED 1D tree (the stock locomotion shape: Speed blends
+                // Walks/Runs, each blending turn variants by Direction)
+                // flattens to the nested child at the inner parameter's
+                // DEFAULT value -- the straight-ahead clip. The outer axis
+                // survives exactly; the inner lean variants are dropped
+                // with a warning.
+                Motion motion = child.motion;
+                while (motion is BlendTree nested)
+                {
+                    if (nested.blendType != BlendTreeType.Simple1D ||
+                        nested.children.Length == 0)
+                        return null;
+                    float def = 0.0f;
+                    foreach (AnimatorControllerParameter p in
+                             controller.parameters)
+                    {
+                        if (p.name == nested.blendParameter)
+                        {
+                            def = p.defaultFloat;
+                            break;
+                        }
+                    }
+                    ChildMotion best = nested.children[0];
+                    foreach (ChildMotion c in nested.children)
+                    {
+                        if (Mathf.Abs(c.threshold - def) <
+                            Mathf.Abs(best.threshold - def))
+                            best = c;
+                    }
+                    warnings.Add(
+                        $"BlendTree '{tree.name}': nested tree " +
+                        $"'{nested.name}' flattened to its child at " +
+                        $"{nested.blendParameter} = {def} " +
+                        $"('{(best.motion != null ? best.motion.name : "?")}'); " +
+                        "the inner blend axis is not modelled.");
+                    motion = best.motion;
+                }
+                if (!(motion is AnimationClip clip))
+                    return null; // no clip at the bottom: first-clip fallback
+                if (children.Count >= (int)Ps2BlendChildCap)
+                {
+                    warnings.Add(
+                        $"BlendTree '{tree.name}' has more than " +
+                        $"{Ps2BlendChildCap} children (anim::kMaxBlendChildren); " +
+                        "the rest are dropped.");
+                    break;
+                }
+                if (!clipIndex.TryGetValue(clip, out int ci))
+                {
+                    if (payload.Clips.Count >= MaxClips)
+                    {
+                        warnings.Add(
+                            $"AnimatorController '{controller.name}' references " +
+                            $"more than {MaxClips} clips; BlendTree '{tree.name}' " +
+                            "cannot bake fully and plays its first clip.");
+                        return null;
+                    }
+                    ci = payload.Clips.Count;
+                    payload.Clips.Add(P2bAnimExporter.ExportClip(
+                        clip, clipRoot, skeleton.Ordered, skeleton.Index,
+                        skeleton.RestRef, SampleRate, true,
+                        PositionTolerance, RotationDotTolerance,
+                        ScaleTolerance, warnings));
+                    clipLengths.Add(clip.length);
+                    clipIndex.Add(clip, ci);
+                }
+                children.Add((ci, child.threshold));
+            }
+            if (children.Count < 2)
+                return null;
+            children.Sort((x, y) => x.threshold.CompareTo(y.threshold));
+            var result = new P2bAnimExporter.BlendTreeExport { Param = paramAt };
+            result.Children.AddRange(children);
+            return result;
+        }
+
+        private const uint Ps2BlendChildCap = 6; // anim::kMaxBlendChildren
 
         private static AnimationClip ResolveClip(AnimatorState state,
                                                  AnimatorController controller,

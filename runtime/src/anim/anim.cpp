@@ -269,19 +269,29 @@ void Animator::bind(const Skeleton* skeleton, const Controller* controller,
     }
 }
 
+// Common state-entry: binds the state's clip -- or, for a blend-tree
+// state, primes the tree pair at phase zero.
+void Animator::enter_state(uint32_t state_index)
+{
+    const StateDef& state = m_controller->states[state_index];
+    m_state = state_index;
+    m_have_root_prev = false;
+    m_tree = m_controller->tree_for(state_index);
+    m_tree_phase = 0.0f;
+    m_tree_weight = 0.0f;
+    if (state.clip < m_clip_count) {
+        m_current.set_clip(&m_clips[state.clip], state.speed, state.loop);
+    }
+}
+
 void Animator::play(uint32_t state_index)
 {
     if (m_controller == nullptr || state_index >= m_controller->state_count) {
         return;
     }
-    const StateDef& state = m_controller->states[state_index];
-    m_state = state_index;
     m_blend_duration = 0.0f;
     m_blend_time = 0.0f;
-    m_have_root_prev = false;
-    if (state.clip < m_clip_count) {
-        m_current.set_clip(&m_clips[state.clip], state.speed, state.loop);
-    }
+    enter_state(state_index);
 }
 
 void Animator::crossfade(uint32_t state_index, float duration)
@@ -294,16 +304,12 @@ void Animator::crossfade(uint32_t state_index, float duration)
         return;
     }
     // The outgoing player keeps its own time and cursors, so the blend
-    // samples both clips honestly instead of freezing one.
+    // samples both clips honestly instead of freezing one. When the
+    // outgoing STATE was a tree, its dominant child carries the fade.
     m_previous = m_current;
-    const StateDef& state = m_controller->states[state_index];
-    m_state = state_index;
-    if (state.clip < m_clip_count) {
-        m_current.set_clip(&m_clips[state.clip], state.speed, state.loop);
-    }
+    enter_state(state_index);
     m_blend_duration = duration;
     m_blend_time = 0.0f;
-    m_have_root_prev = false;
 }
 
 float Animator::blend_weight() const
@@ -393,6 +399,83 @@ void Animator::apply_transitions(bool clip_ended)
     }
 }
 
+// Advances the current STATE's time: the single clip, or the blend-tree
+// pair selected by the tree's parameter. Returns true when a non-looping
+// state reached its end this step (the exit-time condition).
+bool Animator::advance_state(float dt)
+{
+    if (m_tree < 0 || m_controller == nullptr) {
+        return m_current.advance(dt);
+    }
+    const anim::BlendTreeDef& tree = m_controller->trees[m_tree];
+    const StateDef& state = m_controller->states[m_state];
+
+    // Segment selection: the pair of children whose thresholds bracket the
+    // parameter, clamped at both ends.
+    const float p = m_params[tree.param];
+    uint32_t a = 0;
+    while (a + 2u < tree.child_count && p >= tree.threshold[a + 1u]) {
+        ++a;
+    }
+    const uint32_t b = a + 1u;
+    const float span = tree.threshold[b] - tree.threshold[a];
+    float w = span > 0.0001f ? (p - tree.threshold[a]) / span : 0.0f;
+    if (w < 0.0f) w = 0.0f;
+    if (w > 1.0f) w = 1.0f;
+    m_tree_weight = w;
+
+    const Clip* clip_a =
+        tree.clip[a] < m_clip_count ? &m_clips[tree.clip[a]] : nullptr;
+    const Clip* clip_b =
+        tree.clip[b] < m_clip_count ? &m_clips[tree.clip[b]] : nullptr;
+    if (clip_a == nullptr || clip_b == nullptr) {
+        return m_current.advance(dt);
+    }
+    if (m_current.clip() != clip_a) {
+        m_current.set_clip(clip_a, state.speed, state.loop);
+    }
+    if (m_tree_second.clip() != clip_b) {
+        m_tree_second.set_clip(clip_b, state.speed, state.loop);
+    }
+
+    // Children play PHASE-LOCKED (Unity's 1D rule): one master phase, each
+    // clip sampled at phase x its own duration. The phase advances at the
+    // blended rate, so walk-to-run speeds up smoothly instead of snapping.
+    const float blended_duration =
+        clip_a->duration + (clip_b->duration - clip_a->duration) * w;
+    bool ended = false;
+    if (blended_duration > 0.0001f) {
+        m_tree_phase += dt * state.speed / blended_duration;
+        if (m_tree_phase >= 1.0f) {
+            if (state.loop) {
+                while (m_tree_phase >= 1.0f) {
+                    m_tree_phase -= 1.0f;
+                }
+            } else {
+                m_tree_phase = 1.0f;
+                ended = true;
+            }
+        }
+    }
+    m_current.set_time(m_tree_phase * clip_a->duration);
+    m_tree_second.set_time(m_tree_phase * clip_b->duration);
+    return ended;
+}
+
+// Samples the current state's pose into 'out' (pre-seeded with rest): the
+// single clip, or the tree pair blended by m_tree_weight.
+void Animator::sample_state(Pose& out)
+{
+    m_current.sample(*m_skeleton, out);
+    if (m_tree >= 0 && m_tree_weight > 0.0f &&
+        m_tree_second.clip() != nullptr) {
+        m_scratch2 = m_rest;
+        m_tree_second.sample(*m_skeleton, m_scratch2);
+        blend_pose(out, m_scratch2, m_tree_weight, nullptr,
+                   m_skeleton->bone_count);
+    }
+}
+
 void Animator::update(float dt)
 {
     if (m_skeleton == nullptr) {
@@ -400,25 +483,26 @@ void Animator::update(float dt)
     }
     const uint32_t bones = m_skeleton->bone_count;
 
-    const bool ended = m_current.advance(dt);
+    const bool ended = advance_state(dt);
     if (m_blend_duration > 0.0f) {
         m_previous.advance(dt);
         m_blend_time += dt;
     }
 
-    // Layer 0: the state machine's clip, with any crossfade blended in.
+    // Layer 0: the state machine's pose (clip or tree), with any crossfade
+    // blended in.
     m_pose = m_rest;
     if (m_blend_duration > 0.0f) {
         m_previous.sample(*m_skeleton, m_pose);
         m_scratch = m_rest;
-        m_current.sample(*m_skeleton, m_scratch);
+        sample_state(m_scratch);
         blend_pose(m_pose, m_scratch, blend_weight(), nullptr, bones);
         if (m_blend_time >= m_blend_duration) {
             m_blend_duration = 0.0f;
             m_blend_time = 0.0f;
         }
     } else {
-        m_current.sample(*m_skeleton, m_pose);
+        sample_state(m_pose);
     }
 
     // Extra layers: masked override or additive, on top of layer 0.

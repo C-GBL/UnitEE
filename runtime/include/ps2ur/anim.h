@@ -108,6 +108,22 @@ struct StateDef {
     bool loop = true;
 };
 
+// A 1D blend tree (M12.5): the state's pose is a weighted blend of the two
+// children whose thresholds bracket the parameter -- idle/walk/run driven
+// by Speed, the locomotion pattern. Children play phase-locked (normalized
+// time), which is Unity's 1D rule. 2D and nested trees are NOT modelled;
+// the exporter degrades them to their first clip with a warning.
+inline constexpr uint32_t kMaxBlendTrees = 8;
+inline constexpr uint32_t kMaxBlendChildren = 6;
+
+struct BlendTreeDef {
+    uint16_t state = 0;      // StateDef index this tree drives
+    uint8_t param = 0;       // parameter index selecting along the axis
+    uint8_t child_count = 0; // >= 2, thresholds ascending
+    uint16_t clip[kMaxBlendChildren] = {};
+    float threshold[kMaxBlendChildren] = {};
+};
+
 struct TransitionDef {
     uint16_t from = 0;
     uint16_t to = 0;
@@ -124,6 +140,19 @@ struct Controller {
     uint32_t transition_count = 0;
     uint32_t param_hash[kMaxParams] = {};
     uint32_t param_count = 0;
+    BlendTreeDef trees[kMaxBlendTrees];
+    uint32_t tree_count = 0;
+
+    // The blend tree driving 'state', or -1.
+    int32_t tree_for(uint32_t state) const
+    {
+        for (uint32_t i = 0; i < tree_count; ++i) {
+            if (trees[i].state == state) {
+                return static_cast<int32_t>(i);
+            }
+        }
+        return -1;
+    }
 };
 
 // A local-space pose: what sampling produces and blending combines.
@@ -231,6 +260,9 @@ private:
     void apply_transitions(bool clip_ended);
     bool condition_met(const TransitionDef& transition);
     float param_value(uint8_t index) const;
+    void enter_state(uint32_t state_index);
+    bool advance_state(float dt);
+    void sample_state(Pose& out);
 
     const Skeleton* m_skeleton = nullptr;
     const Controller* m_controller = nullptr;
@@ -243,6 +275,16 @@ private:
     float m_blend_time = 0.0f;
     float m_blend_duration = 0.0f;
 
+    // 1D blend tree evaluation for the CURRENT state. The pair of children
+    // bracketing the parameter play phase-locked in m_current/m_tree_second
+    // and blend by m_tree_weight. A crossfade FROM a tree state samples its
+    // dominant child only (m_previous is one player) -- a sub-fade
+    // approximation nobody sees at typical 0.2 s fades.
+    int32_t m_tree = -1;
+    ClipPlayer m_tree_second;
+    float m_tree_phase = 0.0f;
+    float m_tree_weight = 0.0f;
+
     float m_params[kMaxParams] = {};
     bool m_triggers[kMaxParams] = {};
 
@@ -250,6 +292,7 @@ private:
 
     Pose m_pose;
     Pose m_scratch;
+    Pose m_scratch2; // tree child B, while m_scratch may hold a crossfade
     Pose m_rest;
     Mat4 m_bone_world[kMaxBones];
 

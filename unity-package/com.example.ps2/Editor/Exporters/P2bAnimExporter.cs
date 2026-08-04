@@ -505,9 +505,20 @@ namespace Ps2.Editor
             public float Threshold;
         }
 
+        // A 1D blend tree on a state (M12.5): the runtime blends the two
+        // children whose thresholds bracket the parameter, phase-locked.
+        public sealed class BlendTreeExport
+        {
+            public int State;
+            public int Param;
+            public List<(int clip, float threshold)> Children =
+                new List<(int, float)>();
+        }
+
         public static byte[] ExportController(StateExport[] states,
                                               TransitionExport[] transitions,
-                                              string[] parameters)
+                                              string[] parameters,
+                                              List<BlendTreeExport> trees = null)
         {
             var b = new ByteBuffer();
             b.U32((uint)states.Length);
@@ -535,6 +546,26 @@ namespace Ps2.Editor
             foreach (string p in parameters)
             {
                 b.U32((uint)P2bWriter.Fnv1a64(p));
+            }
+            // Blend-tree table, AFTER the params: readers that predate it
+            // stop at the params, so the tail is compatible both ways. The
+            // state's own clip field holds child 0, which is also what an
+            // older runtime would play.
+            b.U32((uint)(trees != null ? trees.Count : 0));
+            if (trees != null)
+            {
+                foreach (BlendTreeExport t in trees)
+                {
+                    b.U16((ushort)t.State);
+                    b.U8((byte)t.Param);
+                    b.U8((byte)t.Children.Count);
+                    foreach ((int clip, float threshold) in t.Children)
+                    {
+                        b.U16((ushort)clip);
+                        b.U16(0);
+                        b.F32(threshold);
+                    }
+                }
             }
             return b.ToArray();
         }

@@ -393,6 +393,55 @@ bool World::load(const io::P2bFile& file)
             for (uint32_t p = 0; p < controller.param_count; ++p) {
                 controller.param_hash[p] = v.u32(params_at + p * 4u);
             }
+
+            // Optional 1D blend-tree table (M12.5), appended after the
+            // params: u32 count, then per tree u16 state / u8 param /
+            // u8 child_count and child_count x (u16 clip, u16 pad,
+            // f32 threshold). Absent on older containers -- readers before
+            // this stopped at the params, which is what makes the addition
+            // compatible in both directions.
+            const uint32_t trees_at = params_at + controller.param_count * 4u;
+            controller.tree_count = 0;
+            if (v.ok(trees_at, 4u)) {
+                const uint32_t tree_count = v.u32(trees_at);
+                if (tree_count > anim::kMaxBlendTrees) {
+                    m_error = "too many blend trees";
+                    return false;
+                }
+                uint32_t at = trees_at + 4u;
+                for (uint32_t t = 0; t < tree_count; ++t) {
+                    if (!v.ok(at, 4u)) {
+                        m_error = "blend tree header truncated";
+                        return false;
+                    }
+                    anim::BlendTreeDef& tree = controller.trees[t];
+                    tree.state = v.u16(at + 0);
+                    tree.param = sec->data[at + 2];
+                    tree.child_count = sec->data[at + 3];
+                    at += 4u;
+                    if (tree.state >= controller.state_count ||
+                        tree.param >= controller.param_count ||
+                        tree.child_count < 2u ||
+                        tree.child_count > anim::kMaxBlendChildren) {
+                        m_error = "blend tree references out of range";
+                        return false;
+                    }
+                    if (!v.ok(at, tree.child_count * 8u)) {
+                        m_error = "blend tree children truncated";
+                        return false;
+                    }
+                    for (uint32_t c = 0; c < tree.child_count; ++c) {
+                        tree.clip[c] = v.u16(at + 0);
+                        tree.threshold[c] = v.f32(at + 4);
+                        if (tree.clip[c] >= m_clip_count) {
+                            m_error = "blend tree clip out of range";
+                            return false;
+                        }
+                        at += 8u;
+                    }
+                }
+                controller.tree_count = tree_count;
+            }
             m_controller_count = ci + 1;
         }
     }
