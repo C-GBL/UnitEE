@@ -43,11 +43,15 @@ namespace Ps2.Editor
         // pixels; the cost is vertices, paid only by meshes with big
         // triangles.
         public const float MaxTriangleEdgeWorld = 6f;
-        // Safety valve: a degenerate scale or a giant terrain cannot explode
-        // the container. Subdivision stops at this many triangles per mesh,
-        // chosen to keep the worst layout (26 tris a batch) inside the
-        // runtime's kMaxBatchesPerMesh of 64.
-        private const int MaxSubdividedTris = 1600;
+        // One MESH section holds at most this many triangles: 62 batches of
+        // 26 in the worst layout, inside the runtime's kMaxBatchesPerMesh
+        // of 64. A subdivided mesh over it is CHUNKED into several sections
+        // (extra chunks ride on synthetic child entities) -- stopping the
+        // subdivision early instead left giant triangles that flickered in
+        // and out with camera rotation as the guard band rejected them.
+        private const int MaxTrisPerChunk = 1600;
+        // Explosion valve: 16 chunks (~25K triangles) per (mesh, submesh).
+        private const int MaxChunks = 16;
 
         private struct Vert
         {
@@ -56,15 +60,20 @@ namespace Ps2.Editor
             public Color32 C;
         }
 
-        public static byte[] Export(Mesh mesh, uint kind, uint materialIndex,
-                                    Color32 fallbackColour,
-                                    float maxUserScale = 1f)
+        // Returns ONE OR MORE MESH section payloads (see MaxTrisPerChunk).
+        // 'submesh' selects one submesh's triangles; -1 exports them all
+        // (single-material meshes and the legacy callers).
+        public static System.Collections.Generic.List<byte[]> Export(
+            Mesh mesh, uint kind, uint materialIndex, Color32 fallbackColour,
+            float maxUserScale = 1f, int submesh = -1)
         {
             Vector3[] positions = mesh.vertices;
             Vector3[] normals = mesh.normals;
             Vector2[] uvs = mesh.uv;
             Color32[] colours = mesh.colors32;
-            int[] indices = mesh.triangles; // all submeshes, deindexed below
+            int[] indices = submesh >= 0 && submesh < mesh.subMeshCount
+                                ? mesh.GetTriangles(submesh)
+                                : mesh.triangles;
 
             // Deindex, then split large triangles. The threshold is world
             // units; meshes are object space, so divide by the largest scale
@@ -85,36 +94,69 @@ namespace Ps2.Editor
                             Mathf.Max(maxUserScale, 0.0001f);
             verts = Subdivide(verts, maxEdge);
 
-            int triVerts = verts.Count;
+            int totalTris = verts.Count / 3;
+            if (totalTris > MaxTrisPerChunk * MaxChunks)
+            {
+                Debug.LogWarning(
+                    $"[PS2] mesh '{mesh.name}' subdivides to {totalTris} " +
+                    $"triangles; only the first {MaxTrisPerChunk * MaxChunks} " +
+                    "are exported. Simplify the mesh or shrink it.");
+            }
+
+            // An empty submesh yields NO sections (the runtime refuses a
+            // zero-batch mesh); the caller simply records nothing for it.
+            var sections = new System.Collections.Generic.List<byte[]>();
+            for (int chunk = 0; chunk * MaxTrisPerChunk < totalTris &&
+                                chunk < MaxChunks; chunk++)
+            {
+                int firstTri = chunk * MaxTrisPerChunk;
+                int tris = Mathf.Min(MaxTrisPerChunk, totalTris - firstTri);
+                sections.Add(BuildSection(mesh, verts, firstTri * 3, tris * 3,
+                                          kind, materialIndex, fallbackColour));
+            }
+            return sections;
+        }
+
+        private static byte[] BuildSection(
+            Mesh mesh, System.Collections.Generic.List<Vert> verts,
+            int firstVert, int vertCount, uint kind, uint materialIndex,
+            Color32 fallbackColour)
+        {
+            int triVerts = vertCount;
             int maxPerBatch = UsesLitLayout(kind) ? MaxLitVertsPerBatch
                                                   : UsesTexLayout(kind)
                                                       ? MaxTexVertsPerBatch
                                                       : MaxUnlitVertsPerBatch;
             int qwordsPerVert = UsesLitLayout(kind) || UsesTexLayout(kind) ? 3 : 2;
             int batchCount = (triVerts + maxPerBatch - 1) / maxPerBatch;
-            // Matches the runtime's kMaxBatchesPerMesh. A mesh over it will
-            // be REFUSED at load ("bad batch count"); say so while the mesh
-            // still has a name and an owner who can act on it.
-            const int maxBatchesPerMesh = 64;
-            if (batchCount > maxBatchesPerMesh)
-            {
-                Debug.LogWarning(
-                    $"[PS2] mesh '{mesh.name}' needs {batchCount} VU1 batches; " +
-                    $"the runtime accepts {maxBatchesPerMesh} (~1,600 " +
-                    "triangles). The scene will fail to load until this mesh " +
-                    "is simplified or split.");
-            }
 
-            // Object-space bounding sphere from Unity's own bounds.
-            Bounds b = mesh.bounds;
-            float radius = b.extents.magnitude;
+            // Bounding sphere of THIS CHUNK's vertices, not the whole mesh:
+            // chunks of a big backdrop cull individually.
+            Vector3 mn = Vector3.zero, mx = Vector3.zero;
+            for (int i = 0; i < vertCount; i++)
+            {
+                Vector3 p = verts[firstVert + i].P;
+                if (i == 0) { mn = p; mx = p; }
+                else
+                {
+                    mn = Vector3.Min(mn, p);
+                    mx = Vector3.Max(mx, p);
+                }
+            }
+            Vector3 centre = (mn + mx) * 0.5f;
+            float radius = 0f;
+            for (int i = 0; i < vertCount; i++)
+            {
+                float d = (verts[firstVert + i].P - centre).magnitude;
+                if (d > radius) radius = d;
+            }
 
             var header = new ByteBuffer();
             header.U32((uint)batchCount);
             header.U32(materialIndex);
-            header.F32(b.center.x);
-            header.F32(b.center.y);
-            header.F32(b.center.z);
+            header.F32(centre.x);
+            header.F32(centre.y);
+            header.F32(centre.z);
             header.F32(radius);
 
             // Descs are fixed-size; blob offsets are computable up front.
@@ -146,7 +188,7 @@ namespace Ps2.Editor
 
                 for (int i = 0; i < n; i++)
                 {
-                    Vert v = verts[first + i];
+                    Vert v = verts[firstVert + first + i];
                     blobs.F32(v.P.x);
                     blobs.F32(v.P.y);
                     blobs.F32(v.P.z);
@@ -213,7 +255,8 @@ namespace Ps2.Editor
                 float bc = (b.P - c.P).sqrMagnitude;
                 float ca = (c.P - a.P).sqrMagnitude;
                 float longest = Mathf.Max(ab, Mathf.Max(bc, ca));
-                bool budget = outv.Count / 3 + work.Count + 2 <= MaxSubdividedTris;
+                bool budget = outv.Count / 3 + work.Count + 2 <=
+                              MaxTrisPerChunk * MaxChunks;
                 if (longest <= maxSq || !budget)
                 {
                     outv.Add(a);

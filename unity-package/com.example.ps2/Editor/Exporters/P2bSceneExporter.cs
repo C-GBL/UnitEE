@@ -15,9 +15,17 @@ namespace Ps2.Editor
     {
         private struct EntityRecord
         {
+            // Null for a SYNTHETIC record: an identity-transform child that
+            // carries one extra MESH section of its parent -- either another
+            // submesh (each has its own material) or another chunk of a
+            // large subdivided mesh. The runtime needs no new concept: it
+            // sees an ordinary child entity with a mesh.
             public Transform Transform;
+            public ushort Layer; // synthetic records copy the parent's layer
             public int Parent;
-            public int Mesh;     // index into the mesh list, -1 if none
+            public int Mesh;     // mesh-list index; AFTER chunk resolution,
+                                 // the final MESH section index. -1 if none
+            public List<int> ExtraMeshes; // further submeshes' mesh-list keys
             public bool IsCamera;
             public Camera Camera;
             public bool IsLight;
@@ -121,6 +129,10 @@ namespace Ps2.Editor
         private sealed class MeshKey
         {
             public Mesh Mesh;
+            public int Submesh; // ONE submesh per exported mesh: each has
+                                // its own material (a kit ground slab is
+                                // concrete AND grass; first-material-only
+                                // painted the lawn as concrete)
             public uint Kind;
             public uint MaterialIndex;
             public Color32 Fallback;
@@ -318,6 +330,70 @@ namespace Ps2.Editor
                 }
             }
 
+            // Export every (mesh, submesh) key. One key can produce SEVERAL
+            // MESH sections: the near-plane subdivision is honest about the
+            // runtime's 64-batch ceiling, so an oversized result is CHUNKED
+            // rather than left under-subdivided (an under-subdivided
+            // backdrop flickered whole missing triangles as the camera
+            // turned -- guard-band rejection of the leftovers, verify-log
+            // M12.5). Extra chunks and extra submeshes ride on synthetic
+            // identity children of the owning entity; the runtime sees
+            // plain child entities with meshes.
+            var meshSections = new List<byte[]>();
+            var meshSectionNames = new List<string>();
+            var firstSectionOf = new int[meshes.Count];
+            var chunkCountOf = new int[meshes.Count];
+            for (int k = 0; k < meshes.Count; k++)
+            {
+                MeshKey key = meshes[k];
+                List<byte[]> chunks = P2bMeshExporter.Export(
+                    key.Mesh, EffectiveKind(key.Kind), key.MaterialIndex,
+                    key.Fallback, key.MaxUserScale, key.Submesh);
+                firstSectionOf[k] = meshSections.Count;
+                chunkCountOf[k] = chunks.Count;
+                foreach (byte[] c in chunks)
+                {
+                    meshSections.Add(c);
+                    meshSectionNames.Add(key.Mesh.name);
+                }
+            }
+            int walkedCount = entities.Count;
+            for (int i = 0; i < walkedCount; i++)
+            {
+                EntityRecord rec = entities[i];
+                var keys = new List<int>();
+                if (rec.Mesh >= 0) keys.Add(rec.Mesh);
+                if (rec.ExtraMeshes != null) keys.AddRange(rec.ExtraMeshes);
+                bool primarySet = false;
+                ushort layer = rec.Transform != null
+                                   ? (ushort)rec.Transform.gameObject.layer
+                                   : (ushort)0;
+                foreach (int k in keys)
+                {
+                    for (int c = 0; c < chunkCountOf[k]; c++)
+                    {
+                        int section = firstSectionOf[k] + c;
+                        if (!primarySet)
+                        {
+                            rec.Mesh = section;
+                            primarySet = true;
+                        }
+                        else
+                        {
+                            entities.Add(new EntityRecord
+                            {
+                                Transform = null,
+                                Layer = layer,
+                                Parent = i,
+                                Mesh = section,
+                            });
+                        }
+                    }
+                }
+                if (!primarySet) rec.Mesh = -1;
+                entities[i] = rec;
+            }
+
             var writer = new P2bWriter();
 
             // MATL first (order is irrelevant to the reader; indices are
@@ -342,15 +418,10 @@ namespace Ps2.Editor
             }
             writer.AddSection(P2bWriter.SectionMaterial, matl.ToArray());
 
-            foreach (var key in meshes)
+            for (int k = 0; k < meshSections.Count; k++)
             {
-                writer.AddSection(P2bWriter.SectionMesh,
-                                  P2bMeshExporter.Export(key.Mesh,
-                                                         EffectiveKind(key.Kind),
-                                                         key.MaterialIndex,
-                                                         key.Fallback,
-                                                         key.MaxUserScale),
-                                  key.Mesh.name);
+                writer.AddSection(P2bWriter.SectionMesh, meshSections[k],
+                                  meshSectionNames[k]);
             }
             foreach (Texture2D t in textures)
             {
@@ -440,6 +511,8 @@ namespace Ps2.Editor
             var entityOf = new Dictionary<GameObject, int>();
             for (int i = 0; i < entities.Count; i++)
             {
+                if (entities[i].Transform == null)
+                    continue; // synthetic mesh-chunk child; no colliders
                 entityOf[entities[i].Transform.gameObject] = i;
             }
             P2bPhysicsExporter.BakeResult phys = P2bPhysicsExporter.Bake(
@@ -508,63 +581,87 @@ namespace Ps2.Editor
             if (filter != null && renderer != null && filter.sharedMesh != null)
             {
                 Mesh mesh = filter.sharedMesh;
-                Material mat = renderer.sharedMaterial;
-                var mainTex = mat != null ? mat.mainTexture as Texture2D : null;
-
-                uint kind = ClassifyMaterial(mat, mainTex != null,
-                                             mesh.normals != null &&
-                                             mesh.normals.Length > 0);
-                uint texIndex = 0xFFFFFFFF;
-                // Every kind that SAMPLES registers its texture -- including
-                // the synthetic textured cutout. Missing it here exported
-                // cutout materials with no texture at all, every cutout in
-                // the scene collapsed into that one material (the dedupe key
-                // is kind:texture), and the backdrop drew with whatever the
-                // skinned pass had bound the frame before -- the character's
-                // own sheet, tiled across the treeline (verify-log M12.5).
-                if (kind == P2bMeshExporter.KindUnlitTextured ||
-                    kind == KindCutoutTexturedExport)
+                // ONE exported mesh per SUBMESH, each with its own material.
+                // sharedMaterial (the first) applied to mesh.triangles (all
+                // of them) painted every kit ground slab's lawn submesh with
+                // its concrete submesh's texture (verify-log M12.5).
+                Material[] mats = renderer.sharedMaterials;
+                for (int s = 0; s < mesh.subMeshCount; s++)
                 {
-                    if (!textureLookup.TryGetValue(mainTex, out int ti))
+                    Material mat = s < mats.Length && mats[s] != null
+                                       ? mats[s]
+                                       : (mats.Length > 0 ? mats[0] : null);
+                    var mainTex = mat != null ? mat.mainTexture as Texture2D
+                                              : null;
+
+                    uint kind = ClassifyMaterial(mat, mainTex != null,
+                                                 mesh.normals != null &&
+                                                 mesh.normals.Length > 0);
+                    uint texIndex = 0xFFFFFFFF;
+                    // Every kind that SAMPLES registers its texture --
+                    // including the synthetic textured cutout. Missing it
+                    // here exported cutout materials with no texture at all,
+                    // every cutout collapsed into that one material (the
+                    // dedupe key is kind:texture), and the backdrop drew
+                    // with whatever the skinned pass had bound the frame
+                    // before -- the character's own sheet, tiled across the
+                    // treeline (verify-log M12.5).
+                    if (kind == P2bMeshExporter.KindUnlitTextured ||
+                        kind == KindCutoutTexturedExport)
                     {
-                        ti = textures.Count;
-                        textures.Add(mainTex);
-                        textureLookup.Add(mainTex, ti);
+                        if (!textureLookup.TryGetValue(mainTex, out int ti))
+                        {
+                            ti = textures.Count;
+                            textures.Add(mainTex);
+                            textureLookup.Add(mainTex, ti);
+                        }
+                        texIndex = (uint)ti;
                     }
-                    texIndex = (uint)ti;
-                }
 
-                string matKey = kind + ":" + texIndex;
-                if (!materialLookup.TryGetValue(matKey, out int mi))
-                {
-                    mi = materials.Count;
-                    materials.Add((kind, texIndex));
-                    materialLookup.Add(matKey, mi);
-                }
-
-                Color32 fallback = mat != null ? (Color32)mat.color
-                                               : new Color32(255, 255, 255, 255);
-                string meshKey = mesh.GetInstanceID() + ":" + kind + ":" + mi +
-                                 ":" + fallback.r + "," + fallback.g + "," +
-                                 fallback.b + "," + fallback.a;
-                if (!meshLookup.TryGetValue(meshKey, out int meshIndex))
-                {
-                    meshIndex = meshes.Count;
-                    meshes.Add(new MeshKey
+                    string matKey = kind + ":" + texIndex;
+                    if (!materialLookup.TryGetValue(matKey, out int mi))
                     {
-                        Mesh = mesh,
-                        Kind = kind,
-                        MaterialIndex = (uint)mi,
-                        Fallback = fallback,
-                    });
-                    meshLookup.Add(meshKey, meshIndex);
+                        mi = materials.Count;
+                        materials.Add((kind, texIndex));
+                        materialLookup.Add(matKey, mi);
+                    }
+
+                    Color32 fallback = mat != null
+                        ? (Color32)mat.color
+                        : new Color32(255, 255, 255, 255);
+                    string meshKey = mesh.GetInstanceID() + ":" + s + ":" +
+                                     kind + ":" + mi + ":" + fallback.r + "," +
+                                     fallback.g + "," + fallback.b + "," +
+                                     fallback.a;
+                    if (!meshLookup.TryGetValue(meshKey, out int meshIndex))
+                    {
+                        meshIndex = meshes.Count;
+                        meshes.Add(new MeshKey
+                        {
+                            Mesh = mesh,
+                            Submesh = s,
+                            Kind = kind,
+                            MaterialIndex = (uint)mi,
+                            Fallback = fallback,
+                        });
+                        meshLookup.Add(meshKey, meshIndex);
+                    }
+                    Vector3 ls = t.lossyScale;
+                    float userScale = Mathf.Max(Mathf.Abs(ls.x),
+                                      Mathf.Max(Mathf.Abs(ls.y),
+                                                Mathf.Abs(ls.z)));
+                    if (userScale > meshes[meshIndex].MaxUserScale)
+                        meshes[meshIndex].MaxUserScale = userScale;
+                    if (record.Mesh < 0)
+                    {
+                        record.Mesh = meshIndex;
+                    }
+                    else
+                    {
+                        record.ExtraMeshes ??= new List<int>();
+                        record.ExtraMeshes.Add(meshIndex);
+                    }
                 }
-                Vector3 ls = t.lossyScale;
-                float userScale = Mathf.Max(Mathf.Abs(ls.x),
-                                  Mathf.Max(Mathf.Abs(ls.y), Mathf.Abs(ls.z)));
-                if (userScale > meshes[meshIndex].MaxUserScale)
-                    meshes[meshIndex].MaxUserScale = userScale;
-                record.Mesh = meshIndex;
             }
 
             var skinned = t.GetComponent<SkinnedMeshRenderer>();
@@ -1154,6 +1251,23 @@ namespace Ps2.Editor
                 var e = entities[i];
                 Transform t = e.Transform;
                 b.I32(e.Parent);
+                if (t == null)
+                {
+                    // Synthetic mesh-chunk child: identity local transform
+                    // under its owner, no name (hash 0 cannot collide with a
+                    // bone), the owner's layer for culling masks.
+                    b.F32(0); b.F32(0); b.F32(0);
+                    b.F32(0); b.F32(0); b.F32(0); b.F32(1);
+                    b.F32(1); b.F32(1); b.F32(1);
+                    b.U32(0);
+                    b.U16(e.Layer);
+                    b.U16(0); // tag
+                    b.U32(0); // flags
+                    b.U32((uint)perEntity[i].first);
+                    b.U16((ushort)perEntity[i].count);
+                    b.U16(0);
+                    continue;
+                }
                 b.F32(t.localPosition.x);
                 b.F32(t.localPosition.y);
                 b.F32(t.localPosition.z);

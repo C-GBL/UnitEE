@@ -905,3 +905,31 @@ Two fixes, one per layer:
   resident, so a failed bind means flat-shaded, never someone else's
   texels. It still returns false, so callers with real fallbacks (the
   baked-font path degrades to the builtin font) behave as before.
+
+## Grass painted as concrete; a backdrop that flickered with the camera (M12.5, 2026-08-04)
+
+Two defects, one exporter restructuring.
+
+The level's lawn was never in the container: the kit's ground slab is
+ONE mesh whose submeshes carry different materials (concrete AND
+grass), and the exporter took sharedMaterial -- the first -- for
+mesh.triangles -- all of them. The grass submesh drew as concrete;
+there was no grass texture on the disc at all. Meshes now export ONE
+SECTION PER SUBMESH, each with its own classified material.
+
+The tree backdrop flickered whole triangles in and out as the camera
+turned: its subdivision hit the 1,600-triangle budget exactly, which
+means it STOPPED EARLY, and the unsplit giant triangles left behind
+crossed the guard band whenever the view rotated -- M4's rejection at
+work on exactly the geometry the subdivision was built to remove. The
+budget is no longer a stopping rule: an oversized subdivided mesh is
+CHUNKED into several MESH sections, each inside the 64-batch ceiling,
+each with a bounding sphere computed from ITS OWN vertices (a chunk of
+a city-sized backdrop culls individually, where the whole-mesh sphere
+never culled at all).
+
+Extra submeshes and extra chunks ride on SYNTHETIC child entities:
+identity local transform, parent's layer, name hash 0, one mesh
+component. The runtime needed no new concept -- parent-before-child
+ordering holds because synthetics append after every walked entity.
+The physics baker and UI walker skip records with no Transform.
