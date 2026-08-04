@@ -4,10 +4,14 @@ build/
 obj/
 bin/
 
-# IDE / editor state
+# IDE / editor state, and local assistant/tooling notes. The developer manual
+# these used to hold now lives in docs/development.md, which is versioned.
 *.user
 .vs/
 .idea/
+CLAUDE.md
+AGENTS.md
+.claude/
 
 # Toolchain tarballs (ps2dev prebuilt releases etc.)
 *.tar.gz

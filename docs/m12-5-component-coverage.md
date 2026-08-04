@@ -161,8 +161,8 @@ for focus movement and activation, plus a golden image per screen.
    7.1 table marked component by component.
 3. One sample that uses all of it at once -- the D1 candidate: a character
    animating, sound playing, particles emitting, a menu over the top.
-4. `docs/notes/verify-log.md` entries for every trap, and the CLAUDE.md
-   status block.
+4. `docs/notes/verify-log.md` entries for every trap, and the README status
+   block.
 
 ---
 

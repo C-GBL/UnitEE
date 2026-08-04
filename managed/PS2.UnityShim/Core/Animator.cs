@@ -5,7 +5,7 @@ namespace UnityEngine
     // The managed face of the native animator (plan section 7.1
     // "Animation", M9 task 4).
     //
-    // SUBSET DISCIPLINE (CLAUDE.md, ADR-007): every member here behaves as
+    // SUBSET DISCIPLINE (docs/development.md, ADR-007): every member here behaves as
     // Unity's does. That is why CrossFade -- whose Unity signature takes a
     // NORMALIZED transition duration relative to the destination clip -- is
     // absent, while CrossFadeInFixedTime, which takes seconds, is present

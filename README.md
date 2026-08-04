@@ -1,71 +1,254 @@
-# Unity -> PlayStation 2 Build Target
+# UnitEE
 
-*"Write your game in the Unity Editor using a constrained Unity-compatible API,
-press Build, get a PS2 disc image."*
+**Build PlayStation 2 games from Unity.**
 
-This repository builds a PS2 build profile for Unity 6 (6000.0.47f1): a Unity
-Editor package with a one-click Build button, an exporter that converts scenes,
-meshes, textures, animations, and audio into a PS2-native container (`.p2b`),
-an IL2CPP backend port so user C# `MonoBehaviour`s execute as native MIPS code,
-a managed facade assembly (`PS2.UnityShim`) providing a Unity-compatible API
-surface, and a native runtime ("ps2ur") for the EE/VU1/GS/IOP that loads the
-container and runs the scene.
+UnitEE turns a Unity 6 project into a PlayStation 2 program. Scenes are exported
+into native containers, your C# is compiled to MIPS through IL2CPP, geometry is
+repacked for the Vector Units, textures are quantised into the 4 MB the Graphics
+Synthesizer has, and the whole thing links into an ELF that boots.
 
-The authoritative engineering plan is [`ps2port.txt`](ps2port.txt) at the repo
-root. Note: the plan file currently ends at section 8; sections 9-18 are
-referenced but missing (see [docs/architecture.md](docs/architecture.md) for
-the open-items list).
+Your MonoBehaviours run. No middleware, no engine fork.
 
-## Feasibility, honestly (plan section 1)
+- Website: [unitee.dev](https://unitee.dev)
+- Licence: GPL-3.0
+- Not affiliated with Unity Technologies or Sony Interactive Entertainment.
 
-Unity's engine runtime is not source-available; genuinely porting Unity to the
-PS2 is impossible without a platform-partner source licence that will never be
-granted for a 2000-era console. What IS possible, and what this project ships,
-rests on three things Unity publicly ships:
+---
 
-1. `il2cpp` is a standalone AOT compiler: given .NET assemblies it emits
-   portable C++ (`--convert-to-cpp` without `--compile-cpp`) that any C++
-   compiler can build -- including `mips64r5900el-ps2-elf-g++`.
-2. `libil2cpp` (the CLR the generated C++ runs on) ships as source with the
-   Editor, with an explicitly abstracted platform layer designed for adding
-   targets (`IL2CPP_TARGET_*` switches). Adding `IL2CPP_TARGET_PS2` is a
-   supported-shaped operation, even if unsupported in policy.
-3. The Editor is fully scriptable at build time, giving complete access to
-   project data for export.
+## Status
 
-So the deliverable is a translation layer: a compiler-and-exporter that
-translates a Unity project into a native PS2 program, plus a small runtime on
-the PS2 side presenting a Unity-shaped API to the translated scripts. Nothing
-of Unity's runtime crosses the boundary -- only data in our own formats and
-C++ produced by il2cpp from the user's own source code.
+Milestones M0 through M12 are complete and verified in PCSX2. M12.5, which
+closes the gap between components the runtime supports and components the
+exporter carries, is in progress.
 
-Verdict: **feasible, with a hard scope boundary.**
+| Area | State | Measured on target |
+|---|---|---|
+| Geometry pipeline | Done | 14,976 triangles/frame, vsync locked |
+| Managed code (IL2CPP) | Done | 1M Vector3 adds in 27 ms, worst GC pause 6.97 ms |
+| Scene graph and rendering | Done | 502 entities, 5 material kinds, 29.91 fps |
+| Animation and skinning | Done | 3 characters, 24 bones, crossfades, 29.97 fps |
+| Physics and collision | Done | 71 us average step against a 4 ms budget |
+| Platform services | Done | 24 audio voices, pads, memory card, streaming |
+| Editor integration | Done | Unity scene to bootable ISO, 19.6 s clean build |
+| Component coverage | Active | Closing the authored-to-exported gap |
+| Profiler and hardware bring-up | Planned | |
 
-## Scope contract, in brief (plan section 7)
+Retail hardware is **not yet verified**. The development console for this
+project failed mid-project, so hardware bring-up is its own milestone. PCSX2
+forgives exactly what hardware does not, in particular DMA timing and cache
+coherency after DMA.
 
-A constrained but genuine Unity subset, enforced by an Editor-side validator
-that fails the build with actionable errors rather than producing a broken ISO:
+---
 
-- Full C# (as IL2CPP supports it), core math types, the
-  GameObject/Component/Transform/MonoBehaviour object model, the standard
-  lifecycle including coroutines.
-- Rendering via a fixed material model (7 material kinds mapped to VU1
-  microprograms -- there are no shaders on a GS), MeshRenderer,
-  SkinnedMeshRenderer, Camera, simple lights.
-- Clip-based animation, simple physics (raycasts, simple rigidbody, primitive
-  colliders, CharacterController), 2D/simple-3D audio, DualShock 2 input, an
-  immediate-mode uGUI subset, memory-card persistence, scene management, and
-  an Addressables-like async load from a build-ordered disc layout.
-- Documented conformance deviations (notably: hardware `float` is not
-  IEEE 754 -- no NaN/Inf, saturating; `double` is soft-float and 20-100x
-  slower). Full list in [docs/supported-api.md](docs/supported-api.md).
+## Quick start
+
+### Requirements
+
+| Component | Version |
+|---|---|
+| Unity Editor | 6000.0.47f1 |
+| dotnet SDK | 9.0.304 |
+| ps2dev toolchain | EE gcc 15.2.0, binutils 2.45.1 |
+| PCSX2 | 2.6.3 (supply your own BIOS dump) |
+| CMake, Ninja, Python | 3.10 or newer for Python |
+
+### Install the toolchain
+
+```
+powershell -File tools/ps2dev/install.ps1
+./tools/ps2dev/doctor.sh
+```
+
+The doctor script checks every compiler, assembler and library the build reaches
+for, and reports what is missing.
+
+### Add the package to a Unity project
+
+Add a `file:` dependency to `Packages/manifest.json`:
+
+```json
+{
+  "dependencies": {
+    "com.example.ps2": "file:../../path/to/unity-package/com.example.ps2"
+  }
+}
+```
+
+Create a build profile (Create > Build Profiles > PlayStation 2), add your
+scenes, and press Build in Window > PS2 > Build Profiles.
+
+### Build headlessly
+
+```
+Unity -batchmode -quit -projectPath "path/to/YourProject" \
+  -executeMethod Ps2.Editor.PS2BuildPipeline.BuildFromCommandLine \
+  -ps2Profile Assets/Settings/PS2/Release.asset \
+  -ps2Output Builds/PS2
+```
+
+The output is `game.elf` plus `game.iso`.
+
+---
+
+## How it works
+
+The Editor side is a compiler, not a player. Nothing of Unity's own runtime
+crosses onto the console. What crosses is data in UnitEE's formats plus C++ that
+IL2CPP produced from your own source files.
+
+**Stage 1, Unity Editor.** A build profile drives an eight step pipeline. The
+scene exporter writes entities, meshes, materials, textures, skeletons, clips,
+controllers, audio, fonts and baked collision into `.p2b` containers. Your
+scripts are recompiled with Roslyn against `PS2.UnityShim`, the facade that
+replaces `UnityEngine.dll`, and handed to IL2CPP.
+
+**Stage 2, native build.** The generated C++, a patched build-time copy of
+`libil2cpp`, the bdwgc collector and the `ps2ur` runtime compile and link against
+PS2SDK into one ELF. Vector Unit microprograms are assembled by `dvp-as` and
+linked in as data. `mkps2iso` wraps the result into a bootable ISO, controlling
+file order on the disc.
+
+**Stage 3, on target.** The runtime loads the container, starts the managed
+world, and runs a frame loop of input, script `Update`, animation, physics,
+culling, VU1 drawing and audio.
+
+---
+
+## What is supported
+
+A constrained but genuine Unity subset, enforced by an Editor-side validator that
+fails the build with actionable errors rather than producing a broken ISO.
+
+- **Scripting:** C# as IL2CPP supports it, the GameObject and Component object
+  model, the standard lifecycle, coroutines.
+- **Rendering:** MeshRenderer, SkinnedMeshRenderer, Camera, directional lights,
+  and a fixed material model. There are no shaders on a Graphics Synthesizer, so
+  materials map onto register configurations.
+- **Animation:** baked state machines, crossfades, 1D blend trees, additive and
+  masked layers, root motion, matrix palette skinning.
+- **Physics:** raycasts, sweeps, triggers, Rigidbody and CharacterController
+  against a baked BVH. Deliberately not PhysX.
+- **Platform:** 24 audio voices with streamed music, both controller ports with
+  pressure and rumble, memory card persistence, additive and async scene loading.
+- **UI:** a uGUI subset with layout baked at export and D-pad navigation in place
+  of the pointer.
+
+Every difference from Unity's semantics is a numbered conformance deviation in
+[docs/supported-api.md](docs/supported-api.md), asserted by tests so it cannot
+change silently.
+
+---
+
+## Building and testing the engine
+
+The runtime compiles for both the console and the host, so most of it is
+testable without a PlayStation 2.
+
+```
+# Host build: unit tests for allocators, formats, math, animation, physics.
+cmake --preset host-debug
+cmake --build --preset host-debug
+ctest --preset host-debug
+
+# Console build.
+cmake --preset ps2-release
+cmake --build --preset ps2-release
+
+# Boot a sample headlessly and assert a token in the emulator log.
+./tools/ci/run-emu-test.sh /abs/path/to/sample.elf PS2UR_TOKEN_OK
+```
+
+### Verification
+
+Nothing here is signed off by looking at a screen.
+
+- The runtime reads the framebuffer back off the Graphics Synthesizer and
+  CRC-checks it in tiles against golden images. A change that alters one tile
+  fails the check and names the tile.
+- Managed milestones assert tokens parsed out of the emulator console log.
+- 295 host tests plus 18 for the disc layout planner run on every change.
+
+---
+
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `runtime/` | `ps2ur`, the console-side engine (EE, VU1, GS, IOP) with a host platform layer |
+| `managed/PS2.UnityShim/` | The Unity-shaped API your scripts compile against |
+| `unity-package/` | The Unity package: build profile, exporters, validation, toolchain invocation |
+| `il2cpp-port/` | Patches and OS-layer files that add a PS2 target to a build-time copy of libil2cpp |
+| `samples/` | Runnable samples, from a first triangle to a physics-driven kart |
+| `tools/` | Toolchain pinning, CMake toolchain files, binding generator, golden tooling, CI glue |
+| `docs/` | Architecture, supported API, formats, decision records, verification log |
+
+---
 
 ## Documentation
 
-- [docs/architecture.md](docs/architecture.md) -- system architecture, open items
-- [docs/supported-api.md](docs/supported-api.md) -- supported API, material model, conformance deviations
-- [docs/performance-guide.md](docs/performance-guide.md) -- performance envelope and hardware constraints
-- [docs/formats/](docs/formats/) -- container/mesh/texture format specs (stubs; section 10 missing)
-- [docs/adr/](docs/adr/) -- architecture decision records (from plan section 5)
-- [docs/notes/verify-log.md](docs/notes/verify-log.md) -- resolved [VERIFY] items
-- [CLAUDE.md](CLAUDE.md) -- agent operating manual, verified environment, build commands
+| Document | Contents |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | System architecture and open items |
+| [docs/supported-api.md](docs/supported-api.md) | Supported API, material model, conformance deviations |
+| [docs/performance-guide.md](docs/performance-guide.md) | Performance envelope and hardware constraints |
+| [docs/development.md](docs/development.md) | Development guide: commands, conventions, verified environment |
+| [docs/formats/](docs/formats/) | Container, mesh and texture format specifications |
+| [docs/adr/](docs/adr/) | Architecture decision records |
+| [docs/notes/verify-log.md](docs/notes/verify-log.md) | Every trap hit on the way here, and how it was resolved |
+
+The authoritative engineering plan is [`ps2port.txt`](ps2port.txt) at the
+repository root. Where it and the documentation disagree, the plan wins.
+
+---
+
+## Why this is possible
+
+Unity's engine runtime is not source-available, and genuinely porting Unity to
+the PlayStation 2 would need a platform-partner source licence that will never be
+granted for a console from the year 2000. What this project ships instead rests
+on three things Unity publicly provides:
+
+1. `il2cpp` is a standalone AOT compiler. Given .NET assemblies it emits portable
+   C++ that any C++ compiler can build, including the PS2 toolchain.
+2. `libil2cpp`, the runtime that generated C++ executes against, ships as source
+   with the Editor and has an explicitly abstracted platform layer designed for
+   adding targets.
+3. The Editor is fully scriptable at build time, giving complete access to
+   project data for export.
+
+So the deliverable is a translation layer: a compiler and exporter that turns a
+Unity project into a native PlayStation 2 program, plus a small runtime that
+presents a Unity-shaped API to the translated scripts.
+
+---
+
+## Contributing
+
+Contributions are welcome, and roughly half the work is on the Unity side:
+exporters, editor tooling, validation passes and documentation. The Vector Unit
+side is smaller than it sounds, since each microprogram is one or two hundred
+instructions.
+
+Before starting, read [docs/development.md](docs/development.md) for the
+conventions and the hard rules. In particular, build output and any copy of
+Unity's `libil2cpp` or base class library must never be committed. A pre-commit
+hook enforces this:
+
+```
+powershell -File tools/git-hooks/install.ps1
+```
+
+---
+
+## Licence and notices
+
+Released under the GNU General Public License v3.0. See [LICENSE](LICENSE).
+
+No third-party source is vendored in this repository. Unity's `libil2cpp`,
+bdwgc and base class library are fetched from your own Editor installation at
+build time and are never redistributed here. See
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+PlayStation and PlayStation 2 are trademarks of Sony Interactive Entertainment
+Inc. Unity is a trademark of Unity Technologies. This project is not affiliated
+with, endorsed by, or supported by either company.

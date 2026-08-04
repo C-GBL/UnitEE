@@ -1,6 +1,6 @@
 # M6 report: IL2CPP on the Emotion Engine (the go/no-go gate)
 
-Date: 2026-08-01. Environment: the verified install in CLAUDE.md (Unity
+Date: 2026-08-01. Environment: the verified install in `docs/development.md` (Unity
 6000.0.47f1, il2cpp/UnityLinker from that install, unityaot-win32 BCL, EE
 gcc 15.2.0, PCSX2 2.6.3 headless via `tools/ci/run-emu-test.sh`). Every
 number below was printed by the program under test on the emulated EE and
@@ -83,7 +83,7 @@ What moved size, in order applied:
 | 10,000 allocations under 2 MB live: worst pause | 56 us; zero pauses > 1 ms |
 | Managed heap after GC bench (2 MB live) | 4.02 MB (conservative-GC factor ~2x) |
 
-- The double number validates the hard rule (CLAUDE.md, plan section 4):
+- The double number validates the hard rule (`docs/development.md`, plan section 4):
   doubles are software-emulated and catastrophic; they must never enter
   runtime hot paths. It also produced a bonus data point: the same
   1M-iteration accumulation in float diverged from the double result by

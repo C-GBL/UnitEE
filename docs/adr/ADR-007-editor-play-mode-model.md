@@ -25,7 +25,7 @@ written against real Unity in the Editor, recompiled untouched against the
 shim, behaviour verified frame-accurate on target (max matrix deviation
 5.7e-05 over 300 frames against an Editor-recorded golden).
 
-Consequences of the subset rule (CLAUDE.md hard rule: a member that exists
+Consequences of the subset rule (`docs/development.md` hard rule: a member that exists
 but does not match Unity's semantics is worse than a compile error):
 
 - Shim members are added ONLY with Unity-exact behaviour; missing members

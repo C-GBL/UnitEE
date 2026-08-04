@@ -7,7 +7,7 @@ Pipeline:  tests/HelloEE.cs --csc--> managed/  --UnityLinker--> stripped/
 Everything lands under build/m6-managed/. The EE half is il2cpp-port/
 CMakeLists.txt, pointed at gen/ via -DM6_GENERATED.
 
-Paths below are the verified environment (CLAUDE.md table; re-check on any
+Paths below are the verified environment (docs/development.md; re-check on any
 Unity upgrade). Run:  python il2cpp-port/build_m6.py
 """
 import os

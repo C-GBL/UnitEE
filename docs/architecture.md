@@ -74,6 +74,6 @@ before the work they specify can proceed beyond stubs:
 | 15 | Budgets | performance-guide.md finalization |
 | 16 | Risks | -- |
 | 17 | Legal (referenced by the section 8 hard rule on libil2cpp) | -- |
-| 18 | Claude Code operating manual | CLAUDE.md is a stand-in |
+| 18 | Contributor operating manual | `docs/development.md` is a stand-in |
 
 Stubs referencing these carry `TODO(spec missing: section N)` markers.
