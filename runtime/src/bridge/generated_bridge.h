@@ -180,8 +180,8 @@ int32_t ps2ur_phys_collider_count(void);
 int32_t ps2ur_phys_collider_entity(int32_t index);
 // The collider index riding on an entity, or -1. Baked colliders arrive from the PHYS section already bound to their entity.
 int32_t ps2ur_phys_collider_for_entity(int32_t handle);
-// Creates a CharacterController on an entity. Returns its index, or -1.
-int32_t ps2ur_phys_add_character(int32_t handle, float radius, float height, float slopeLimit, float stepOffset);
+// Creates a CharacterController on an entity. Dimensions and center are WORLD units (the managed shim applies Unity's transform scaling). Returns its index, or -1.
+int32_t ps2ur_phys_add_character(int32_t handle, float radius, float height, float slopeLimit, float stepOffset, float centerX, float centerY, float centerZ);
 // CharacterController.Move. Writes the position reached back to the entity transform and returns Unity's CollisionFlags bits.
 int32_t ps2ur_phys_move_character(int32_t index, int32_t handle, float x, float y, float z);
 // CharacterController.isGrounded.

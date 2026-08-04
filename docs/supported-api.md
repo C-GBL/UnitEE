@@ -250,3 +250,14 @@ These are listed prominently here and asserted in the conformance suite
     near-plane-crossing triangles rather than clipping them; meshes over
     ~1,600 triangles after subdivision are refused at load and warned
     about at export.
+
+34. **CharacterController configures before first use.** The native
+    capsule is created on the first `Move()`/`isGrounded`, taking the
+    radius/height/center/stepOffset set since `AddComponent` with
+    Unity's transform scaling applied. Dimensions changed AFTER that
+    first use do not reach the native capsule (Unity re-shapes it
+    live); set them up front. `center` is supported and necessary for
+    feet-origin characters. MeshColliders bake to static world-space
+    triangles at export and need Read/Write enabled on the source
+    model; convex MeshColliders are refused (baked collision is
+    static).

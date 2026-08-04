@@ -177,33 +177,66 @@ namespace UnityEngine
 
     // Unity's CharacterController over the native swept capsule.
     //
+    // Dimensions follow Unity's semantics: radius/height/center/stepOffset
+    // are LOCAL values, scaled by the transform when the native capsule is
+    // created. Creation is LAZY -- the first Move or isGrounded binds --
+    // so the standard AddComponent-then-configure sequence applies before
+    // any physics runs. Dimensions changed after that first use stay
+    // managed-only (recorded deviation; the native capsule is fixed).
+    //
     // Absent: detectCollisions, enableOverlapRecovery, minMoveDistance and
     // SimpleMove (which needs gravity integration this controller leaves to
     // the caller, deliberately -- see the Move docs below).
     public sealed class CharacterController : Component
     {
         private int m_Index = -1;
+        private int m_Handle;
+        private bool m_Bound;
         private float m_Radius = 0.5f;
         private float m_Height = 2f;
+        private Vector3 m_Center;
         private float m_SlopeLimit = 45f;
         private float m_StepOffset = 0.3f;
 
         internal void Bind(int entityHandle)
         {
-            m_Index = Native.ps2ur_phys_add_character(entityHandle, m_Radius,
-                                                      m_Height, m_SlopeLimit,
-                                                      m_StepOffset);
+            m_Handle = entityHandle;
+        }
+
+        private void EnsureBound()
+        {
+            if (m_Bound || gameObject == null)
+                return;
+            m_Bound = true;
+            // Unity scales the capsule by the transform: height and the
+            // vertical step by |y|, the radius by the larger horizontal
+            // axis, the center componentwise.
+            Vector3 s = transform.lossyScale;
+            float sy = Mathf.Abs(s.y);
+            float sxz = Mathf.Max(Mathf.Abs(s.x), Mathf.Abs(s.z));
+            m_Index = Native.ps2ur_phys_add_character(
+                m_Handle, m_Radius * sxz, m_Height * sy, m_SlopeLimit,
+                m_StepOffset * sy, m_Center.x * s.x, m_Center.y * sy,
+                m_Center.z * s.z);
             if (m_Index < 0)
                 Debug.LogError("CharacterController: the native table is full");
         }
 
         public float radius { get => m_Radius; set => m_Radius = value; }
         public float height { get => m_Height; set => m_Height = value; }
+        public Vector3 center { get => m_Center; set => m_Center = value; }
         public float slopeLimit { get => m_SlopeLimit; set => m_SlopeLimit = value; }
         public float stepOffset { get => m_StepOffset; set => m_StepOffset = value; }
 
-        public bool isGrounded =>
-            m_Index >= 0 && Native.ps2ur_phys_character_grounded(m_Index) != 0;
+        public bool isGrounded
+        {
+            get
+            {
+                EnsureBound();
+                return m_Index >= 0 &&
+                       Native.ps2ur_phys_character_grounded(m_Index) != 0;
+            }
+        }
 
         // Moves by 'motion' in WORLD units, sliding along whatever it hits.
         // Gravity is the caller's job: Unity's Move does not apply it either,
@@ -211,7 +244,10 @@ namespace UnityEngine
         // applies its own.
         public CollisionFlags Move(Vector3 motion)
         {
-            if (m_Index < 0 || gameObject == null)
+            if (gameObject == null)
+                return CollisionFlags.None;
+            EnsureBound();
+            if (m_Index < 0)
                 return CollisionFlags.None;
             return (CollisionFlags)Native.ps2ur_phys_move_character(
                 m_Index, gameObject.Handle, motion.x, motion.y, motion.z);

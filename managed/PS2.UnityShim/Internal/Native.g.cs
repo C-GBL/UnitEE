@@ -215,9 +215,9 @@ namespace UnityEngine.Internal
         [DllImport("__Internal")]
         internal static extern int ps2ur_phys_collider_for_entity(int handle);
 
-        // Creates a CharacterController on an entity. Returns its index, or -1.
+        // Creates a CharacterController on an entity. Dimensions and center are WORLD units (the managed shim applies Unity's transform scaling). Returns its index, or -1.
         [DllImport("__Internal")]
-        internal static extern int ps2ur_phys_add_character(int handle, float radius, float height, float slopeLimit, float stepOffset);
+        internal static extern int ps2ur_phys_add_character(int handle, float radius, float height, float slopeLimit, float stepOffset, float centerX, float centerY, float centerZ);
 
         // CharacterController.Move. Writes the position reached back to the entity transform and returns Unity's CollisionFlags bits.
         [DllImport("__Internal")]

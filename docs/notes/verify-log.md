@@ -962,3 +962,26 @@ the textured skinned layout (the character's blown-out white shirt was
 this too), and textured particles. Sample containers pinned by goldens
 still carry doubled colours until re-exported; parity with the Editor
 now exists for fresh exports.
+
+## The player on real ground: capsule centre, lazy bind, mesh colliders (M12.5, 2026-08-04)
+
+Three things kept the player from standing on the authored level.
+
+The shim's CharacterController bound its native capsule INSIDE
+AddComponent with default dimensions, so the documented configure-
+after-add sequence silently did nothing: a ~7-unit character walked in
+a 2-unit capsule. Binding is now LAZY (first Move/isGrounded), takes
+Unity's semantics for scale (radius by the larger horizontal axis,
+height and step by |y|, centre componentwise), and the bridge's
+add_character carries the capsule CENTRE at last -- the native struct
+always had the field, the boundary never passed it, and a feet-origin
+character's capsule sat half underground.
+
+MeshCollider baking existed since M11 and refused the kit meshes for
+one reason: the FBX imports with Read/Write disabled and the bake's
+"mesh is not readable" warning scrolls past in a build log. The kit
+meta is flipped; the movement script's spawn-plane floor is now a
+LATCH -- it holds only until the capsule first stands on real
+collision, then slopes and steps own the ground (the flat clamp was
+exactly why inclines clipped: the visual floor rose, the clamp did
+not).

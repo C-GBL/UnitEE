@@ -352,7 +352,8 @@ extern "C" int32_t ps2ur_phys_collider_for_entity(int32_t handle)
 
 extern "C" int32_t ps2ur_phys_add_character(int32_t handle, float radius,
                                             float height, float slopeLimit,
-                                            float stepOffset)
+                                            float stepOffset, float centerX,
+                                            float centerY, float centerZ)
 {
     const int32_t entity = resolve_entity(handle);
     if (entity < 0) {
@@ -364,6 +365,10 @@ extern "C" int32_t ps2ur_phys_add_character(int32_t handle, float radius,
     c.height = height > 0.0f ? height : 2.0f;
     c.slope_limit = slopeLimit;
     c.step_offset = stepOffset;
+    // Unity's CharacterController.center, in the same WORLD units as the
+    // dimensions (the shim scales all four by the transform). Without it a
+    // feet-origin character's capsule is half underground.
+    c.center = Vec3{centerX, centerY, centerZ};
     return phys::add_character(c);
 }
 
