@@ -4,9 +4,10 @@ Working on UnitEE itself: the toolchains involved, the commands, the rules that
 are not negotiable, and the environment details that cost real time when they
 are wrong.
 
-The authoritative engineering plan is `ps2port.txt` at the repository root
-(sections 1 to 18). It is never modified. Where this guide and the plan
-disagree, the plan wins.
+The authoritative engineering plan (sections 1 to 18) is an internal document
+kept outside this repository, and is never modified. Where this guide and the
+plan disagree, the plan wins. Citations of the form "plan section N" throughout
+the documentation refer to it.
 
 ## Three toolchains
 

@@ -1,8 +1,9 @@
 # Architecture
 
-**The authoritative plan is `ps2port.txt` at the repository root.** This file
-summarizes it and tracks what is missing from it. Where they disagree, the plan
-wins.
+**The authoritative plan is an internal engineering document kept outside this
+repository.** This file summarizes it and tracks what is missing from it. Where
+they disagree, the plan wins. Citations of the form "plan section N" throughout
+the documentation refer to it.
 
 ## System architecture (plan section 6, in prose)
 

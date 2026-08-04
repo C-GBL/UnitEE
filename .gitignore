@@ -13,6 +13,10 @@ CLAUDE.md
 AGENTS.md
 .claude/
 
+# The internal engineering plan. Kept locally as the authority for the work,
+# not distributed with the source. Documentation cites it as "plan section N".
+ps2port.txt
+
 # Toolchain tarballs (ps2dev prebuilt releases etc.)
 *.tar.gz
 

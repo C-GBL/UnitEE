@@ -196,8 +196,10 @@ Nothing here is signed off by looking at a screen.
 | [docs/adr/](docs/adr/) | Architecture decision records |
 | [docs/notes/verify-log.md](docs/notes/verify-log.md) | Every trap hit on the way here, and how it was resolved |
 
-The authoritative engineering plan is [`ps2port.txt`](ps2port.txt) at the
-repository root. Where it and the documentation disagree, the plan wins.
+Documents throughout the repository cite "plan section N". Those refer to the
+internal engineering plan the project is built against, which is kept outside
+this repository. The numbering is preserved in the citations so the reasoning
+behind a decision stays traceable.
 
 ---
 
