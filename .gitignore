@@ -12,6 +12,9 @@ bin/
 # Toolchain tarballs (ps2dev prebuilt releases etc.)
 *.tar.gz
 
+# unitee.dev website source -- deployed separately, not part of the toolchain
+LandingPage/
+
 # Unity-side transient folders -- scoped to the trees that contain Unity projects
 # (sample projects and the UPM package dev host), not the whole repo.
 samples/**/Library/
