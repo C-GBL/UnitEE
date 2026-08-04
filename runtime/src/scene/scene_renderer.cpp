@@ -215,7 +215,11 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
         const LoadedMaterial& mat = world.material(cmd.material);
         const uint32_t tex1 =
             mat.texture_index == 0xFFFFFFFFu ? 0u : mat.texture_index + 1u;
-        const uint32_t group = ((mat.transparent ? 1u : 0u) << 16) |
+        // The TEST bit keeps a textured-cutout material (tex layout + alpha
+        // test, M12.5) from sharing a state group with a plain textured one
+        // over the same texture: same kind, same tex, different TEST_1.
+        const uint32_t group = ((mat.gs_test != 0 ? 1u : 0u) << 17) |
+                               ((mat.transparent ? 1u : 0u) << 16) |
                                (mat.kind << 8) | tex1;
 
         if (group != current_group) {

@@ -838,3 +838,46 @@ JUMP00B, transitions gated on trigger params). The export is faithful
 to it: on target the character plays JUMP00B once and holds, until
 scripts drive the params. That is the controller doing what it says,
 not a defect.
+
+## The first authored level: five limits and a silent refusal (M12.5, 2026-08-04)
+
+The first level built from real kit assets (roads, walls, trees, grass)
+hit five independent ceilings at once, and the failure MODE was the
+worst part: World::load stored "too many materials" in a string nobody
+printed, the managed op reported done, and the game sat on the title
+screen after two file opens in the log. Diagnosed by decoding the
+container against p2b_scene.h's limits: 51 materials (limit was 32),
+137 meshes (limit 96), and one kit mesh alone needing 43 batches
+(limit 32).
+
+What changed:
+- Load failures are LOUD at both layers now: the bridge prints the
+  loader's error on the transition into Failed, and SceneManager logs
+  which scene failed and that the old one is still active.
+- Limits raised to authored-level sizes: meshes 96->192, materials
+  32->96, batches-per-mesh 32->64 (~380 KB more .bss, noise against
+  the 6 MB asset pool). The exporter warns AT EXPORT when a mesh
+  exceeds the batch ceiling, naming the mesh.
+- kMaxGpuTextures 12->64, and a texture that does not fit VRAM is now
+  SKIPPED with a message naming the lever (Texture Max Size), not a
+  fatal boot stop. bind_texture refuses skipped slots so those meshes
+  draw flat-lit rather than sampling stale VRAM.
+
+Two rendering defects the same level exposed:
+- "The camera clips everything near it": M4's VU1 pipeline REJECTS
+  whole triangles that cross the near plane -- it never clips. Kit
+  floors are 40-unit quads, so the rejection swallowed the entire
+  foreground. Fix at EXPORT: longest-edge midpoint subdivision until
+  no edge exceeds 6 world units (scale-aware: threshold divided by the
+  largest lossyScale using the mesh, since meshes are shared object
+  space), budgeted to the batch ceiling. Near artifacts shrink to at
+  most one small triangle.
+- Cutout trees drew as white slabs: KindCutout uses the LIT layout,
+  which has normals and NO UVs -- there was no textured-cutout path at
+  all. There did not need to be a new one: MATL v2 already carries
+  TEST_1 as data, so a cutout material WITH a texture now exports as
+  the tex layout plus the alpha-test TEST value (TCC=1 makes the
+  sampled alpha the tested alpha). Export-side synthetic kind only;
+  the container format is unchanged. The renderer's state-group key
+  gains a TEST bit so a textured-cutout and a plain textured material
+  sharing one texture cannot share GS state.

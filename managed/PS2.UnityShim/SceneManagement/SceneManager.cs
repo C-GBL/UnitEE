@@ -107,6 +107,15 @@ namespace UnityEngine.SceneManagement
                 return;
             SceneLoadOperation finished = s_Active;
             s_Active = null;
+            // Say it in the managed log too: a failed load otherwise looks
+            // exactly like a load nobody asked for -- the old scene keeps
+            // running and nothing on screen changes.
+            if (LoadFailed)
+            {
+                Debug.LogError("SceneManager: loading '" + s_ActiveSceneName +
+                               "' failed; the previous scene is still active." +
+                               " The native log has the reason.");
+            }
             finished.RaiseCompleted();
         }
     }

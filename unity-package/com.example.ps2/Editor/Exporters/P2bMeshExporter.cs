@@ -33,8 +33,32 @@ namespace Ps2.Editor
         public static bool UsesBlend(uint kind) =>
             kind == KindLitAlpha || kind == KindAdditive;
 
+        // The VU1 pipeline REJECTS whole triangles that cross the near plane
+        // or blow the guard band (M4) -- it never clips them. Small triangles
+        // make that invisible; an authored level's 40-unit floor quad makes
+        // it a hole that swallows the foreground (M12.5). Subdividing at
+        // export until no edge exceeds this WORLD-space length keeps the
+        // holes at most one small triangle deep. 6 world units against the
+        // usual 0.3-0.5 near plane keeps rejection artifacts under a few
+        // pixels; the cost is vertices, paid only by meshes with big
+        // triangles.
+        public const float MaxTriangleEdgeWorld = 6f;
+        // Safety valve: a degenerate scale or a giant terrain cannot explode
+        // the container. Subdivision stops at this many triangles per mesh,
+        // chosen to keep the worst layout (26 tris a batch) inside the
+        // runtime's kMaxBatchesPerMesh of 64.
+        private const int MaxSubdividedTris = 1600;
+
+        private struct Vert
+        {
+            public Vector3 P, N;
+            public Vector2 T;
+            public Color32 C;
+        }
+
         public static byte[] Export(Mesh mesh, uint kind, uint materialIndex,
-                                    Color32 fallbackColour)
+                                    Color32 fallbackColour,
+                                    float maxUserScale = 1f)
         {
             Vector3[] positions = mesh.vertices;
             Vector3[] normals = mesh.normals;
@@ -42,13 +66,44 @@ namespace Ps2.Editor
             Color32[] colours = mesh.colors32;
             int[] indices = mesh.triangles; // all submeshes, deindexed below
 
-            int triVerts = indices.Length;
+            // Deindex, then split large triangles. The threshold is world
+            // units; meshes are object space, so divide by the largest scale
+            // any entity applies to this mesh.
+            var verts = new System.Collections.Generic.List<Vert>(indices.Length);
+            for (int i = 0; i < indices.Length; i++)
+            {
+                int src = indices[i];
+                verts.Add(new Vert
+                {
+                    P = positions[src],
+                    N = normals.Length > src ? normals[src] : Vector3.up,
+                    T = uvs.Length > src ? uvs[src] : Vector2.zero,
+                    C = colours.Length > src ? colours[src] : fallbackColour,
+                });
+            }
+            float maxEdge = MaxTriangleEdgeWorld /
+                            Mathf.Max(maxUserScale, 0.0001f);
+            verts = Subdivide(verts, maxEdge);
+
+            int triVerts = verts.Count;
             int maxPerBatch = UsesLitLayout(kind) ? MaxLitVertsPerBatch
                                                   : UsesTexLayout(kind)
                                                       ? MaxTexVertsPerBatch
                                                       : MaxUnlitVertsPerBatch;
             int qwordsPerVert = UsesLitLayout(kind) || UsesTexLayout(kind) ? 3 : 2;
             int batchCount = (triVerts + maxPerBatch - 1) / maxPerBatch;
+            // Matches the runtime's kMaxBatchesPerMesh. A mesh over it will
+            // be REFUSED at load ("bad batch count"); say so while the mesh
+            // still has a name and an owner who can act on it.
+            const int maxBatchesPerMesh = 64;
+            if (batchCount > maxBatchesPerMesh)
+            {
+                Debug.LogWarning(
+                    $"[PS2] mesh '{mesh.name}' needs {batchCount} VU1 batches; " +
+                    $"the runtime accepts {maxBatchesPerMesh} (~1,600 " +
+                    "triangles). The scene will fail to load until this mesh " +
+                    "is simplified or split.");
+            }
 
             // Object-space bounding sphere from Unity's own bounds.
             Bounds b = mesh.bounds;
@@ -91,33 +146,29 @@ namespace Ps2.Editor
 
                 for (int i = 0; i < n; i++)
                 {
-                    int src = indices[first + i];
-                    Vector3 p = positions[src];
-                    blobs.F32(p.x);
-                    blobs.F32(p.y);
-                    blobs.F32(p.z);
+                    Vert v = verts[first + i];
+                    blobs.F32(v.P.x);
+                    blobs.F32(v.P.y);
+                    blobs.F32(v.P.z);
                     blobs.F32(1.0f);
 
                     if (UsesTexLayout(kind))
                     {
-                        Vector2 uv = uvs.Length > src ? uvs[src] : Vector2.zero;
-                        blobs.F32(uv.x);
                         // GS texture space has V growing DOWN; Unity's grows up.
-                        blobs.F32(1.0f - uv.y);
+                        blobs.F32(v.T.x);
+                        blobs.F32(1.0f - v.T.y);
                         blobs.F32(1.0f); // becomes Q after the 1/w multiply
                         blobs.F32(0.0f);
                     }
                     else if (UsesLitLayout(kind))
                     {
-                        Vector3 nrm = normals.Length > src ? normals[src]
-                                                           : Vector3.up;
-                        blobs.F32(nrm.x);
-                        blobs.F32(nrm.y);
-                        blobs.F32(nrm.z);
+                        blobs.F32(v.N.x);
+                        blobs.F32(v.N.y);
+                        blobs.F32(v.N.z);
                         blobs.F32(0.0f);
                     }
 
-                    Color32 c = colours.Length > src ? colours[src] : fallbackColour;
+                    Color32 c = v.C;
                     blobs.F32(c.r);
                     blobs.F32(c.g);
                     blobs.F32(c.b);
@@ -135,6 +186,72 @@ namespace Ps2.Editor
             section.PadTo(16);
             section.Bytes(blobs.ToArray());
             return section.ToArray();
+        }
+
+        // Longest-edge midpoint split until every edge is under maxEdge
+        // (object units). Deliberately edge-of-triangle local -- no shared
+        // topology -- because the list is already deindexed; a T-junction
+        // between neighbours splits identically on both sides only when the
+        // shared edge is the one split, which longest-edge selection does
+        // not guarantee. In practice kit geometry is planar quads and the
+        // seams land on interpolated values of the SAME plane, so nothing
+        // cracks visually; lighting is per-vertex either way.
+        private static System.Collections.Generic.List<Vert> Subdivide(
+            System.Collections.Generic.List<Vert> tris, float maxEdge)
+        {
+            float maxSq = maxEdge * maxEdge;
+            var work = new System.Collections.Generic.Stack<(Vert, Vert, Vert)>();
+            for (int i = tris.Count - 3; i >= 0; i -= 3)
+            {
+                work.Push((tris[i], tris[i + 1], tris[i + 2]));
+            }
+            var outv = new System.Collections.Generic.List<Vert>(tris.Count);
+            while (work.Count > 0)
+            {
+                (Vert a, Vert b, Vert c) = work.Pop();
+                float ab = (a.P - b.P).sqrMagnitude;
+                float bc = (b.P - c.P).sqrMagnitude;
+                float ca = (c.P - a.P).sqrMagnitude;
+                float longest = Mathf.Max(ab, Mathf.Max(bc, ca));
+                bool budget = outv.Count / 3 + work.Count + 2 <= MaxSubdividedTris;
+                if (longest <= maxSq || !budget)
+                {
+                    outv.Add(a);
+                    outv.Add(b);
+                    outv.Add(c);
+                    continue;
+                }
+                if (longest == ab)
+                {
+                    Vert m = Mid(a, b);
+                    work.Push((a, m, c));
+                    work.Push((m, b, c));
+                }
+                else if (longest == bc)
+                {
+                    Vert m = Mid(b, c);
+                    work.Push((a, b, m));
+                    work.Push((a, m, c));
+                }
+                else
+                {
+                    Vert m = Mid(c, a);
+                    work.Push((a, b, m));
+                    work.Push((m, b, c));
+                }
+            }
+            return outv;
+        }
+
+        private static Vert Mid(Vert a, Vert b)
+        {
+            return new Vert
+            {
+                P = (a.P + b.P) * 0.5f,
+                N = (a.N + b.N).normalized,
+                T = (a.T + b.T) * 0.5f,
+                C = Color32.Lerp(a.C, b.C, 0.5f),
+            };
         }
 
         // GIF tag identical to the runtime's GsPacket.begin_packed output.

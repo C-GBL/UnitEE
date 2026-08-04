@@ -124,6 +124,10 @@ namespace Ps2.Editor
             public uint Kind;
             public uint MaterialIndex;
             public Color32 Fallback;
+            // Largest lossyScale of any entity using this mesh: meshes are
+            // object-space and shared, and the near-rejection subdivision
+            // threshold is a WORLD-space size (see P2bMeshExporter).
+            public float MaxUserScale = 1f;
         }
 
         public static void ExportActiveScene(string path)
@@ -321,7 +325,10 @@ namespace Ps2.Editor
             var matl = new ByteBuffer();
             foreach (var m in materials)
             {
-                matl.U32(m.kind);
+                // The synthetic textured-cutout kind leaves the exporter
+                // here: the container carries the tex-layout kind plus the
+                // cutout TEST value, which together ARE textured cutout.
+                matl.U32(EffectiveKind(m.kind));
                 matl.U32(m.texture);
                 matl.F32(1);
                 matl.F32(1);
@@ -338,9 +345,11 @@ namespace Ps2.Editor
             foreach (var key in meshes)
             {
                 writer.AddSection(P2bWriter.SectionMesh,
-                                  P2bMeshExporter.Export(key.Mesh, key.Kind,
+                                  P2bMeshExporter.Export(key.Mesh,
+                                                         EffectiveKind(key.Kind),
                                                          key.MaterialIndex,
-                                                         key.Fallback),
+                                                         key.Fallback,
+                                                         key.MaxUserScale),
                                   key.Mesh.name);
             }
             foreach (Texture2D t in textures)
@@ -542,6 +551,11 @@ namespace Ps2.Editor
                     });
                     meshLookup.Add(meshKey, meshIndex);
                 }
+                Vector3 ls = t.lossyScale;
+                float userScale = Mathf.Max(Mathf.Abs(ls.x),
+                                  Mathf.Max(Mathf.Abs(ls.y), Mathf.Abs(ls.z)));
+                if (userScale > meshes[meshIndex].MaxUserScale)
+                    meshes[meshIndex].MaxUserScale = userScale;
                 record.Mesh = meshIndex;
             }
 
@@ -608,6 +622,19 @@ namespace Ps2.Editor
             }
         }
 
+        // EXPORT-SIDE synthetic kind: a cutout material WITH a texture. The
+        // runtime has no textured-lit layout, but it does not need a new
+        // kind either -- the GS does textured cutout as DATA: the tex
+        // layout's program plus a TEST_1 with the alpha test on, both of
+        // which MATL v2 already carries. The synthetic value exists only so
+        // the material table dedupes it separately; it is written to the
+        // container as KindUnlitTextured (EffectiveKind below).
+        private const uint KindCutoutTexturedExport = 100;
+
+        private static uint EffectiveKind(uint kind) =>
+            kind == KindCutoutTexturedExport ? P2bMeshExporter.KindUnlitTextured
+                                             : kind;
+
         // Kind selection (plan 7.3): explicit transparent/cutout/additive
         // classification from the material, then the M5 texture/normals
         // fallback. Standard "Transparent" rendering mode and anything at or
@@ -622,7 +649,14 @@ namespace Ps2.Editor
                 if (shaderName.Contains("Additive"))
                     return P2bMeshExporter.KindAdditive;
                 if (renderType == "TransparentCutout")
-                    return P2bMeshExporter.KindCutout;
+                    // A textured cutout keeps its texture: leaf shapes come
+                    // from the SAMPLED alpha (TCC=1), tested by TEST_1. The
+                    // untextured form keeps the lit layout as before. What
+                    // the textured form gives up is lighting -- there is no
+                    // lit+textured program (deviation noted in
+                    // supported-api).
+                    return hasTexture ? KindCutoutTexturedExport
+                                      : P2bMeshExporter.KindCutout;
                 if (renderType == "Transparent" || mat.renderQueue >= 3000)
                     return P2bMeshExporter.KindLitAlpha;
             }
@@ -637,7 +671,8 @@ namespace Ps2.Editor
         // no alpha test). Bit layout matches ps2ur::gfx::gs_test.
         private static ulong GsTestFor(uint kind)
         {
-            if (kind == P2bMeshExporter.KindCutout)
+            if (kind == P2bMeshExporter.KindCutout ||
+                kind == KindCutoutTexturedExport)
             {
                 // ATE on, ATST=GEQUAL(5), AREF=64 (0.5 in PS2 alpha), AFAIL=
                 // KEEP(0), depth test GEQUAL(2) on.

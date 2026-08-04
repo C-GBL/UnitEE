@@ -324,6 +324,15 @@ extern "C" int32_t ps2ur_scene_load_update(int32_t byteBudget)
          before == ps2ur::scene::LoadState::Parsing)) {
         ps2ur::bridge::note_scene_activation();
     }
+    // A load that dies mid-flight otherwise dies SILENTLY: the loader
+    // stores the error string, the managed op reports isDone, the swap
+    // never happens, and the running scene just keeps running. The first
+    // real level hit exactly that ("too many materials") and the log
+    // showed two file opens and then nothing (verify-log M12.5).
+    if (after == ps2ur::scene::LoadState::Failed &&
+        before != ps2ur::scene::LoadState::Failed) {
+        PS2UR_LOG_ERROR("scene load FAILED: %s", g_loader.error());
+    }
     return static_cast<int32_t>(after);
 }
 

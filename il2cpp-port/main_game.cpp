@@ -88,9 +88,13 @@ constexpr uint32_t kAddrSkinTex = 1500;
 // VRAM holds the two colour buffers and the depth buffer, so what is left is
 // what textures get. Eight 256x256 PSMT8 pages plus CLUTs fits comfortably.
 // Raised from 8 when baked fonts arrived: each (font, size) pair is one
-// more resident texture. 12 x (256x256 PSMT8 + CLUT) is ~780 KB of the
-// ~1.4 MB left after the framebuffers -- tight but honest headroom.
-constexpr uint32_t kMaxGpuTextures = 12;
+// more resident texture. Raised again from 12 when the first authored level
+// shipped 48 textures and 36 of them silently drew as white: the table is
+// bookkeeping (~24 bytes an entry), so VRAM itself should be the limit that
+// bites -- and it now bites PER TEXTURE, skipping what does not fit with a
+// message naming the lever (Texture Max Size in the build profile) instead
+// of stopping the boot.
+constexpr uint32_t kMaxGpuTextures = 64;
 
 struct GpuTexture {
     gfx::VramAlloc tex;
@@ -108,9 +112,12 @@ bool bind_texture(void* user, uint32_t index, uint32_t* out_w, uint32_t* out_h)
 {
     BindContext* ctx = static_cast<BindContext*>(user);
     if (index >= ctx->count) {
-        return false; // not resident (over the 8-slot budget); say so
+        return false; // not resident (over the slot budget); say so
     }
     GpuTexture& t = ctx->textures[index];
+    if (!t.tex.valid()) {
+        return false; // upload was skipped (VRAM full); draw untextured
+    }
     ctx->device->set_texture_indexed(t.tex, t.w, t.h, gfx::PixelFormat::PSMT8,
                                      t.clut, 256);
     *out_w = t.w;
@@ -281,6 +288,7 @@ bool upload_scene_textures(gfx::GsDevice& device, const io::P2bFile& file,
                static_cast<unsigned>(kMaxGpuTextures));
         tex_count = kMaxGpuTextures - base;
     }
+    uint32_t skipped = 0;
     for (uint32_t t = 0; t < tex_count; ++t) {
         // ONE PACKET PER TEXTURE. A 256x256 PSMT8 upload is 4096 qwords of
         // IMAGE data; several in one frame packet overflow it, and the
@@ -302,19 +310,27 @@ bool upload_scene_textures(gfx::GsDevice& device, const io::P2bFile& file,
                                    gfx::PixelFormat::PSMT8) ||
             !device.upload_clut(reinterpret_cast<const uint32_t*>(p + 16u),
                                 gt.clut, 256)) {
-            printf("[game] texture %u (%ux%u) failed to upload: %s. Lower "
-                   "Texture Max Size in the PS2 build profile, or use fewer "
-                   "textures.\n",
+            // A texture that does not fit is a QUALITY loss, not a fatal
+            // one: free whatever half-landed, leave the slot unbound (the
+            // renderer's bind returns false and the mesh draws untextured)
+            // and keep going. One message per texture names the lever.
+            printf("[game] texture %u (%ux%u) skipped: %s. Lower Texture "
+                   "Max Size in the PS2 build profile, or use fewer or "
+                   "smaller textures.\n",
                    static_cast<unsigned>(base + t), static_cast<unsigned>(gt.w),
                    static_cast<unsigned>(gt.h),
                    (!gt.tex.valid() || !gt.clut.valid())
                        ? "no room left in VRAM"
                        : "the GS packet overflowed");
-            device.vram().debug_dump();
-            device.end_frame();
-            return false;
+            device.vram().free(gt.tex);
+            device.vram().free(gt.clut);
+            gt = GpuTexture{};
+            ++skipped;
         }
         device.end_frame();
+    }
+    if (skipped > 0) {
+        device.vram().debug_dump();
     }
     *io_count = base + tex_count;
     return true;

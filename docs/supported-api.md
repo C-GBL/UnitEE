@@ -238,3 +238,15 @@ These are listed prominently here and asserted in the conformance suite
     baked per scene and cannot merge). Scripts carry no serialised
     fields, so scene names passed to LoadScene belong in code, not the
     Inspector.
+
+33. **Cutout materials with a texture render UNLIT.** The runtime has no
+    lit-and-textured vertex layout, so a `TransparentCutout` material
+    with a main texture exports as the textured layout plus a GS alpha
+    test on the sampled alpha: leaf and fence shapes cut correctly, but
+    the surface ignores scene lighting (bake lighting into the texture
+    or vertex colours, the PS2-era norm). An untextured cutout keeps
+    vertex lighting, as before. Large triangles are subdivided at export
+    (max edge ~6 world units) because the VU1 pipeline REJECTS
+    near-plane-crossing triangles rather than clipping them; meshes over
+    ~1,600 triangles after subdivision are refused at load and warned
+    about at export.

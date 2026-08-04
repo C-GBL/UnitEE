@@ -24,9 +24,17 @@ namespace ps2ur {
 namespace scene {
 
 inline constexpr uint32_t kMaxEntities = 640;
-inline constexpr uint32_t kMaxMeshes = 96;
-inline constexpr uint32_t kMaxMaterials = 32;
-inline constexpr uint32_t kMaxBatchesPerMesh = 32;
+// Sized for an authored level, not a test scene: the first real one came in
+// at 137 meshes and 51 materials and the load refused (M12.5). A LoadedMesh
+// is ~0.8 KB and a LoadedMaterial ~40 B, so the doubled tables cost ~80 KB
+// of .bss -- noise against the 6 MB asset pool beside them.
+inline constexpr uint32_t kMaxMeshes = 192;
+inline constexpr uint32_t kMaxMaterials = 96;
+// 64 batches x 78 verts is ~1,600 triangles per mesh -- the ceiling the
+// exporter's near-plane subdivision budgets against, and comfortably above
+// the ~43 batches the largest authored kit piece measured. A BatchBlock is
+// ~24 bytes, so the doubled table is ~300 KB of .bss across kMaxMeshes.
+inline constexpr uint32_t kMaxBatchesPerMesh = 64;
 inline constexpr uint32_t kMaxScripts = 64;
 // Skinning (M9). A 1,500-triangle character at 16 triangles per batch (the
 // VIF NUM ceiling for 5-qword vertices) is ~94 batches, so skinned meshes
