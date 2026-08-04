@@ -515,7 +515,15 @@ namespace Ps2.Editor
                                              mesh.normals != null &&
                                              mesh.normals.Length > 0);
                 uint texIndex = 0xFFFFFFFF;
-                if (kind == P2bMeshExporter.KindUnlitTextured)
+                // Every kind that SAMPLES registers its texture -- including
+                // the synthetic textured cutout. Missing it here exported
+                // cutout materials with no texture at all, every cutout in
+                // the scene collapsed into that one material (the dedupe key
+                // is kind:texture), and the backdrop drew with whatever the
+                // skinned pass had bound the frame before -- the character's
+                // own sheet, tiled across the treeline (verify-log M12.5).
+                if (kind == P2bMeshExporter.KindUnlitTextured ||
+                    kind == KindCutoutTexturedExport)
                 {
                     if (!textureLookup.TryGetValue(mainTex, out int ti))
                     {

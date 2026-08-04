@@ -106,23 +106,34 @@ struct BindContext {
     gfx::GsDevice* device;
     GpuTexture* textures;
     uint32_t count;
+    // A 16x16 all-white texture, bound whenever the requested one cannot
+    // be. Mesh blobs carry TME in their baked PRIM, so a FAILED bind used
+    // to mean "sample whatever the previous pass left in the GS" -- which
+    // is how a tree backdrop wore the player's face (verify-log M12.5).
+    // White modulated by gouraud is indistinguishable from untextured, so
+    // the failure mode becomes flat-shaded, not somebody else's texels.
+    GpuTexture white;
 };
 
 bool bind_texture(void* user, uint32_t index, uint32_t* out_w, uint32_t* out_h)
 {
     BindContext* ctx = static_cast<BindContext*>(user);
-    if (index >= ctx->count) {
-        return false; // not resident (over the slot budget); say so
+    GpuTexture* t = nullptr;
+    if (index < ctx->count && ctx->textures[index].tex.valid()) {
+        t = &ctx->textures[index];
+    } else if (ctx->white.tex.valid()) {
+        t = &ctx->white; // not resident: white, so TME'd blobs draw flat
+    } else {
+        return false;
     }
-    GpuTexture& t = ctx->textures[index];
-    if (!t.tex.valid()) {
-        return false; // upload was skipped (VRAM full); draw untextured
-    }
-    ctx->device->set_texture_indexed(t.tex, t.w, t.h, gfx::PixelFormat::PSMT8,
-                                     t.clut, 256);
-    *out_w = t.w;
-    *out_h = t.h;
-    return true;
+    ctx->device->set_texture_indexed(t->tex, t->w, t->h,
+                                     gfx::PixelFormat::PSMT8, t->clut, 256);
+    *out_w = t->w;
+    *out_h = t->h;
+    // Callers that CHECK the result still take their own fallbacks (the
+    // baked-font path degrades to the builtin font); the white bind only
+    // changes what the GS holds for callers that cannot un-TME a blob.
+    return t != &ctx->white;
 }
 
 uint32_t rd_u32(const uint8_t* p)
@@ -798,6 +809,35 @@ int main(void)
     }
     scene::RendererPrograms programs; // 0 / 300 / 700 / 1000 / 1300
     BindContext bind_ctx{&device, textures, tex_count};
+
+    // The white fallback for failed binds (see bind_texture). Allocated
+    // outside the scene tables so scene swaps -- which free every scene
+    // texture -- never touch it. If VRAM has no room even for this, the
+    // fallback quietly stays invalid and bind failures return false as
+    // they always did.
+    {
+        alignas(16) static uint8_t white_pixels[16 * 16] = {};
+        alignas(16) static uint32_t white_clut[256];
+        for (uint32_t i = 0; i < 256; ++i) {
+            white_clut[i] = 0x80FFFFFFu; // opaque white, PS2 alpha 0x80
+        }
+        bind_ctx.white.w = 16;
+        bind_ctx.white.h = 16;
+        bind_ctx.white.tex = device.vram().alloc_buffer(
+            16, 16, gfx::PixelFormat::PSMT8, "white-fallback");
+        bind_ctx.white.clut = device.vram().alloc_buffer(
+            16, 16, gfx::PixelFormat::PSMCT32, "white-clut");
+        if (bind_ctx.white.tex.valid() && bind_ctx.white.clut.valid()) {
+            device.begin_frame();
+            device.clear(0, 0, 0);
+            if (!device.upload_texture(white_pixels, bind_ctx.white.tex, 16, 16,
+                                       gfx::PixelFormat::PSMT8) ||
+                !device.upload_clut(white_clut, bind_ctx.white.clut, 256)) {
+                bind_ctx.white = GpuTexture{};
+            }
+            device.end_frame();
+        }
+    }
 
     // --- Frame loop ---------------------------------------------------------
     //

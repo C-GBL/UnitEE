@@ -881,3 +881,27 @@ Two rendering defects the same level exposed:
   the container format is unchanged. The renderer's state-group key
   gains a TEST bit so a textured-cutout and a plain textured material
   sharing one texture cannot share GS state.
+
+## The treeline wore the player's face (M12.5, 2026-08-04)
+
+Follow-up to the textured-cutout change, found on target: trees and
+grass still white, and the tree BACKDROP rendered tiled with the
+character's own texture. Container decode named it: the cutout
+material had texture 0xFFFFFFFF -- the walk registers a material's
+texture only for kinds it knows sample, and the new synthetic cutout
+kind was not on that list. Every cutout in the scene then collapsed
+into that ONE textureless material (the dedupe key is kind:texture),
+its bind failed, and the baked-TME blobs sampled whatever the GS still
+held: the previous frame's LAST bind, which is the skinned pass's --
+the character sheet, tiled across the treeline. Third appearance of
+the stale-bind shape.
+
+Two fixes, one per layer:
+- The walk registers textures for the synthetic cutout kind too;
+  re-export decodes with every material textured (the foliage sheet
+  became TEX 6 of 7).
+- The class is now closed on the game host: bind_texture binds a
+  16x16 WHITE fallback whenever the requested texture is not
+  resident, so a failed bind means flat-shaded, never someone else's
+  texels. It still returns false, so callers with real fallbacks (the
+  baked-font path degrades to the builtin font) behave as before.
