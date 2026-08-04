@@ -548,7 +548,7 @@ namespace Ps2.Editor
                         clip, clipRoot, skeleton.Ordered, skeleton.Index,
                         skeleton.RestRef, SampleRate, clip.isLooping,
                         PositionTolerance, RotationDotTolerance,
-                        ScaleTolerance));
+                        ScaleTolerance, warnings));
                     clipLengths.Add(clip.length);
                     clipIndex.Add(clip, ci);
                 }

@@ -358,7 +358,11 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
         // -- a 6-qword blob through the 5-qword program is garbage, whatever
         // the material says -- and the material supplies the texture to bind.
         // Binding happens here, before this renderer's chain traffic starts,
-        // the same between-kicks rule the queue's groups follow.
+        // the same between-kicks rule the queue's groups follow. The bind
+        // MUST be flushed before the chain kicks: set_texture_indexed only
+        // appends to the direct packet, and an unflushed TEX0 leaves the
+        // character drawing with whatever the previous pass bound last --
+        // in a scene with UI, the font atlas.
         const int32_t skin_mat = renderer.material >= 0
                                      ? renderer.material
                                      : static_cast<int32_t>(mesh.material_index);
@@ -368,7 +372,10 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
                 world.material(static_cast<uint32_t>(skin_mat));
             if (sm.texture_index != 0xFFFFFFFFu) {
                 uint32_t tw = 0, th = 0;
-                bind_texture(bind_user, sm.texture_index, &tw, &th);
+                device.packet().reset();
+                if (bind_texture(bind_user, sm.texture_index, &tw, &th)) {
+                    device.flush_packet();
+                }
             }
         }
         const uint32_t skin_program =
@@ -468,6 +475,10 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
             const bool world_space = (emitter.flags & 8u) != 0u;
             const Mat4& model =
                 world.world_matrix(static_cast<uint32_t>(emitter.entity));
+            // Bind + state ride the direct packet and must flush BEFORE this
+            // system's chain kicks (the same rule as the skinned pass above;
+            // unflushed, they land a pass late).
+            device.packet().reset();
             bool textured =
                 emitter.texture != 0xFFFFFFFFu && bind_texture != nullptr;
             if (textured) {
@@ -478,6 +489,7 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
             // no Z write, blend on. 0x44 = (Cs-Cd)*As+Cd, 0x48 = Cs*As+Cd.
             device.set_material_state(
                 0, (emitter.flags & 4u) != 0u ? 0x48u : 0x44u, true, false);
+            device.flush_packet();
 
             uint32_t emitted = 0;
             uint32_t batch_count = 0;

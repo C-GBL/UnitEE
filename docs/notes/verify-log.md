@@ -772,3 +772,69 @@ match Unity's MEASURED matrices from the diagnosis dump (spine at
 (0, 1.00, -0.02), lossy scale 12.25) on the real container -- the
 scale path M9's unit-scale rigs never exercised, now pinned against
 ground truth rather than inspection.
+
+## The striped character: an unflushed TEX0 is a one-pass-stale TEX0 (M12.5, 2026-08-04)
+
+With assembly fixed the character rendered wearing horizontal grey
+bands. Container decode cleared the export completely: material 0 ->
+texture 0, SKMS textured flag set, normalised UVs, and texture 0's
+payload decoded to the actual character sheet, pixel-perfect. The
+screen showed different data than the container carried, and the bands
+had the shape of font-atlas glyph rows.
+
+Cause, by reading the two draw paths side by side: set_texture_indexed
+and set_material_state only APPEND to the device's direct packet; the
+caller owns the flush. The M8 rigid queue does reset/bind/flush between
+kicks. The M12.5 skinned pass flushed BEFORE its per-renderer bind and
+never after, so the TEX0 write sat buffered while the character drew
+through the DMA chain with whatever the previous pass had left bound.
+In a scene with UI that is the LAST UI texture of the previous frame
+-- text draws last, so the font atlas, permanently. The particle pass
+had the same latent shape (bind + material state, no flush).
+
+Why nothing caught it: without UI nobody rebinds after the skinned
+pass, so the buffered write lands one frame late and every golden
+captured after frame 1 is correct. The acceptance scene had no UI;
+the user's game did. A state write that is merely LATE is invisible
+to steady-state verification -- only a scene that keeps changing the
+state between frames exposes it.
+
+Fix: reset/bind/flush around the skinned pass's per-renderer bind and
+the particle pass's bind + material state, the exact discipline the
+rigid queue already followed. Goldens must stay bit-identical: the fix
+only moves writes earlier within the frame.
+
+## 24 clips of nothing: the Animator culled itself out of the bake (M12.5, 2026-08-04)
+
+"No animation" decoded to something stranger: every clip present, every
+track present, and every track a 2-key constant EQUAL TO THE REST POSE
+-- the keyframe reducer faithfully compressing 24 clips in which
+nothing moves. The exporter's graph sampler writes its pose THROUGH
+the Animator, and the Animator honours its culling mode even for a
+manual PlayableGraph.Evaluate. This character's Animator has Culling
+Mode = Cull Update Transforms (a common inspector default); a headless
+build renders nothing, every renderer counts invisible, and the
+evaluate becomes a no-op. Sampling reads back the scene pose at every
+t; the reducer collapses it to 2 keys; the runtime plays the freeze
+faithfully.
+
+Measured, not inferred: a batchmode probe against a CLONE of the user
+project (the open Editor holds the project lock; a clone without
+Library re-imports and works) with the real scene and controller:
+graph as-is moved the probe bones 0.000; graph with AlwaysAnimate
+forced moved them 17.16; the old SampleAnimation fallback ALSO moved
+0.000 on these humanoid clips. One number per hypothesis.
+
+Fix: ExportClip forces AlwaysAnimate for the duration of sampling and
+restores after -- baking always animates; culling is a runtime
+concern. Guard for the class: any clip longer than 50 ms whose every
+sampled track is constant now warns by name at build time, because a
+frozen export and a deliberate pose clip are indistinguishable in the
+container.
+
+Also learned here: the character's Animator wears unity-chan's
+ActionCheck controller (24 states in a next/prev ring, default state
+JUMP00B, transitions gated on trigger params). The export is faithful
+to it: on target the character plays JUMP00B once and holds, until
+scripts drive the params. That is the controller doing what it says,
+not a defect.

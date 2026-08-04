@@ -178,7 +178,8 @@ namespace Ps2.Editor
                                         float sampleRate, bool loop,
                                         float positionTolerance,
                                         float rotationDotTolerance,
-                                        float scaleTolerance)
+                                        float scaleTolerance,
+                                        List<string> warnings = null)
         {
             int sampleCount = Mathf.Max(2, Mathf.RoundToInt(clip.length * sampleRate) + 1);
             var tracks = new SampledTrack[ordered.Length];
@@ -205,6 +206,20 @@ namespace Ps2.Editor
             PlayableGraph graph = default;
             AnimationClipPlayable playable = default;
             bool wasLegacy = clip.legacy;
+            // The graph writes its pose THROUGH the Animator, and the
+            // Animator honours its culling mode even for a manual Evaluate.
+            // A headless build renders nothing, so with Cull Update
+            // Transforms (the scene default for many characters) every
+            // renderer counts as invisible and the evaluate is a no-op:
+            // 24 clips exported, every track a constant at the rest pose,
+            // and nothing said why (verify-log M12.5). Baking always
+            // animates; culling is a runtime concern.
+            AnimatorCullingMode wasCulling = animator != null
+                ? animator.cullingMode : AnimatorCullingMode.AlwaysAnimate;
+            if (animator != null)
+            {
+                animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+            }
             if (viaGraph)
             {
                 graph = PlayableGraph.Create("ps2-clip-bake");
@@ -267,6 +282,38 @@ namespace Ps2.Editor
             else
             {
                 clip.legacy = wasLegacy;
+            }
+            if (animator != null)
+            {
+                animator.cullingMode = wasCulling;
+            }
+
+            // A clip whose every sampled track is a constant produced a
+            // character frozen in one pose. That is legitimate for a
+            // deliberate pose clip and a defect for everything else, and
+            // the difference is invisible in the container -- so say it
+            // here, where the clip still has a name.
+            if (warnings != null && clip.length > 0.05f)
+            {
+                bool moved = false;
+                for (int i = 0; i < ordered.Length && !moved; i++)
+                {
+                    for (int s = 1; s < sampleCount && !moved; s++)
+                    {
+                        moved = (tracks[i].Position[s] - tracks[i].Position[0])
+                                    .sqrMagnitude > 1e-10f ||
+                                Quaternion.Dot(tracks[i].Rotation[s],
+                                               tracks[i].Rotation[0]) < 0.999999f;
+                    }
+                }
+                if (!moved)
+                {
+                    warnings.Add(
+                        $"clip '{clip.name}' sampled as a constant pose -- no " +
+                        "bone moves anywhere in it. If it animates in Play " +
+                        "Mode, the export sampler could not drive this rig " +
+                        "(check the Animator's avatar and culling mode).");
+                }
             }
 
             // Build the track table and key stream.
