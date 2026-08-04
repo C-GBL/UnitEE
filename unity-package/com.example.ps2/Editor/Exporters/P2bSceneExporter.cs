@@ -52,6 +52,11 @@ namespace Ps2.Editor
             // the runtime's palette-times-entity-world composition is exact
             // whatever non-bone nodes the FBX parked in between.
             public List<Transform> GroupAnimators = new List<Transform>();
+            // Ground-truth measurements taken IN Unity at export: written
+            // next to the .p2b as <name>.rigdiag.json. When a character
+            // draws wrong on target, this answers which side lied without
+            // another guess-rebuild round trip.
+            public List<string> Diagnosis = new List<string>();
             // The texture each SkinnedMeshes entry samples, or null for the
             // vertex-coloured 5-qword format. The scene exporter turns these
             // into TEX sections and MATL records and patches each mesh's
@@ -445,6 +450,12 @@ namespace Ps2.Editor
             writer.AddSection(P2bWriter.SectionScene, BuildScene(entities, scriptNames, audioClipIndex,
                                        textureLookup));
             writer.Write(path);
+            if (PendingSkin != null && PendingSkin.Diagnosis.Count > 0)
+            {
+                string diagPath = path + ".rigdiag.json";
+                System.IO.File.WriteAllLines(diagPath, PendingSkin.Diagnosis);
+                Debug.Log("[PS2] rig diagnosis written to " + diagPath);
+            }
 
             // A rig this call baked belongs to THIS scene. PendingSkin is
             // static, so leaving it set would carry scene 1's character into

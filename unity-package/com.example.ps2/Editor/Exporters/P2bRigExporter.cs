@@ -205,6 +205,11 @@ namespace Ps2.Editor
                 }
             }
 
+            if (usable.Count > 0)
+            {
+                BuildDiagnosis(payload, usable, reference);
+            }
+
             if (hierarchyAnimator != null)
             {
                 CollectRigidBones(hierarchyAnimator.transform, unionBones,
@@ -363,6 +368,63 @@ namespace Ps2.Editor
                 payload.RendererGroup[smr] = group;
             }
             return payload;
+        }
+
+        // Measurements, not inferences: Unity's own matrices for the rig
+        // as it stands, plus one vertex pushed through BOTH skinning
+        // formulas -- Unity's (boneWorld x storedBind) and this exporter's
+        // (rest chain x recomputed bind). All positions are relative to the
+        // reference (Animator) transform, the space the runtime works in.
+        private static void BuildDiagnosis(P2bSceneExporter.SkinPayload payload,
+                                           List<SkinnedMeshRenderer> usable,
+                                           Transform reference)
+        {
+            var d = payload.Diagnosis;
+            d.Add("{ \"reference\": \"" + PathOf(reference.gameObject) + "\",");
+            d.Add("  \"referenceLossyScale\": \"" + reference.lossyScale + "\",");
+            d.Add("  \"renderers\": [");
+            foreach (SkinnedMeshRenderer smr in usable)
+            {
+                Mesh mesh = smr.sharedMesh;
+                Matrix4x4 refW2L = reference.worldToLocalMatrix;
+                Matrix4x4 rel = refW2L * smr.transform.localToWorldMatrix;
+                Matrix4x4[] stored = mesh.bindposes;
+                Transform bone0 = smr.bones[0];
+                Matrix4x4 boneRel = refW2L * bone0.localToWorldMatrix;
+                Matrix4x4 recomputed0 = bone0.worldToLocalMatrix *
+                                        smr.transform.localToWorldMatrix;
+
+                Vector3 v0 = mesh.vertices[0];
+                BoneWeight bw = mesh.boneWeights.Length > 0
+                                    ? mesh.boneWeights[0]
+                                    : default(BoneWeight);
+                Transform strong = smr.bones[bw.boneIndex0];
+                Matrix4x4 storedStrong = bw.boneIndex0 < stored.Length
+                                             ? stored[bw.boneIndex0]
+                                             : Matrix4x4.identity;
+                Vector3 unityV0 = (refW2L * strong.localToWorldMatrix *
+                                   storedStrong).MultiplyPoint3x4(v0);
+                Vector3 oursV0 = rel.MultiplyPoint3x4(v0);
+
+                d.Add("    { \"smr\": \"" + PathOf(smr.gameObject) + "\",");
+                d.Add("      \"mesh\": \"" + mesh.name + "\", \"subMeshes\": " +
+                      mesh.subMeshCount + ", \"verts\": " + mesh.vertexCount + ",");
+                d.Add("      \"smrRelPos\": \"" + (Vector3)rel.GetColumn(3) +
+                      "\", \"smrRelScale\": \"" + rel.lossyScale + "\",");
+                d.Add("      \"bone0\": \"" + bone0.name +
+                      "\", \"bone0RelPos\": \"" + (Vector3)boneRel.GetColumn(3) +
+                      "\", \"bone0RelScale\": \"" + boneRel.lossyScale + "\",");
+                d.Add("      \"storedBind0Scale\": \"" +
+                      (stored.Length > 0 ? stored[0].lossyScale : Vector3.zero) +
+                      "\", \"recomputedBind0Scale\": \"" +
+                      recomputed0.lossyScale + "\",");
+                d.Add("      \"meshBoundsCenter\": \"" + mesh.bounds.center +
+                      "\", \"meshBoundsExtents\": \"" + mesh.bounds.extents + "\",");
+                d.Add("      \"strongBone\": \"" + strong.name +
+                      "\", \"vert0UnityTruth\": \"" + unityV0 +
+                      "\", \"vert0OurPipeline\": \"" + oursV0 + "\" },");
+            }
+            d.Add("  ] }");
         }
 
         // Strict descendants of the Animator's transform, parents before
