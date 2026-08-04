@@ -721,3 +721,27 @@ decode (renderers present, entities x376) -> direct-boot variant ELF
 (bypasses the title screen for a headless SampleScene boot: stats said
 DRAWN) -> offline transform simulation (behind the near plane). Each
 step replaced a guess with a number.
+
+## The 8x body parts: stored bindposes vs the rig as it stands (M12.5, 2026-08-03)
+
+After the space fix the character appeared -- textured, lit, real-font
+UI beside it -- as correctly-placed bones wearing wrongly-scaled flesh:
+"the body is above the head". Container decode again: the rest chain
+carried the armature's x12.25, the STORED bindposes carried the SMR
+node's x100, and their product put spine-skinned vertices 0.9 units
+above the head bone. The mesh's stored bindposes describe the rig at
+SKINNING time; import pipelines routinely rearrange unit-conversion
+factors between armature and mesh nodes afterwards, and the two ends
+stop agreeing. Unity survives because its bone worlds and its stored
+binds drift TOGETHER through its own import fixups; an exporter that
+mixes its own rest chain with the stored binds inherits the
+disagreement raw.
+
+Fix: bind poses are RECOMPUTED at export from the same transforms the
+rest chain samples (bone.worldToLocalMatrix x smr.localToWorldMatrix),
+so rest x bind cancels by construction and the runtime reproduces the
+pose the Editor shows -- for any FBX, any import history. Requires the
+scene pose to be the bind pose, which a character in its default
+imported pose satisfies. Scale tracks: none are emitted for constant
+bone scales (keyframe reduction), and the runtime falls back to rest
+scale, which now carries the folded armature factor -- checked, sane.

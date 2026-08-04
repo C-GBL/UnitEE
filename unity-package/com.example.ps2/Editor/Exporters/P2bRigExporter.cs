@@ -163,10 +163,23 @@ namespace Ps2.Editor
             foreach (SkinnedMeshRenderer smr in usable)
             {
                 Transform[] bones = smr.bones;
-                Matrix4x4[] binds = smr.sharedMesh.bindposes;
+                // Bind poses RECOMPUTED from the transforms as they stand,
+                // not the mesh's stored ones. The stored bindposes describe
+                // the rig at skinning time, and an import pipeline that
+                // rescaled nodes afterwards (this is routine: unit-conversion
+                // factors get rearranged between armature and mesh nodes)
+                // leaves them disagreeing with the rest chain we export --
+                // the character came out as correctly-placed bones wearing
+                // 8x-scaled body parts (verify-log M12.5). Building the bind
+                // from the same transforms the rest chain samples makes the
+                // product cancel BY CONSTRUCTION: the runtime reproduces
+                // exactly the pose the Editor shows. Requires the scene pose
+                // to BE the bind pose, which an imported character in its
+                // default pose satisfies.
                 for (int i = 0; i < bones.Length; i++)
                 {
-                    Matrix4x4 bind = i < binds.Length ? binds[i] : Matrix4x4.identity;
+                    Matrix4x4 bind = bones[i].worldToLocalMatrix *
+                                     smr.transform.localToWorldMatrix;
                     int at;
                     if (boneAt.TryGetValue(bones[i], out at))
                     {
