@@ -745,3 +745,30 @@ scene pose to be the bind pose, which a character in its default
 imported pose satisfies. Scale tracks: none are emitted for constant
 bone scales (keyframe reduction), and the runtime falls back to rest
 scale, which now carries the folded armature factor -- checked, sane.
+
+## Three renderers, three mesh spaces, one bind table (M12.5, 2026-08-03)
+
+The rig-diagnosis dump earned its keep on its first outing. It showed
+(a) Unity's skinning formula and the exporter's producing IDENTICAL
+vertices -- both correct, my earlier python simulation was the wrong
+tool -- and (b) the actual defect in three numbers: the character's
+renderers sit at different node transforms (arms y 1.54, body y -0.02,
+head y 1.89), Unity's stored bindposes map from each renderer's OWN
+mesh space, and the union skeleton keeps ONE bind per bone -- whichever
+renderer contributed it first. The body's vertices went through the
+arms' bind: displaced 1.56 units up, "the body is above the head",
+literally. The BindposesAgree warning had been firing all along, with
+advice that blamed the asset for what the union design could not
+represent.
+
+Fix: vertices are baked into REFERENCE (Animator) space at export and
+binds are reference-relative -- renderer-independent by construction,
+so the union can never conflict again. Side benefits: exported
+vertices carry sane magnitudes (~1.9 units, not 0.01), and the culling
+bounds need no separate space fix.
+
+The runtime is exonerated by test_scaled_rig: the composed bone worlds
+match Unity's MEASURED matrices from the diagnosis dump (spine at
+(0, 1.00, -0.02), lossy scale 12.25) on the real container -- the
+scale path M9's unit-scale rigs never exercised, now pinned against
+ground truth rather than inspection.

@@ -154,6 +154,16 @@ namespace Ps2.Editor
                     "renaming a bone after export breaks its binding.");
             }
 
+            Animator animator = usable.Count > 0
+                ? usable[0].GetComponentInParent<Animator>()
+                : hierarchyAnimator;
+            // The rig's runtime space: the entity the renderer records bind
+            // to, and the space every rest transform, bind matrix, VERTEX
+            // and clip key is exported in.
+            Transform reference = animator != null ? animator.transform
+                                : usable.Count > 0 ? usable[0].transform.root
+                                : hierarchyAnimator.transform;
+
             // ONE skeleton, shared. Every usable renderer contributes its bones
             // to a union: this is how a character is actually authored, with
             // each material a separate renderer over the same rig.
@@ -163,23 +173,22 @@ namespace Ps2.Editor
             foreach (SkinnedMeshRenderer smr in usable)
             {
                 Transform[] bones = smr.bones;
-                // Bind poses RECOMPUTED from the transforms as they stand,
-                // not the mesh's stored ones. The stored bindposes describe
-                // the rig at skinning time, and an import pipeline that
-                // rescaled nodes afterwards (this is routine: unit-conversion
-                // factors get rearranged between armature and mesh nodes)
-                // leaves them disagreeing with the rest chain we export --
-                // the character came out as correctly-placed bones wearing
-                // 8x-scaled body parts (verify-log M12.5). Building the bind
-                // from the same transforms the rest chain samples makes the
-                // product cancel BY CONSTRUCTION: the runtime reproduces
-                // exactly the pose the Editor shows. Requires the scene pose
-                // to BE the bind pose, which an imported character in its
-                // default pose satisfies.
+                // Bind poses are REFERENCE-relative and therefore identical
+                // for every renderer that shares a bone -- which the union
+                // skeleton requires. Unity's stored bindposes map from each
+                // renderer's OWN mesh space, and a character's renderers sit
+                // at different node transforms (this model's arms at y 1.54,
+                // body at -0.02, head at 1.89): one stored bind per bone put
+                // the body's vertices through the arms' map, 1.56 units up --
+                // "the body is above the head", literally (verify-log
+                // M12.5). The vertices are baked into reference space at
+                // export to match. Requires the scene pose to be the bind
+                // pose, which an imported character in its default pose
+                // satisfies.
                 for (int i = 0; i < bones.Length; i++)
                 {
                     Matrix4x4 bind = bones[i].worldToLocalMatrix *
-                                     smr.transform.localToWorldMatrix;
+                                     reference.localToWorldMatrix;
                     int at;
                     if (boneAt.TryGetValue(bones[i], out at))
                     {
@@ -231,19 +240,8 @@ namespace Ps2.Editor
                 return null;
             }
 
-            Animator animator = usable.Count > 0
-                ? usable[0].GetComponentInParent<Animator>()
-                : hierarchyAnimator;
-
             var payload = new P2bSceneExporter.SkinPayload();
 
-            // The rig's runtime space: the entity the renderer records bind
-            // to, and the space every rest transform and clip key is
-            // exported in. One skeleton means one reference; a scene with
-            // characters under DIFFERENT animators shares group 0's.
-            Transform reference = animator != null ? animator.transform
-                                : usable.Count > 0 ? usable[0].transform.root
-                                : hierarchyAnimator.transform;
             P2bAnimExporter.SkeletonExport skeleton = P2bAnimExporter.ExportSkeleton(
                 unionBones.ToArray(), unionBind.ToArray(), reference);
             payload.Skeleton = skeleton.Bytes;
@@ -333,12 +331,15 @@ namespace Ps2.Editor
                                     smr.sharedMesh.uv.Length ==
                                         smr.sharedMesh.vertexCount;
                     at = payload.SkinnedMeshes.Count;
+                    // Bakes the renderer's node transform into the vertices:
+                    // every mesh lands in reference space, matching the
+                    // reference-relative binds above.
+                    Matrix4x4 toReference = reference.worldToLocalMatrix *
+                                            smr.transform.localToWorldMatrix;
                     payload.SkinnedMeshes.Add(P2bAnimExporter.ExportSkinnedMesh(
                         smr.sharedMesh, 0, FallbackColour(smr),
                         skeleton.Ordered, skeleton.Index, smr.bones, 0,
-                        textured,
-                        reference.worldToLocalMatrix *
-                            smr.transform.localToWorldMatrix));
+                        textured, toReference, toReference));
                     payload.MeshTextures.Add(textured ? tex : null);
                     meshAt[smr.sharedMesh] = at;
                 }

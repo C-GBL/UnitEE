@@ -516,10 +516,28 @@ namespace Ps2.Editor
                                                Transform[] originalBones,
                                                int skeletonIndex,
                                                bool textured = false,
-                                               Matrix4x4? boundsTransform = null)
+                                               Matrix4x4? boundsTransform = null,
+                                               Matrix4x4? vertexTransform = null)
         {
             Vector3[] positions = mesh.vertices;
             Vector3[] normals = mesh.normals;
+            if (vertexTransform.HasValue)
+            {
+                // Bake the renderer's node transform into the geometry so
+                // every renderer of the character shares ONE mesh space (the
+                // reference), which the union skeleton's single bind per
+                // bone requires.
+                Matrix4x4 vt = vertexTransform.Value;
+                positions = (Vector3[])positions.Clone();
+                for (int i = 0; i < positions.Length; i++)
+                    positions[i] = vt.MultiplyPoint3x4(positions[i]);
+                if (normals != null && normals.Length > 0)
+                {
+                    normals = (Vector3[])normals.Clone();
+                    for (int i = 0; i < normals.Length; i++)
+                        normals[i] = vt.MultiplyVector(normals[i]).normalized;
+                }
+            }
             Color32[] colours = mesh.colors32;
             Vector2[] uvs = textured ? mesh.uv : null;
             BoneWeight[] weights = mesh.boneWeights;
