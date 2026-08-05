@@ -223,31 +223,82 @@ void shutdown()
 } // namespace scratchpad
 
 // ---- Heap facade -----------------------------------------------------------
-// Host: malloc-backed with manual alignment. PS2: to be replaced by a
-// fixed-budget allocator. TODO(spec missing: section 9): heap budget/layout.
+// malloc-backed with manual alignment, plus the accounting D4 needs (plan
+// section 2, M13 task 2). Two pointer-sized slots sit immediately below every
+// user pointer: the raw block to hand back to free, and the payload size.
+// Keeping the size means the facade can report outstanding bytes and a
+// high-water mark without a side table, which on a machine with no virtual
+// memory is the difference between "we fit" and "we think we fit".
+
+namespace {
+
+HeapStats g_heap;
+constexpr size_t kHeapHeader = 2 * sizeof(void*);
+
+} // namespace
+
+void heap_set_budget(size_t bytes) { g_heap.budget = bytes; }
+
+const HeapStats& heap_stats() { return g_heap; }
+
+void heap_reset_stats()
+{
+    const size_t outstanding = g_heap.outstanding;
+    const size_t budget = g_heap.budget;
+    g_heap = HeapStats{};
+    // Outstanding is live state, not a statistic: zeroing it would make the
+    // next free underflow the counter and report nonsense forever after.
+    g_heap.outstanding = outstanding;
+    g_heap.peak = outstanding;
+    g_heap.budget = budget;
+}
 
 void* heap_alloc(size_t size, size_t align)
 {
     PS2UR_ASSERT(is_pow2(align));
-    if (align < sizeof(void*)) {
-        align = sizeof(void*);
+    if (align < kHeapHeader) {
+        align = kHeapHeader;
     }
-    void* raw = std::malloc(size + align + sizeof(void*));
+
+    // Refuse before allocating rather than after: the point of a budget on
+    // this machine is that the failure is visible here, at a named call site,
+    // instead of as an out-of-memory death somewhere unrelated later.
+    if (g_heap.budget != 0 && g_heap.outstanding + size > g_heap.budget) {
+        g_heap.failures++;
+        return nullptr;
+    }
+
+    void* raw = std::malloc(size + align + kHeapHeader);
     if (raw == nullptr) {
+        g_heap.failures++;
         return nullptr;
     }
     const uintptr_t user =
-        (reinterpret_cast<uintptr_t>(raw) + sizeof(void*) + (align - 1)) &
+        (reinterpret_cast<uintptr_t>(raw) + kHeapHeader + (align - 1)) &
         ~static_cast<uintptr_t>(align - 1);
     reinterpret_cast<void**>(user)[-1] = raw;
+    reinterpret_cast<size_t*>(reinterpret_cast<void**>(user) - 2)[0] = size;
+
+    g_heap.allocs++;
+    g_heap.outstanding += size;
+    if (g_heap.outstanding > g_heap.peak) {
+        g_heap.peak = g_heap.outstanding;
+    }
     return reinterpret_cast<void*>(user);
 }
 
 void heap_free(void* ptr)
 {
-    if (ptr != nullptr) {
-        std::free(static_cast<void**>(ptr)[-1]);
+    if (ptr == nullptr) {
+        return;
     }
+    void** user = static_cast<void**>(ptr);
+    const size_t size = reinterpret_cast<size_t*>(user - 2)[0];
+    void* raw = user[-1];
+
+    g_heap.frees++;
+    g_heap.outstanding = size > g_heap.outstanding ? 0 : g_heap.outstanding - size;
+    std::free(raw);
 }
 
 } // namespace ps2ur

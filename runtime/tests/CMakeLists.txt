@@ -18,6 +18,9 @@ add_executable(ps2ur_tests
     test_alloc.cpp
     test_alloc_stack_pool.cpp
     test_time.cpp
+    test_profiler.cpp
+    test_meminfo.cpp
+    test_soak.cpp
     test_gfx.cpp
     test_swizzle.cpp
     test_texcache.cpp

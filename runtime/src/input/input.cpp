@@ -147,10 +147,59 @@ void shutdown()
 
 bool initialized() { return g_initialized; }
 
+namespace playback {
+namespace {
+const Frame* g_frames = nullptr;
+uint32_t g_count = 0;
+uint32_t g_at = 0;
+uint32_t g_loops = 0;
+} // namespace
+
+void start(const Frame* frames, uint32_t count)
+{
+    g_frames = count > 0 ? frames : nullptr;
+    g_count = frames != nullptr ? count : 0;
+    g_at = 0;
+    g_loops = 0;
+}
+
+void stop()
+{
+    g_frames = nullptr;
+    g_count = 0;
+}
+
+bool active() { return g_frames != nullptr && g_count > 0; }
+uint32_t position() { return g_at; }
+uint32_t loops() { return g_loops; }
+
+} // namespace playback
+
 void update()
 {
     for (uint32_t port = 0; port < kMaxPorts; ++port) {
         g_pads[port].previous = g_pads[port].buttons;
+    }
+
+    // Playback substitutes for the hardware poll. It runs before the real
+    // read and returns, so the edge queries above still compare this frame
+    // against the last one and a recorded button press produces exactly the
+    // same button_down() a human's would.
+    if (playback::active()) {
+        PadState& pad = g_pads[0];
+        const input::playback::Frame& f = playback::g_frames[playback::g_at];
+        pad.connected = true;
+        pad.analog = true;
+        pad.buttons = f.buttons;
+        pad.lx = f.lx;
+        pad.ly = f.ly;
+        pad.rx = f.rx;
+        pad.ry = f.ry;
+        if (++playback::g_at >= playback::g_count) {
+            playback::g_at = 0;
+            playback::g_loops++;
+        }
+        return;
     }
 #if defined(PS2UR_PLATFORM_PS2)
     for (uint32_t port = 0; port < kMaxPorts; ++port) {

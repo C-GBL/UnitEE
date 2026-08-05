@@ -2,6 +2,7 @@
 
 #include "ps2ur/log.h"
 #include "ps2ur/platform.h"
+#include "ps2ur/profiler.h"
 #include "ps2ur/vu_program.h"
 
 #if defined(PS2UR_PLATFORM_PS2)
@@ -113,6 +114,11 @@ bool DmaChain::kick()
     }
 
     packet2_utils_vu_add_end_tag(p);
+    // Opens the profiler's pipeline window: from here until the chain is
+    // waited on, VU1 and the GS are working while the EE is free to do
+    // something else. The width of that window is the only honest measure of
+    // how much of the frame the pipeline was busy for (M13 task 1).
+    prof::mark_pipeline_kick();
     const uint64_t t0 = platform::now_ticks();
     // Flush the EE cache over the chain AND every ref'd block: the blocks were
     // written through the cache and the DMAC reads physical RAM (the same

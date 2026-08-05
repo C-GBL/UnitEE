@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 
 namespace ps2ur {
 
@@ -120,9 +121,32 @@ void shutdown();
 
 } // namespace scratchpad
 
-// Heap facade. Host: malloc-backed. PS2: will carve from a fixed budget so D4
-// (peak RAM <= 30 MB, plan section 2) is enforceable.
-// TODO(spec missing: section 15 wiring): per-allocator budgets from section 15.1.
+// Heap facade. Every allocation carries its size in a header, so the facade
+// can answer the two questions D4 asks (plan section 2: peak RAM <= 30 MB of
+// the 32, no allocation failure across a 30-minute soak): how much is out
+// right now, and how much has ever been out at once.
+struct HeapStats {
+    size_t outstanding = 0; // bytes currently handed out (payload only)
+    size_t peak = 0;        // high-water mark of outstanding
+    size_t budget = 0;      // ceiling; 0 means unlimited
+    uint32_t allocs = 0;
+    uint32_t frees = 0;
+    uint32_t failures = 0; // refused by the budget, or the backing heap said no
+};
+
+// Sets the ceiling in bytes. An allocation that would cross it fails (returns
+// nullptr) and increments failures, rather than being allowed through and
+// discovered later as a crash on a machine with no virtual memory. 0 removes
+// the ceiling. Lowering it below what is already out is allowed: nothing is
+// reclaimed, but further growth stops.
+void heap_set_budget(size_t bytes);
+
+const HeapStats& heap_stats();
+
+// Zeroes the counters. Does not touch live allocations; outstanding is
+// preserved because forgetting it would make the next free underflow.
+void heap_reset_stats();
+
 void* heap_alloc(size_t size, size_t align = 16);
 void heap_free(void* ptr);
 

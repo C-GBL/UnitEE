@@ -782,6 +782,11 @@ namespace Ps2.Editor
             // enough that a scene which crashes on frame 2 does not look
             // healthy, early enough that a test does not wait seconds for it.
             sb.AppendLine("#define PS2_GAME_READY_FRAME 30");
+            // Profiler (M13). The overlay is always compiled in and starts
+            // off; the profiler flag decides whether the build ALSO measures
+            // a fixed window and dumps it for CI. A frame count rather than
+            // a timer keeps the measurement reproducible across runs.
+            sb.AppendLine($"#define PS2_GAME_PROFILE_FRAMES {(p.profiler ? 600 : 0)}");
             File.WriteAllText(Path.Combine(gameBuild, "game_config.h"), sb.ToString());
         }
 

@@ -2,6 +2,8 @@
 
 #include "ps2ur/gs_batch.h"
 #include "ps2ur/log.h"
+#include "ps2ur/profiler.h"
+#include "ps2ur/profiler_overlay.h"
 
 #include <cstring>
 
@@ -657,7 +659,12 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
     // packet and 3D draws over it, which is fine for a stats readout and
     // wrong for a menu. Elements draw in table order, which the exporter
     // wrote in hierarchy order: painter's algorithm, exactly like uGUI.
-    if (m_ui_ready && world.ui_element_count() > 0) {
+    // The profiler overlay rides this same "after every 3D kick" packet
+    // rather than the clear packet, for the reason the comment above gives:
+    // a stats readout the scene draws over is a stats readout you cannot
+    // read (M13 task 1).
+    const bool draw_profiler = prof::page() != prof::Page::Off;
+    if (m_ui_ready && (world.ui_element_count() > 0 || draw_profiler)) {
         device.begin_frame();
         for (uint32_t i = 0; i < world.ui_element_count(); ++i) {
             const UIElement& ui = world.ui_element(i);
@@ -745,6 +752,12 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
                     break;
             }
         }
+        if (draw_profiler) {
+            m_ui_overlay.set_scale(1);
+            prof::draw_overlay(device, m_ui_overlay,
+                               static_cast<int32_t>(device.config().width),
+                               static_cast<int32_t>(device.config().height));
+        }
         device.end_frame(/*flip=*/false);
     }
 
@@ -752,7 +765,16 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
         *stats = local;
     }
     // Every kick has been waited on: the buffer is complete. Show it.
-    device.present();
+    //
+    // This gets its own zone because present() blocks on vsync, and a frame
+    // budget that counts the wait as work says "rendering costs 33 ms" for a
+    // scene that finished in 4 and then idled. Separating it is the whole
+    // difference between "we are over budget" and "we are done early"
+    // (plan section 15.3).
+    {
+        PS2UR_PROFILE_ZONE("present");
+        device.present();
+    }
     return true;
 }
 

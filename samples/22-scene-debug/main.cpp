@@ -11,9 +11,12 @@
 #include <ps2ur/gs_device.h>
 #include <ps2ur/log.h>
 #include <ps2ur/math.h>
+#include <ps2ur/meminfo.h>
 #include <ps2ur/p2b.h>
 #include <ps2ur/p2b_scene.h>
 #include <ps2ur/platform.h>
+#include <ps2ur/profiler.h>
+#include <ps2ur/profiler_overlay.h>
 #include <ps2ur/scene_renderer.h>
 #include <ps2ur/vu_program.h>
 
@@ -185,20 +188,41 @@ int main(void)
     scene::RendererPrograms programs;
     BindContext bind_ctx{&device, textures, tex_count < 64u ? tex_count : 64u};
 
+    // Memory instrumentation (M13 task 2). Registered before the loop so the
+    // map describes the same run the profile does.
+    mem::reset();
+    mem::add_arena("file-arena", &file_arena);
+    mem::add_heap("heap");
+    mem::add_external(
+        "vram", 4u * 1024u * 1024u,
+        [](void* ctx) -> size_t {
+            return static_cast<size_t>(
+                       static_cast<gfx::GsDevice*>(ctx)->vram().used_pages()) *
+                   8192u;
+        },
+        &device);
+
     renderer.debug_next_frame();
     // 4 seconds of playback: enough for any idle to visibly leave the bind
     // pose, so a T-posed character in the dumped frame means FROZEN, not
     // merely slow.
     for (uint32_t frame = 0; frame < 120; ++frame) {
-        world.update_animators(1.0f / 30.0f);
-        world.update_world_matrices();
+        prof::begin_frame();
+        {
+            PS2UR_PROFILE_ZONE("animation");
+            world.update_animators(1.0f / 30.0f);
+            world.update_world_matrices();
+        }
         scene::RenderStats stats;
-        if (!renderer.render(device, chain, world, programs, bind_texture,
-                             &bind_ctx, &stats)) {
-            printf("PS2UR_TOKEN_DBG_FAIL render frame %u\n",
-                   static_cast<unsigned>(frame));
-            SleepThread();
-            return 1;
+        {
+            PS2UR_PROFILE_ZONE("render");
+            if (!renderer.render(device, chain, world, programs, bind_texture,
+                                 &bind_ctx, &stats)) {
+                printf("PS2UR_TOKEN_DBG_FAIL render frame %u\n",
+                       static_cast<unsigned>(frame));
+                SleepThread();
+                return 1;
+            }
         }
         if (frame == 0 || frame == 119) {
             printf("[22-scene-debug] frame %u: drawn %u culled %u kicks %u "
@@ -227,7 +251,16 @@ int main(void)
                    static_cast<unsigned>(a.state()), dev,
                    a.bone_world(5).m[13]);
         }
+        prof::record_dma(chain);
+        prof::end_frame();
     }
+
+    // The profile itself (M13 tasks 1 and 2): a summary CI can parse, the
+    // memory map, and the CSVs the offline viewer reads.
+    prof::log_summary();
+    mem::log_map();
+    prof::dump_csv("host:profile.csv");
+    mem::dump_csv("host:memory.csv");
     // The rendered frame itself, written back through the emulator's host
     // filesystem: diagnostics you can LOOK at, not just read about.
     if (device.read_framebuffer(g_frame, 0, 0, 512, 448)) {

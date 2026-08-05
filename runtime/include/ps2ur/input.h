@@ -48,6 +48,36 @@ bool initialized();
 // queries below compare against the previous call.
 void update();
 
+// Recorded input playback (plan section 9, M13 task 5: "30-minute automated
+// play session (recorded input playback)").
+//
+// A soak test has to press buttons for half an hour without a person in the
+// room, and it has to press the SAME buttons every run or a failure is not
+// reproducible. update() substitutes the recorded frame for the hardware
+// poll while playback is active, so everything above this line behaves
+// exactly as it does with a pad in someone's hands, including the edge
+// queries.
+namespace playback {
+
+// One recorded frame. Buttons are a bitmask indexed by Button; sticks are
+// raw 0..255 pad bytes, so a recording is byte-identical to what the pad
+// reported and needs no rescaling on the way back in.
+struct Frame {
+    uint16_t buttons = 0;
+    uint8_t lx = 128, ly = 128, rx = 128, ry = 128;
+};
+
+// Drives port 0 from 'frames'. The table is not copied, so it must outlive
+// playback. When the end is reached it loops, which is what turns a ten
+// second recording into a thirty minute session.
+void start(const Frame* frames, uint32_t count);
+void stop();
+bool active();
+uint32_t position(); // index of the frame update() will apply next
+uint32_t loops();    // times the recording has wrapped
+
+} // namespace playback
+
 bool connected(uint32_t port);
 // True once the pad reports the DualShock 2 mode that carries sticks and
 // pressure. A digital-only pad stays false and reports centred sticks.

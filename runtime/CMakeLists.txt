@@ -34,12 +34,15 @@ set(PS2UR_SOURCES
     src/core/assert.cpp
     src/core/alloc.cpp
     src/core/time.cpp
+    src/core/profiler.cpp
+    src/core/meminfo.cpp
     src/math/math.cpp
     src/gfx/gfx.cpp
     src/gfx/gs_vram.cpp
     src/gfx/gs_packet.cpp
     src/gfx/gs_device.cpp
     src/gfx/gs_overlay.cpp
+    src/gfx/profiler_overlay.cpp
     src/gfx/gs_swizzle.cpp
     src/gfx/gs_texcache.cpp
     src/gfx/gs_batch.cpp
