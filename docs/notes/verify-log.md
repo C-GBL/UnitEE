@@ -1104,3 +1104,51 @@ wait. And the budget check called 116 of 120 healthy frames over budget,
 because a vsync-locked NTSC frame measures 33.37 ms and was being compared
 against a round 33.34; the test now asks whether a flip was missed, at a 40 ms
 threshold that sits between one field period and two.
+
+## 98 percent of VRAM was full and most of it was holding nothing (M13, 2026-08-05)
+
+Scenes were reporting textures skipped for want of video memory while the
+allocator showed 98 percent occupancy, which sounds consistent until you ask
+what the 98 percent consisted of.
+
+VRAM is allocated by 8 KB page, because FRAME.FBP and ZBUF.ZBP are expressed
+in page units and a framebuffer must start on a page boundary. A 256-entry
+CLUT is 1 KB. Every texture was therefore taking a whole page to hold its
+palette and wasting seven eighths of it. With 24 textures that is 168 KB of a
+texture pool that only has about 1.3 MB after the framebuffers take their
+2.7 MB.
+
+TEX0.CBP addresses a CLUT in 256-byte blocks, not pages, so eight palettes fit
+in one page and stay perfectly addressable. Measured on target, same scene:
+24 CLUTs in 3 pages (24 KB) rather than 24 pages (192 KB), and every texture
+resident where two were previously dropped. The five rendering goldens stayed
+bit-identical, which is the check that matters, since a mis-addressed CLUT
+draws with the wrong palette rather than failing outright.
+
+Two things worth carrying forward. An allocator whose granularity is dictated
+by one client's hardware constraint will waste most of its space on a client
+whose objects are smaller than the grain, and "98 percent full" is not the
+same measurement as "98 percent used". The new [vram] budget line now splits
+the 4 MB into framebuffer, textures and free, and states what the CLUTs would
+have cost unpacked, so the next person can see the difference.
+
+## The GC pause histogram was measuring nothing (M13, 2026-08-05)
+
+Every profile reported zero collector pauses. That reads as a collector that
+never ran, and it is indistinguishable from an instrument nobody connected. It
+was the second: the histogram and its buckets existed, and no code ever called
+record_gc_pause.
+
+bdwgc reports progress through a collection through GC_set_on_collection_event,
+and for a stop-the-world collector the span from GC_EVENT_START to
+GC_EVENT_END is the pause the frame felt. The game host installs that callback
+immediately after il2cpp_init. It is declared as a weak symbol rather than by
+including the collector's headers: the C API is stable, the headers bring
+macro configuration that has to match how bdwgc was built, and a weak symbol
+means a build linked without a collector still links and records nothing.
+Verified on the EE toolchain both ways, that it compiles and that it links
+with the symbol absent.
+
+A zero from an instrument with nothing attached to it looks exactly like a
+zero from a healthy system. That is the second time in this milestone a
+number had to be disbelieved before it became useful.

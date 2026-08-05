@@ -141,8 +141,7 @@ int main(void)
         gt.h = rd_u32(p + 4);
         gt.tex = device.vram().alloc_buffer(gt.w, gt.h,
                                             gfx::PixelFormat::PSMT8, "dbg-tex");
-        gt.clut = device.vram().alloc_buffer(16, 16, gfx::PixelFormat::PSMCT32,
-                                             "dbg-clut");
+        gt.clut = device.vram().alloc_clut("dbg-clut");
         if (!gt.tex.valid() || !gt.clut.valid() ||
             !device.upload_texture(p + 16u + 1024u, gt.tex, gt.w, gt.h,
                                    gfx::PixelFormat::PSMT8) ||
@@ -183,6 +182,8 @@ int main(void)
         SleepThread();
         return 1;
     }
+
+    device.vram().log_budget();
 
     scene::SceneRenderer renderer;
     scene::RendererPrograms programs;

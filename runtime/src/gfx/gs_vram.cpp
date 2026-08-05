@@ -3,6 +3,8 @@
 #include "ps2ur/assert.h"
 #include "ps2ur/log.h"
 
+#include <cstring>
+
 namespace ps2ur {
 namespace gfx {
 
@@ -26,6 +28,11 @@ void VramAllocator::reset()
         m_records[i] = Record{};
     }
     m_used_pages = 0;
+    for (uint32_t i = 0; i < kMaxClutPages; ++i) {
+        m_clut_pages[i] = 0;
+        m_clut_used[i] = 0;
+    }
+    m_clut_page_count = 0;
 }
 
 bool VramAllocator::is_free(uint32_t page, uint32_t count) const
@@ -109,9 +116,110 @@ VramAlloc VramAllocator::alloc_buffer(uint32_t width, uint32_t height,
     return alloc_pages(pages_for_buffer(width, height, fmt), debug_name);
 }
 
+void VramAllocator::log_budget() const
+{
+    // Framebuffer-ish reservations are the ones made before any texture: the
+    // colour buffers and the Z buffer. Rather than guess from names, split by
+    // what the caller told us at allocation time.
+    uint32_t frame_pages = 0;
+    uint32_t texture_pages = 0;
+    for (uint32_t i = 0; i < kMaxAllocs; ++i) {
+        const Record& r = m_records[i];
+        if (!r.in_use) {
+            continue;
+        }
+        const char* n = r.name != nullptr ? r.name : "";
+        // The device names these three; anything else is content.
+        const bool is_frame = std::strncmp(n, "colour", 6) == 0 ||
+                              std::strncmp(n, "depth", 5) == 0;
+        if (is_frame) {
+            frame_pages += r.page_count;
+        } else {
+            texture_pages += r.page_count;
+        }
+    }
+    const uint32_t kb = kPageBytes / 1024u;
+    log(LogLevel::Info,
+        "[vram] %u KB total: framebuffer %u KB, textures %u KB, free %u KB",
+        u(kPageCount * kb), u(frame_pages * kb), u(texture_pages * kb),
+        u(free_pages() * kb));
+    // The CLUT line exists because packing them is worth 7 KB per texture,
+    // and a number nobody can see is a number nobody maintains.
+    const uint32_t slots = clut_slots_used();
+    log(LogLevel::Info,
+        "[vram] %u CLUTs in %u pages (%u KB); one page each would have cost "
+        "%u KB",
+        u(slots), u(m_clut_page_count), u(m_clut_page_count * kb),
+        u(slots * kb));
+}
+
+VramAlloc VramAllocator::alloc_clut(const char* debug_name)
+{
+    VramAlloc result;
+    // A free slot in a page already reserved for CLUTs.
+    for (uint32_t p = 0; p < m_clut_page_count; ++p) {
+        for (uint32_t s = 0; s < kClutSlotsPerPage; ++s) {
+            if ((m_clut_used[p] & (1u << s)) == 0u) {
+                m_clut_used[p] |= static_cast<uint8_t>(1u << s);
+                result.page = m_clut_pages[p];
+                result.page_count = 0; // a slot, not a run of pages
+                result.block_in_page = s * (kBlocksPerPage / kClutSlotsPerPage);
+                return result;
+            }
+        }
+    }
+    // None free: reserve another page to carve up.
+    if (m_clut_page_count >= kMaxClutPages) {
+        log(LogLevel::Warn, "vram: out of CLUT slots for '%s' (%u pages used)",
+            debug_name != nullptr ? debug_name : "?", u(m_clut_page_count));
+        return result;
+    }
+    const VramAlloc page = alloc_pages(1, "clut-page");
+    if (!page.valid()) {
+        return result;
+    }
+    const uint32_t index = m_clut_page_count++;
+    m_clut_pages[index] = page.page;
+    m_clut_used[index] = 1u; // slot 0 goes to this caller
+    result.page = page.page;
+    result.page_count = 0;
+    result.block_in_page = 0;
+    return result;
+}
+
+uint32_t VramAllocator::clut_slots_used() const
+{
+    uint32_t used = 0;
+    for (uint32_t p = 0; p < m_clut_page_count; ++p) {
+        for (uint32_t s = 0; s < kClutSlotsPerPage; ++s) {
+            if ((m_clut_used[p] & (1u << s)) != 0u) {
+                ++used;
+            }
+        }
+    }
+    return used;
+}
+
 void VramAllocator::free(const VramAlloc& alloc)
 {
-    if (!alloc.valid() || alloc.page_count == 0) {
+    if (!alloc.valid()) {
+        return;
+    }
+    // A CLUT slot: release the slot, keep the page. The page stays because a
+    // scene swap frees every CLUT and then immediately allocates the same
+    // number again; returning the pages would just fragment the pool.
+    if (alloc.is_slot()) {
+        const uint32_t slot =
+            alloc.block_in_page / (kBlocksPerPage / kClutSlotsPerPage);
+        for (uint32_t p = 0; p < m_clut_page_count; ++p) {
+            if (m_clut_pages[p] == alloc.page && slot < kClutSlotsPerPage) {
+                m_clut_used[p] &= static_cast<uint8_t>(~(1u << slot));
+                return;
+            }
+        }
+        return;
+    }
+    if (alloc.page_count == 0) {
         return;
     }
     for (uint32_t i = 0; i < kMaxAllocs; ++i) {

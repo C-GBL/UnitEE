@@ -55,8 +55,8 @@ target. Frame 33.62 ms, 29.74 fps, 1 dropped frame.
 | Scratchpad for DMA chain assembly | Chain build 0.019 ms | No headroom. Not done, and the reason is recorded rather than the work being quietly skipped |
 | MMI/SIMD for transform update and culling | World matrices 0.157 ms; cull+queue **16.446 ms** | The cull number was 4x its entire section 15.3 budget and half the frame. Fixed, but not with SIMD (below) |
 | Reduce managed/native interop | Already one dispatch per frame since M7, measured 87x cheaper than per-object | Already landed |
-| GC tuning | 0 pauses in this scene | No data yet; needs a managed workload to tune against |
-| Texture budget and upload scheduling | VRAM peak 4048 KB of 4096 (98 percent) | Real pressure, and the cause of textures being skipped in user builds. Open |
+| GC tuning | 0 pauses reported, because nothing was reporting them | The histogram had no data source. Hooked; see below |
+| Texture budget and upload scheduling | VRAM peak 4048 KB of 4096 (98 percent), textures skipped | 168 KB recovered by packing CLUTs; see below |
 | Disc layout from an access trace | Not measurable in the emulator (host reads have no seek cost) | Blocked on hardware |
 
 ## The cull result, and why it was not a SIMD problem
@@ -93,6 +93,49 @@ is the deliverable, not the frame rate.
 Writing the loop in MMI would have optimised the 0.3 ms that remained after
 the real problem was gone, which is the exact failure mode the "profile
 first" rule exists to prevent.
+
+## The texture result: a page-granular allocator holding 1 KB objects
+
+Video memory is allocated by 8 KB page, because FRAME.FBP and ZBUF.ZBP are
+expressed in page units. A 256-entry CLUT is 1 KB. Every texture was taking a
+whole page for its palette and wasting seven eighths of it: with two dozen
+textures, about 168 KB of a texture pool that only has around 1.3 MB.
+
+That is the entire reason scenes reported textures skipped for want of VRAM
+while the allocator showed 98 percent occupancy. The occupancy was real; most
+of what it was holding was nothing.
+
+TEX0.CBP addresses a CLUT by 256-byte block, not by page, so eight palettes
+fit in one page with no loss of addressability. Measured on target, same
+scene: 24 CLUTs now occupy 3 pages (24 KB) where they previously took 24
+pages (192 KB), and every texture in the scene is resident where two were
+being dropped before. All five rendering goldens stay bit-identical, which is
+the check that matters here, because a mis-addressed CLUT would draw with the
+wrong palette rather than fail.
+
+The general lesson is worth keeping: an allocator whose granularity is set by
+one client's hardware constraint will quietly waste most of its space on a
+different client whose objects are smaller than the grain.
+
+## The GC result: an instrument with nothing wired to it
+
+Every profile reported zero collector pauses, which reads as "the collector
+never ran" and is indistinguishable from "nothing is measuring it". It was the
+second. The histogram existed; no code called into it.
+
+bdwgc reports progress through a collection, and for a stop-the-world
+collector the span from GC_EVENT_START to GC_EVENT_END is the pause the frame
+actually felt. The host now installs that callback immediately after
+il2cpp_init, declared as a weak symbol rather than by including the
+collector's headers, so a build linked without bdwgc still links and simply
+records nothing. Both halves of that were verified against the EE toolchain:
+it compiles, and it links with the symbol absent.
+
+Tuning follows the measurement, not the other way round, so the tuning levers
+in the plan's list (pre-allocation, pooling in the shim, incremental mode)
+stay open until a managed workload produces pauses to tune against. What has
+changed is that the number is now real instead of a zero nobody could
+interpret.
 
 ## Consequences
 

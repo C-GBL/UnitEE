@@ -178,8 +178,7 @@ int main(void)
         gt.h = rd_u32(p + 4);
         gt.tex = device.vram().alloc_buffer(gt.w, gt.h, gfx::PixelFormat::PSMT8,
                                             "sg-tex");
-        gt.clut = device.vram().alloc_buffer(16, 16, gfx::PixelFormat::PSMCT32,
-                                             "sg-clut");
+        gt.clut = device.vram().alloc_clut("sg-clut");
         if (!gt.tex.valid() || !gt.clut.valid() ||
             !device.upload_texture(p + 16u + 1024u, gt.tex, gt.w, gt.h,
                                    gfx::PixelFormat::PSMT8) ||

@@ -157,8 +157,7 @@ int main(void)
         }
         gt.tex = device.vram().alloc_buffer(gt.w, gt.h, gfx::PixelFormat::PSMT8,
                                             "scene-tex");
-        gt.clut = device.vram().alloc_buffer(16, 16, gfx::PixelFormat::PSMCT32,
-                                             "scene-clut");
+        gt.clut = device.vram().alloc_clut("scene-clut");
         if (!gt.tex.valid() || !gt.clut.valid() ||
             !device.upload_texture(p + 16u + 1024u, gt.tex, gt.w, gt.h,
                                    gfx::PixelFormat::PSMT8) ||

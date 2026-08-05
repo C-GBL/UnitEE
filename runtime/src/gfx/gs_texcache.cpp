@@ -157,8 +157,7 @@ bool TextureCache::make_resident(GsDevice& device, Entry& entry)
             if (tex.valid()) {
                 VramAlloc clut;
                 if (entry.clut != nullptr) {
-                    clut = device.vram().alloc_buffer(16, 16, PixelFormat::PSMCT32,
-                                                      "clut");
+                    clut = device.vram().alloc_clut("clut");
                     if (!clut.valid()) {
                         device.vram().free(tex);
                         if (!evict_one(device)) {

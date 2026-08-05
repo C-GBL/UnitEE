@@ -88,7 +88,7 @@ int main(void)
     const gfx::VramAlloc tex =
         device.vram().alloc_buffer(kTexW, kTexH, gfx::PixelFormat::PSMT8, "indexed");
     const gfx::VramAlloc clut =
-        device.vram().alloc_buffer(16, 16, gfx::PixelFormat::PSMCT32, "clut");
+        device.vram().alloc_clut("clut");
     if (!tex.valid() || !clut.valid()) {
         printf("PS2UR_TOKEN_SWIZZLE_FAIL no vram\n");
         SleepThread();
