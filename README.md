@@ -31,7 +31,8 @@ exporter carries, is in progress.
 | Platform services | Done | 24 audio voices, pads, memory card, streaming |
 | Editor integration | Done | Unity scene to bootable ISO, 19.6 s clean build |
 | Component coverage | Active | Closing the authored-to-exported gap |
-| Profiler and hardware bring-up | Planned | |
+| Profiler and memory instrumentation | Done | Zone timings on the EE cycle counter, live overlay, CSV, 30-minute soak |
+| Real hardware bring-up | Blocked | Needs a console; procedure and leniency catalogue written |
 
 Retail hardware is **not yet verified**. The development console for this
 project failed mid-project, so hardware bring-up is its own milestone. PCSX2
@@ -190,6 +191,7 @@ Nothing here is signed off by looking at a screen.
 |---|---|
 | [docs/supported-api.md](docs/supported-api.md) | Supported API, material model, conformance deviations |
 | [docs/performance-guide.md](docs/performance-guide.md) | Performance envelope and hardware constraints |
+| [docs/hardware-bring-up.md](docs/hardware-bring-up.md) | Bring-up procedure and the PCSX2 leniency catalogue |
 | [docs/development.md](docs/development.md) | Development guide: commands, conventions, verified environment |
 | [docs/formats/](docs/formats/) | Container, mesh and texture format specifications |
 | [docs/adr/](docs/adr/) | Architecture decision records |

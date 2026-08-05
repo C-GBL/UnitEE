@@ -211,6 +211,10 @@ int main(void)
         {
             PS2UR_PROFILE_ZONE("animation");
             world.update_animators(1.0f / 30.0f);
+        }
+        {
+            // The other half of the MMI/SIMD candidate in M13 task 3.
+            PS2UR_PROFILE_ZONE("world-mtx");
             world.update_world_matrices();
         }
         scene::RenderStats stats;

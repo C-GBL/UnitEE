@@ -54,6 +54,59 @@ TEST(RenderQueue, StableForEqualKeys)
     }
 }
 
+TEST(RenderQueue, SortsCorrectlyWhateverMixOfDigitsTheKeysUse)
+{
+    // The radix sort skips a pass whose digit is the same for every command
+    // (M13 task 3), which makes the number of buffer swaps depend on the
+    // data. If the parity handling were wrong, the caller would read the
+    // half-sorted scratch buffer -- and it would only happen for some inputs,
+    // which is the worst way to find out. This drives a spread of keys big
+    // enough that several digits vary and several do not.
+    RenderQueue q;
+    const uint32_t kCount = 64;
+    for (uint32_t i = 0; i < kCount; ++i) {
+        // Reverse depth order, alternating kinds and textures, so no single
+        // digit position is uniform across the set and the low digits are.
+        const float depth = 1.0f - static_cast<float>(i) / kCount;
+        ASSERT_TRUE(q.push(0, i % 4u, i % 3u, depth,
+                           static_cast<uint16_t>(i), 0, 0));
+    }
+    q.sort();
+    ASSERT_EQ(kCount, q.count());
+    for (uint32_t i = 1; i < kCount; ++i) {
+        EXPECT_LE(q.command(i - 1).key, q.command(i).key)
+            << "not ordered at " << i;
+    }
+}
+
+TEST(RenderQueue, SortIsAnIdentityWhenEveryKeyIsEqual)
+{
+    // Every digit uniform: every pass is skipped, zero swaps, and the result
+    // must still be the submission order rather than whatever was left in
+    // the scratch buffer.
+    RenderQueue q;
+    for (uint32_t i = 0; i < 8; ++i) {
+        ASSERT_TRUE(q.push(0, 1, 1, 0.5f, static_cast<uint16_t>(i), 0, 0));
+    }
+    q.sort();
+    ASSERT_EQ(8u, q.count());
+    for (uint32_t i = 0; i < 8; ++i) {
+        EXPECT_EQ(static_cast<uint16_t>(i), q.command(i).entity);
+    }
+}
+
+TEST(RenderQueue, SortHandlesZeroAndOneCommand)
+{
+    RenderQueue q;
+    q.sort(); // empty
+    EXPECT_EQ(0u, q.count());
+
+    ASSERT_TRUE(q.push(0, 0, 0, 0.5f, 7, 0, 0));
+    q.sort();
+    ASSERT_EQ(1u, q.count());
+    EXPECT_EQ(7, q.command(0).entity);
+}
+
 TEST(RenderQueue, DepthClampsInsteadOfWrapping)
 {
     const uint64_t below = RenderQueue::make_key(0, 0, 0, -0.5f, 0);

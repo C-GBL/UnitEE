@@ -161,6 +161,13 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
     device.end_frame(/*flip=*/false);
 
     // --- Cull + queue (M8 tasks 3/4) ----------------------------------------
+    //
+    // Zoned separately because plan section 9 M13 task 3 lists MMI/SIMD for
+    // "the transform update and culling" as an optimisation candidate. That
+    // is a claim about where the time goes, and it needs a number before
+    // anyone rewrites a loop in vector intrinsics.
+    const uint32_t zone_cull = prof::zone_id("cull");
+    prof::zone_begin(zone_cull);
     const bool dbg = m_debug_frame;
     m_debug_frame = false;
     m_queue.clear();
@@ -234,6 +241,7 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
         }
     }
     m_queue.sort();
+    prof::zone_end(zone_cull);
 
     // --- Emit (grouped) -----------------------------------------------------
     uint32_t current_group = 0xFFFFFFFFu; // (pass<<16 | kind<<8 | tex)
@@ -365,6 +373,7 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
     // and the M9 acceptance case -- uploads it once and draws every batch
     // against it.
     if (world.skinned_renderer_count() > 0) {
+        PS2UR_PROFILE_ZONE("skinned");
         device.packet().reset();
         device.set_material_state(0, 0, false, true);
         device.flush_packet();

@@ -1062,3 +1062,45 @@ by dropping FreezeThresholdPercent to 0 via a probe: every clip took
 the reimport path (character + 6 clip FBXs reimported mid-export,
 once each) and the container still decoded healthy, byte-equal to the
 normal path (WAIT00: 19 rotation tracks posed off bind).
+
+## The render queue's sort cost 16 ms to sort 114 things (M13, 2026-08-05)
+
+The first thing the new profiler measured on target was a scene running at
+29.74 fps with one dropped frame in 120, which looked healthy. The zone
+breakdown did not: cull and queue took 16.446 ms of a 33.62 ms frame, against
+the 4 ms that plan section 15.3 budgets for the whole culling, queueing and
+chain-building phase. For 114 entities.
+
+The loop was innocent. The sort was not. It was an LSD radix over 16-bit
+digits: four passes, each clearing and prefix-summing a 65,536-entry
+histogram, which is roughly 786,000 iterations across 256 KB of table no
+matter how many commands are in the queue. At 147.456 MHz that predicts about
+2.4 million cycles, or 16.4 ms, which is what the counter said to three
+significant figures. The 8 KB data cache made every pass a stream of misses
+on top.
+
+Two mistakes, neither of them arithmetic: a fixed cost that did not scale
+with the work, and a working set that could not fit in cache. 256-entry
+digits cut the fixed cost from 4 x 131,072 to 8 x 512 and fit the table in
+cache; skipping any pass whose digit is uniform across the set removes most
+of the remaining passes, since the high bytes of a render key are the same
+for every command in a normal scene.
+
+Measured on target, same scene, 120 frames: cull 16.446 -> 0.352 ms (47x),
+worst frame 64.95 -> 33.75 ms, dropped frames 1 -> 0, fps 29.74 -> 29.99.
+Frame time barely moved because it was vsync-locked either way; what moved is
+16 ms out of culling and into the vsync wait, taking the EE from 60 percent
+occupied to 87 percent idle. The headroom is the result, not the frame rate.
+
+Worth recording for its own sake: the plan predicted this phase would want
+MMI/SIMD. It wanted a smaller histogram. Writing the loop in vector
+intrinsics would have optimised the 0.3 ms that was left after the actual
+problem was gone.
+
+Two instrumentation bugs were fixed on the way, both found by disbelieving a
+number. The render zone read as 98 percent of the frame until present() was
+given its own zone and 13.1 ms of it turned out to be the blocking vsync
+wait. And the budget check called 116 of 120 healthy frames over budget,
+because a vsync-locked NTSC frame measures 33.37 ms and was being compared
+against a round 33.34; the test now asks whether a flip was missed, at a 40 ms
+threshold that sits between one field period and two.
