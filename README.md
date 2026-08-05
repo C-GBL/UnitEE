@@ -188,7 +188,6 @@ Nothing here is signed off by looking at a screen.
 
 | Document | Contents |
 |---|---|
-| [docs/architecture.md](docs/architecture.md) | System architecture and open items |
 | [docs/supported-api.md](docs/supported-api.md) | Supported API, material model, conformance deviations |
 | [docs/performance-guide.md](docs/performance-guide.md) | Performance envelope and hardware constraints |
 | [docs/development.md](docs/development.md) | Development guide: commands, conventions, verified environment |
