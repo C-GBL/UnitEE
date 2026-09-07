@@ -76,6 +76,13 @@ public:
     // (plan M2 task 4).
     void clear(uint8_t r, uint8_t g, uint8_t b, uint32_t depth = 0);
 
+    // Paints the whole display one colour and shows it, painting BOTH buffers
+    // so whichever page the next frame flips to already carries the colour
+    // rather than whatever the BIOS left in VRAM. This is the boot-stage
+    // ramp's primitive (M13 task 4): a console with no serial link has
+    // exactly one output device, and it is the TV.
+    void show_solid(uint8_t r, uint8_t g, uint8_t b);
+
     // Immediate-mode triangles: vertices are already in screen space and
     // 12.4 fixed point is applied here. EE-side transform, PATH3 upload --
     // slow and temporary (ADR-003), but it unblocks everything downstream.

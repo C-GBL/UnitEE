@@ -61,6 +61,60 @@
 #define PS2_GAME_PROFILE_FRAMES 0
 #endif
 
+#ifndef PS2_GAME_DEVELOPMENT
+#define PS2_GAME_DEVELOPMENT 1
+#endif
+
+// --- Boot-stage colour ramp (M13 task 4) ------------------------------------
+//
+// The first real-hardware boot showed the BIOS logo, warped, forever: the GS
+// had been configured and then the program stopped before drawing a frame,
+// and with no serial link there was no way to know where. A console's only
+// guaranteed output device is the TV, so each boot stage paints the screen a
+// distinct colour as it completes. The colour the TV stops on names the stage
+// that failed; red means fatal() was reached. If the screen never leaves the
+// warped logo even for stage 1, the GS or DMA path itself is broken.
+//
+//   1  blue     GS initialised, display configured
+//   2  green    boot scene found on media
+//   3  yellow   scene container read into RAM
+//   4  cyan     container parsed, world loaded
+//   5  magenta  pads and audio up
+//   6  white    managed runtime up (il2cpp_init)
+//   7  orange   assets uploaded, scripts instantiated
+//      red      fatal(): the log line just before it says what
+//
+// Compiled into development builds only. Each stage costs two vsyncs.
+namespace {
+
+ps2ur::gfx::GsDevice* g_boot_device = nullptr;
+
+void boot_stage(uint32_t stage)
+{
+#if PS2_GAME_DEVELOPMENT
+    static const uint8_t kRamp[][3] = {
+        {0, 0, 0},       // 0: unused
+        {0, 0, 255},     // 1: blue
+        {0, 255, 0},     // 2: green
+        {255, 255, 0},   // 3: yellow
+        {0, 255, 255},   // 4: cyan
+        {255, 0, 255},   // 5: magenta
+        {255, 255, 255}, // 6: white
+        {255, 128, 0},   // 7: orange
+    };
+    const uint32_t count = sizeof(kRamp) / sizeof(kRamp[0]);
+    if (g_boot_device == nullptr || stage == 0 || stage >= count) {
+        return;
+    }
+    printf("[game] boot stage %u\n", static_cast<unsigned>(stage));
+    g_boot_device->show_solid(kRamp[stage][0], kRamp[stage][1], kRamp[stage][2]);
+#else
+    (void)stage;
+#endif
+}
+
+} // namespace
+
 // --- Collector pause instrumentation (M13 tasks 1 and 3) --------------------
 //
 // The profiler carries a GC pause histogram, and until this hook existed
@@ -276,6 +330,12 @@ bool invoke_checked(const MethodInfo* method, void** args, const char* what)
 void fatal(const char* what)
 {
     printf("PS2UR_TOKEN_GAME_FAIL %s\n", what);
+    // Red, if the GS is up: on hardware this is the only way the failure is
+    // visible at all, and it is what turns "a warped logo forever" into "it
+    // died after the last colour you saw".
+    if (g_boot_device != nullptr) {
+        g_boot_device->show_solid(255, 0, 0);
+    }
     SleepThread();
 }
 
@@ -651,6 +711,8 @@ int main(void)
         fatal("gs device");
         return 1;
     }
+    g_boot_device = &device;
+    boot_stage(1);
 
     // --- Boot scene ---------------------------------------------------------
     Arena file_arena;
@@ -715,6 +777,7 @@ int main(void)
         return 1;
     }
     printf("[game] boot scene: %s\n", scene_path);
+    boot_stage(2);
 
     uint32_t file_size = 0;
     const void* file_data = io::load_file(scene_path, file_arena, &file_size);
@@ -730,6 +793,7 @@ int main(void)
         return 1;
     }
     io::P2bFile file;
+    boot_stage(3);
     if (!file.parse(file_data, file_size)) {
         printf("[game] container error: %s\n", file.error());
         fatal("boot scene malformed");
@@ -750,6 +814,7 @@ int main(void)
         fatal("bridge");
         return 1;
     }
+    boot_stage(4);
     bridge::bind_world(&world);
     if (scene_arenas[1] != nullptr) {
         // LoadScene reads into the arena the world is NOT in.
@@ -810,6 +875,7 @@ int main(void)
     }
 
     // --- Managed runtime ----------------------------------------------------
+    boot_stage(5);
     il2cpp_set_data_dir("host:");
     if (!il2cpp_init("IL2CPP Root Domain")) {
         fatal("il2cpp_init");
@@ -817,6 +883,7 @@ int main(void)
     }
     // The collector exists now, so it can be asked to report its pauses.
     install_gc_pause_hook();
+    boot_stage(6);
     RuntimeMethods methods;
     if (!methods.lookup()) {
         // Almost always a stripping problem: the dispatcher is reached by
@@ -895,6 +962,7 @@ int main(void)
     // fog and the skinned pass -- all of it built and verified in M8 and M9,
     // and all of it unreachable from a Unity build until now.
     scene::SceneRenderer renderer;
+    boot_stage(7);
     if (!renderer.init_ui(device)) {
         printf("[game] ui overlay init failed; the canvas will not draw.\n");
     }

@@ -482,6 +482,20 @@ constexpr uint32_t kChcrStr = 1u << 8;      // channel start/busy
 } // namespace
 #endif
 
+void GsDevice::show_solid(uint8_t r, uint8_t g, uint8_t b)
+{
+    PS2UR_ASSERT(m_initialized);
+    // present() shows the page just drawn and bumps the frame index, so the
+    // second pass lands in the other page. Two passes leave both buffers the
+    // same colour; one would leave the BIOS's pixels in the page a later
+    // flip reveals.
+    for (int pass = 0; pass < 2; ++pass) {
+        begin_frame();
+        clear(r, g, b);
+        end_frame(/*flip=*/true);
+    }
+}
+
 bool GsDevice::read_framebuffer(void* dest, uint32_t x, uint32_t y,
                                 uint32_t w, uint32_t h)
 {

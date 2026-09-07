@@ -78,6 +78,27 @@ Everything below is the intended sequence. None of it has been executed.
 
 ### 2. First boot
 
+A development build paints the screen a colour as each boot stage completes,
+because a console with no serial link has exactly one output device and it is
+the TV. The colour the picture stops on names the stage that failed.
+
+| Colour | Stage completed |
+|---|---|
+| Warped BIOS logo, no colour ever | The GS display was configured but nothing was drawn: the GS or DMA path itself is broken on this hardware |
+| Blue | GS initialised, display configured |
+| Green | Boot scene found on the media |
+| Yellow | Scene container read into RAM |
+| Cyan | Container parsed, world loaded |
+| Magenta | Pads and audio up |
+| White | Managed runtime up (`il2cpp_init`) |
+| Orange | Assets uploaded, scripts instantiated; the first real frame follows |
+| Red | `fatal()` was reached after the last colour you saw |
+
+The first hardware boot stopped on the warped logo, which places the failure
+in the disc load (between blue and yellow) on the two candidates in the
+catalogue above: the eleven-character scene filename against the CD driver's
+8.3 expectation, and the `host:` probe that has no device to answer it.
+
 Expect the first attempt to fail somewhere in the list above. Work in this
 order, because it is roughly the order of likelihood and each step rules out
 the ones after it:

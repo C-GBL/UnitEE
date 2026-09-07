@@ -96,6 +96,17 @@ int main(void)
         return 1;
     }
 
+    // M13 task 4: the boot-stage ramp's primitive, verified the only way that
+    // means anything -- by reading the DISPLAY buffer back after the paint.
+    // Bytes are R, G, B, A in PSMCT32, so blue is 00 00 FF.
+    device.show_solid(0, 0, 255);
+    if (device.read_framebuffer(g_frame, 0, 0, 512, 448)) {
+        const bool blue = g_frame[0] == 0 && g_frame[1] == 0 && g_frame[2] == 0xFF;
+        printf("[22-scene-debug] boot colour readback %02x %02x %02x %s\n",
+               g_frame[0], g_frame[1], g_frame[2],
+               blue ? "PS2UR_TOKEN_BOOTCOLOUR_OK" : "MISMATCH");
+    }
+
     Arena file_arena;
     file_arena.init(g_file_arena_mem, sizeof(g_file_arena_mem));
     uint32_t file_size = 0;
