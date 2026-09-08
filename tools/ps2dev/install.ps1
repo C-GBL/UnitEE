@@ -126,10 +126,17 @@ Write-Host "Installed toolchain to $Dest"
 #    The binaries are 32-bit (PE machine 0x14c), so these must come from the
 #    MSYS2 *mingw32* (i686) repo -- x86_64 DLLs load but fail at runtime.
 #
-#    Windows tar.exe handles .tar.zst natively (verified), so no extra tooling
-#    is required. DLLs are copied into every directory containing an .exe:
-#    Windows resolves imports from the executable's own directory first, which
-#    keeps the install self-contained and independent of PATH ordering.
+#    These packages are zstd-compressed. Windows ships bsdtar as tar.exe, and
+#    whether it reads .tar.zst depends entirely on the build: bsdtar 3.5.2 on
+#    Windows 10 reports "zlib" as its only codec, then falls back to spawning an
+#    external "zstd -d -qq" which is not present on a stock machine. So we
+#    bootstrap a standalone zstd.exe rather than assume the local tar can cope.
+#    Note the knot that unties: libzstd.dll below comes from a package that is
+#    itself .tar.zst.
+#
+#    DLLs are copied into every directory containing an .exe: Windows resolves
+#    imports from the executable's own directory first, which keeps the install
+#    self-contained and independent of PATH ordering.
 # ---------------------------------------------------------------------------
 $RuntimeDlls = @(
     "libexpat-1.dll", "libgcc_s_dw2-1.dll", "libgmp-10.dll", "libiconv-2.dll",
@@ -188,14 +195,48 @@ function PickPackage([string]$PinnedName) {
     return $Chosen
 }
 
+$ZstdUrl = "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-v1.5.7-win64.zip"
+
+function EnsureZstd {
+    # bsdtar decompresses .tar.zst either with a linked-in libzstd or, failing
+    # that, by spawning "zstd" from PATH. Returns nothing if the linked-in path
+    # works; otherwise downloads a standalone zstd.exe and prepends it to PATH
+    # so the fallback succeeds. Idempotent within a run.
+    if ($null -ne (Get-Command zstd -ErrorAction SilentlyContinue)) { return }
+
+    # bsdtar --version enumerates the codecs it was linked against, e.g.
+    #   bsdtar 3.7.2 - libarchive 3.7.2 zlib/1.2.13 liblzma/5.4.4 libzstd/1.5.5
+    # If zstd is in that list there is nothing to do. Anything that does not
+    # advertise zstd -- the zlib-only bsdtar that ships with Windows 10, or GNU
+    # tar, which always shells out -- needs a zstd.exe on PATH.
+    $TarVersion = (& tar.exe --version 2>&1 | Out-String)
+    if ($TarVersion -match 'zstd') { return }
+
+    Write-Host "  tar.exe has no zstd codec; fetching a standalone zstd.exe ..."
+    $ZstdDir = Join-Path $Staging "zstd"
+    $ZstdZip = Join-Path $Staging "zstd-win64.zip"
+    New-Item -ItemType Directory -Path $ZstdDir -Force | Out-Null
+    & curl.exe -L --fail --retry 3 --retry-delay 2 -s -o "$ZstdZip" "$ZstdUrl"
+    if ($LASTEXITCODE -ne 0) { Fail "Download of zstd.exe failed (curl exit $LASTEXITCODE): $ZstdUrl" }
+    # A .zip, deliberately: Expand-Archive is built into PowerShell 5.1, so the
+    # zstd bootstrap does not itself need a zstd.
+    Expand-Archive -LiteralPath $ZstdZip -DestinationPath $ZstdDir -Force
+
+    $ZstdExe = @(Get-ChildItem -Path $ZstdDir -Recurse -Filter "zstd.exe" -File)
+    if ($ZstdExe.Count -eq 0) { Fail "zstd.exe was not found inside $ZstdUrl." }
+    $env:PATH = $ZstdExe[0].DirectoryName + ";" + $env:PATH
+    Write-Host "  using $($ZstdExe[0].FullName)"
+}
+
 Write-Host "Fetching MinGW runtime DLLs (the tarball does not ship them) ..."
+EnsureZstd
 foreach ($Pkg in $MingwPkgs) {
     $Actual  = PickPackage $Pkg
     $PkgPath = Join-Path $DllStage $Actual
     & curl.exe -L --fail --retry 3 --retry-delay 2 -s -o "$PkgPath" ($MingwRepo + $Actual)
     if ($LASTEXITCODE -ne 0) { Fail "Download of $Actual failed (curl exit $LASTEXITCODE)." }
-    & tar.exe -xf "$PkgPath" -C "$DllStage" 2>$null
-    # tar may warn about PKGINFO/symlinks; the file check below is authoritative.
+    & tar.exe -xf "$PkgPath" -C "$DllStage"
+    if ($LASTEXITCODE -ne 0) { Fail "Extraction of $Actual failed (tar exit $LASTEXITCODE)." }
 }
 
 $DllSource = @{}
