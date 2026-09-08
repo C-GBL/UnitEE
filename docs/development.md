@@ -42,8 +42,11 @@ cmake --preset host-debug && cmake --build --preset host-debug && ctest --preset
 # when PS2.UnityShim.dll is missing (PS2BuildSteps.BuildShimAssembly).
 dotnet build managed/PS2.Managed.sln -c Release
 
-# Refresh the patched libil2cpp copy under build/.
-python il2cpp-port/apply.py
+# Refresh the patched libil2cpp copy under build/. The Editor pipeline runs
+# this itself when build/il2cpp is missing, with the running Editor's Data dir
+# as --unity-root (PS2BuildSteps.StageLibIl2cpp); by hand, pass that flag --
+# the script's default points at one specific Editor version.
+python il2cpp-port/apply.py prepare --unity-root "<Editor>/Data"
 
 # Install or repair the ps2dev toolchain.
 powershell -File tools/ps2dev/install.ps1

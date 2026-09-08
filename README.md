@@ -88,6 +88,17 @@ starts without it. To build it ahead of time, or on a CI runner:
 dotnet build managed/PS2.Managed.sln -c Release
 ```
 
+The first Build likewise stages Unity's patched `libil2cpp` under
+`build/il2cpp/`, copied from the Editor you are building with, by running
+`il2cpp-port/apply.py prepare` for you. Those are Unity's sources and are never
+committed, so this too happens once per clone. To do it by hand, pass the
+Editor's `Data` directory -- the one you build with, since it must match the
+`il2cpp` that generated your C++:
+
+```
+python il2cpp-port/apply.py prepare --unity-root "C:/Program Files/Unity/Hub/Editor/<version>/Editor/Data"
+```
+
 ### Build headlessly
 
 ```

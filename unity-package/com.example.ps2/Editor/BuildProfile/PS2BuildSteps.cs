@@ -743,15 +743,18 @@ namespace Ps2.Editor
         {
             string portRoot = Path.Combine(ctx.PackageRoot, "il2cpp-port");
             string staged = Path.Combine(ctx.PackageRoot, "build/il2cpp/libil2cpp");
-            if (!Directory.Exists(portRoot) || !Directory.Exists(staged))
+            if (!Directory.Exists(portRoot))
             {
-                ctx.Warn(
-                    "The patched libil2cpp is not staged at build/il2cpp/libil2cpp, " +
-                    "so no game ELF was linked. Run 'python il2cpp-port/apply.py " +
-                    "prepare' once to stage it -- it is Unity source and is " +
-                    "deliberately never committed (plan section 17).");
-                return;
+                // Fatal, not a warning. The game ELF is the build's entire
+                // product; a step that reports success while linking nothing
+                // sends the developer to read the wrong log.
+                throw new PS2BuildException(
+                    $"il2cpp-port/ is missing under '{ctx.PackageRoot}', so the game " +
+                    "executable cannot be linked. It is part of the repository; a " +
+                    "package distributed without it cannot produce an ELF.");
             }
+            if (!Directory.Exists(staged))
+                StageLibIl2cpp(ctx, portRoot, staged);
 
             string gameBuild = Path.Combine(ctx.IntermediateDirectory, "game");
             Directory.CreateDirectory(gameBuild);
@@ -798,6 +801,47 @@ namespace Ps2.Editor
                     "The game executable failed to build:\n" + output);
             }
             ctx.GameBuildDirectory = gameBuild;
+        }
+
+        /// <summary>
+        /// Stages Unity's libil2cpp, patched for the PS2, under build/il2cpp by
+        /// running il2cpp-port/apply.py prepare. Every fresh clone needs this
+        /// once: the sources are Unity's and are deliberately never committed
+        /// (plan section 17), so nothing else puts them there. This used to be
+        /// a warning-and-return that reported success for a build which had
+        /// linked nothing, pointing at a command whose default Unity root is
+        /// hardcoded to one Editor version. The running Editor's own install
+        /// is passed instead: by definition the version that generated the
+        /// C++ about to be linked.
+        /// </summary>
+        private static void StageLibIl2cpp(PS2BuildContext ctx, string portRoot, string staged)
+        {
+            string script = Path.Combine(portRoot, "apply.py");
+            if (!File.Exists(script))
+                throw new PS2BuildException($"'{script}' is missing; libil2cpp cannot be staged.");
+            if (string.IsNullOrEmpty(ctx.Toolchain.PythonExe))
+                throw new PS2BuildException(
+                    "python was not found on PATH, so il2cpp-port/apply.py cannot stage " +
+                    "libil2cpp. Install Python (the dependency installer does this).");
+
+            string unityRoot = EditorApplication.applicationContentsPath;
+            string buildDir = Path.Combine(ctx.PackageRoot, "build/il2cpp");
+            Debug.Log("[PS2 Build] libil2cpp is not staged under build/il2cpp (Unity source, " +
+                      $"never committed). Staging it once from {unityRoot} with apply.py prepare ...");
+
+            string output;
+            int code = PS2Process.Run(
+                ctx.Toolchain.PythonExe,
+                $"\"{script}\" prepare --unity-root \"{unityRoot}\" --build-dir \"{buildDir}\"",
+                ctx.PackageRoot, out output, line => Debug.Log("[apply.py] " + line));
+            if (code != 0)
+                throw new PS2BuildException(
+                    $"Staging libil2cpp failed (apply.py exit {code}). The command was " +
+                    $"'python il2cpp-port/apply.py prepare --unity-root \"{unityRoot}\"'.\n{output}");
+            if (!Directory.Exists(staged))
+                throw new PS2BuildException(
+                    $"apply.py reported success but '{staged}' does not exist afterwards.");
+            Debug.Log($"[PS2 Build] Staged libil2cpp at {staged}");
         }
 
         /// <summary>
