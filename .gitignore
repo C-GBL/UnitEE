@@ -39,3 +39,6 @@ unity-package/**/UserSettings/
 # Python bytecode from the tools/ scripts.
 __pycache__/
 *.pyc
+
+# Built dependency installer (tools/installer/build.ps1); attached to releases, not committed.
+/tools/installer/UnitEE-Deps-Setup.exe
