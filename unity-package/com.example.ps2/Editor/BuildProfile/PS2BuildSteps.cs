@@ -215,13 +215,9 @@ namespace Ps2.Editor
                 }
             }
 
-            // The shim, which stands in for UnityEngine.
-            string shim = FindShimAssembly(ctx);
-            if (shim == null)
-                throw new PS2BuildException(
-                    "PS2.UnityShim.dll was not found. Build it with " +
-                    "'dotnet build managed/PS2.Managed.sln -c Release', or ship it " +
-                    "prebuilt in the package.");
+            // The shim, which stands in for UnityEngine. Built on demand: it
+            // is absent from every fresh clone (see BuildShimAssembly).
+            string shim = FindShimAssembly(ctx) ?? BuildShimAssembly(ctx);
             File.Copy(shim, Path.Combine(managed, "PS2.UnityShim.dll"), true);
 
             // RECOMPILE the user's scripts against the shim rather than
@@ -492,6 +488,67 @@ namespace Ps2.Editor
                     return found[0];
             }
             return null;
+        }
+
+        /// <summary>
+        /// Builds managed/PS2.Managed.sln because the shim is missing -- which
+        /// is the state of every fresh clone or zip download: bin/ is
+        /// gitignored, no .dll is tracked, and nothing ships it. Before this
+        /// existed the first Build on a new machine failed with "PS2.UnityShim.dll
+        /// was not found" and pointed at a dotnet command that only
+        /// docs/development.md mentions. Runs once; afterwards FindShimAssembly
+        /// finds the output and the hash in ComputeHash tracks it like any other
+        /// input.
+        ///
+        /// Returns the built assembly's path. Throws with the compiler output
+        /// on failure, and with the old guidance when there is no solution to
+        /// build from (a prebuilt package must ship the DLL itself).
+        /// </summary>
+        private static string BuildShimAssembly(PS2BuildContext ctx)
+        {
+            string solution = Path.Combine(ctx.PackageRoot, "managed/PS2.Managed.sln");
+            if (!File.Exists(solution))
+                throw new PS2BuildException(
+                    "PS2.UnityShim.dll was not found, and there is no " +
+                    $"managed/PS2.Managed.sln under '{ctx.PackageRoot}' to build it " +
+                    "from. A package distributed without the managed/ sources must " +
+                    "ship the DLL prebuilt.");
+
+            Debug.Log($"[PS2 Build] PS2.UnityShim.dll is not built yet (bin/ is never " +
+                      $"committed). Building it once with 'dotnet build -c Release' from " +
+                      $"{solution} ...");
+
+            string output;
+            int code;
+            try
+            {
+                code = PS2Process.Run(FindDotnetHost(),
+                                      $"build \"{solution}\" -c Release --nologo",
+                                      ctx.PackageRoot, out output,
+                                      line => Debug.Log("[dotnet] " + line));
+            }
+            catch (System.ComponentModel.Win32Exception e)
+            {
+                // Process.Start could not find 'dotnet' at all.
+                throw new PS2BuildException(
+                    "PS2.UnityShim.dll is not built and the .NET SDK is not installed, " +
+                    $"so it cannot be built here ({e.Message}). Install the SDK from the " +
+                    "README's requirements table (the dependency installer does this), " +
+                    "then build again.");
+            }
+            if (code != 0)
+                throw new PS2BuildException(
+                    $"Building PS2.UnityShim failed (dotnet exit {code}). The build " +
+                    $"output is above; the command was 'dotnet build \"{solution}\" " +
+                    $"-c Release'.\n{output}");
+
+            string shim = FindShimAssembly(ctx);
+            if (shim == null)
+                throw new PS2BuildException(
+                    "dotnet build reported success but PS2.UnityShim.dll did not appear " +
+                    $"under '{Path.Combine(ctx.PackageRoot, "managed/PS2.UnityShim/bin")}'.");
+            Debug.Log($"[PS2 Build] Built {shim}");
+            return shim;
         }
 
         private static string ComputeHash(PS2BuildContext ctx)

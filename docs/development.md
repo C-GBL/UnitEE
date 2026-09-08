@@ -38,7 +38,8 @@ cmake --preset host-debug && cmake --build --preset host-debug && ctest --preset
 # Boot an ELF in PCSX2 headlessly and parse the console log for a token.
 ./tools/ci/run-emu-test.sh <elf> [token]
 
-# Managed assemblies.
+# Managed assemblies. Optional by hand: the Editor pipeline runs this itself
+# when PS2.UnityShim.dll is missing (PS2BuildSteps.BuildShimAssembly).
 dotnet build managed/PS2.Managed.sln -c Release
 
 # Refresh the patched libil2cpp copy under build/.

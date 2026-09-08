@@ -78,6 +78,16 @@ Add a `file:` dependency to `Packages/manifest.json`:
 Create a build profile (Create > Build Profiles > PlayStation 2), add your
 scenes, and press Build in Window > PS2 > Build Profiles.
 
+The first Build on a fresh clone also compiles `PS2.UnityShim`, the facade your
+scripts are built against, using the dotnet SDK from the requirements table. It
+takes a couple of seconds and happens once: the output under
+`managed/PS2.UnityShim/bin/` is never committed, so every clone and zip download
+starts without it. To build it ahead of time, or on a CI runner:
+
+```
+dotnet build managed/PS2.Managed.sln -c Release
+```
+
 ### Build headlessly
 
 ```
