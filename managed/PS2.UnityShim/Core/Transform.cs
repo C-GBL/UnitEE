@@ -140,22 +140,38 @@ namespace UnityEngine
             }
         }
 
-        // Rotates by Euler angles. Space.Self (the default in Unity) composes
-        // on the right of the LOCAL rotation.
-        public void Rotate(float xAngle, float yAngle, float zAngle)
+        // Rotates by Euler angles. Space.Self (Unity's default) composes on the
+        // right of the LOCAL rotation; Space.World composes on the left of the
+        // WORLD rotation, so the axes are the world's whatever the parent does.
+        public void Rotate(Vector3 eulers, Space relativeTo = Space.Self)
         {
-            localRotation = localRotation * Quaternion.Euler(xAngle, yAngle, zAngle);
+            Quaternion delta = Quaternion.Euler(eulers.x, eulers.y, eulers.z);
+            if (relativeTo == Space.Self)
+                localRotation = localRotation * delta;
+            else
+                rotation = delta * rotation;
         }
 
-        public void Rotate(Vector3 eulers) => Rotate(eulers.x, eulers.y, eulers.z);
+        public void Rotate(float xAngle, float yAngle, float zAngle, Space relativeTo = Space.Self)
+            => Rotate(new Vector3(xAngle, yAngle, zAngle), relativeTo);
 
-        public void Translate(Vector3 translation)
+        public void Rotate(Vector3 axis, float angle, Space relativeTo = Space.Self)
         {
-            // Space.Self: the translation is in local orientation.
-            position += rotation * translation;
+            Quaternion delta = Quaternion.AngleAxis(angle, axis);
+            if (relativeTo == Space.Self)
+                localRotation = localRotation * delta;
+            else
+                rotation = delta * rotation;
         }
 
-        public void Translate(float x, float y, float z) => Translate(new Vector3(x, y, z));
+        public void Translate(Vector3 translation, Space relativeTo = Space.Self)
+        {
+            // Space.Self: the translation is in this transform's orientation.
+            position += relativeTo == Space.Self ? rotation * translation : translation;
+        }
+
+        public void Translate(float x, float y, float z, Space relativeTo = Space.Self)
+            => Translate(new Vector3(x, y, z), relativeTo);
 
         // Local space of this transform -> world space.
         public Vector3 TransformPoint(Vector3 point)
@@ -192,5 +208,15 @@ namespace UnityEngine
         }
 
         private static float SafeDiv(float v, float s) => s != 0f ? v / s : 0f;
+    }
+}
+
+namespace UnityEngine
+{
+    /// <summary>Which axes Transform.Rotate and Translate are expressed in.</summary>
+    public enum Space
+    {
+        World = 0,
+        Self = 1,
     }
 }
