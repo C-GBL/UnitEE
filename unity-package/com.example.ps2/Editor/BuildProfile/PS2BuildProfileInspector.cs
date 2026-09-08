@@ -126,8 +126,10 @@ namespace Ps2.Editor
                 if (profile.hostFilesystem)
                 {
                     EditorGUILayout.HelpBox(
-                        "host: reads have NO seek cost, so a load-time measured this " +
-                        "way says nothing about the disc. Measure from the ISO.",
+                        "Reads from the build folder over PCSX2's host: (Build And Run " +
+                        "enables it in PCSX2). host: reads have NO seek cost, so a load " +
+                        "time measured this way says nothing about the disc. Turn this " +
+                        "off for a disc-only boot, which is what a console sees.",
                         MessageType.Warning);
                 }
             }

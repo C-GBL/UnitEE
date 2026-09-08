@@ -190,9 +190,12 @@ namespace Ps2.Editor
         [Tooltip("On-target profiler overlay (M13).")]
         public bool profiler = false;
 
-        [Tooltip("Read assets over PCSX2's host: filesystem instead of from the ISO. " +
-                 "Much faster to iterate; NOT representative of disc timing, which is " +
-                 "why a load-time measurement must never be taken this way.")]
+        [Tooltip("On: the game reads assets and il2cpp's metadata over PCSX2's host: " +
+                 "filesystem (the build folder), falling back to the disc. Much faster " +
+                 "to iterate; NOT representative of disc timing, so never measure a " +
+                 "load time this way. Off: host: is never tried and the game reads " +
+                 "only the disc, which is what a console or a clean PCSX2 sees. The ISO " +
+                 "is complete either way.")]
         public bool hostFilesystem = true;
 
         // ---- Packaging ----------------------------------------------------

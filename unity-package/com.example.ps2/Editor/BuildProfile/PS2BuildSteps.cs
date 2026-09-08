@@ -879,6 +879,11 @@ namespace Ps2.Editor
             sb.AppendLine($"#define PS2_GAME_ASSET_POOL_BYTES ({p.assetPoolMb} * 1024 * 1024)");
             sb.AppendLine($"#define PS2_GAME_MANAGED_HEAP_BYTES ({p.managedHeapMb} * 1024 * 1024)");
             sb.AppendLine($"#define PS2_GAME_DEVELOPMENT {(p.developmentBuild ? 1 : 0)}");
+            // Which media the game reads (profile: Host Filesystem). 0 means
+            // host: is never tried, so the game reads exactly what a console
+            // reads and the ISO must be self-contained; 1 tries host: first
+            // and falls back to the disc.
+            sb.AppendLine($"#define PS2_GAME_HOST_FS {(p.hostFilesystem ? 1 : 0)}");
             // The frame at which the host prints its liveness token. Late
             // enough that a scene which crashes on frame 2 does not look
             // healthy, early enough that a test does not wait seconds for it.
@@ -1090,6 +1095,18 @@ namespace Ps2.Editor
             sb.AppendLine($"        <directory_tree source=\"{Path.GetFullPath(stage)}\">");
             foreach (string file in order)
                 sb.AppendLine($"            <file name=\"{file}\"/>");
+            // il2cpp's metadata lives in a subdirectory, which PlanOrder's
+            // top-level listing never saw -- so no ISO this pipeline made
+            // could start the managed runtime without PCSX2's host: pointing
+            // at the build folder. Always on the disc: a host:-off build has
+            // nowhere else to read it from, and a host:-on build still boots
+            // from the disc alone when the emulator is not serving host:.
+            if (File.Exists(Path.Combine(stage, "Metadata", "global-metadata.dat")))
+            {
+                sb.AppendLine("            <dir name=\"Metadata\">");
+                sb.AppendLine("                <file name=\"global-metadata.dat\"/>");
+                sb.AppendLine("            </dir>");
+            }
             sb.AppendLine("        </directory_tree>");
             sb.AppendLine("    </layer>");
             sb.AppendLine("</iso_project>");
@@ -1245,6 +1262,14 @@ namespace Ps2.Editor
                 target = staged;
             }
 
+            // PCSX2 serves host: only with [EmuCore] HostFs on in its ini, and
+            // the default is off. A profile that reads over host: needs it;
+            // without it the boot died at magenta with the reason sitting in
+            // an EE console nobody had enabled. A host:-off build is left
+            // alone: it must boot from the disc whatever PCSX2 is set to.
+            if (ctx.Profile.hostFilesystem)
+                EnsurePcsx2HostFs(pcsx2);
+
             string args = target.EndsWith(".iso", StringComparison.OrdinalIgnoreCase)
                               ? $"-batch -fastboot -- \"{target}\""
                               : $"-batch -fastboot -elf \"{target}\"";
@@ -1255,6 +1280,58 @@ namespace Ps2.Editor
                     WorkingDirectory = Path.GetDirectoryName(pcsx2),
                 });
             Debug.Log($"[PS2 Build] launched PCSX2 with {target}");
+        }
+
+        /// <summary>
+        /// Turns on [EmuCore] HostFs in PCSX2's ini if it is off. The ini is
+        /// next to the executable for a portable install, otherwise under the
+        /// user's Documents. Anything unexpected is logged and skipped: a
+        /// missing ini is PCSX2's first-run state, not a build failure.
+        /// </summary>
+        private static void EnsurePcsx2HostFs(string pcsx2Exe)
+        {
+            string exeDir = Path.GetDirectoryName(pcsx2Exe) ?? "";
+            bool portable = File.Exists(Path.Combine(exeDir, "portable.ini")) ||
+                            File.Exists(Path.Combine(exeDir, "portable.txt"));
+            string ini = portable
+                ? Path.Combine(exeDir, "inis", "PCSX2.ini")
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                               "PCSX2", "inis", "PCSX2.ini");
+            if (!File.Exists(ini))
+            {
+                Debug.Log($"[PS2 Build] PCSX2.ini not found at {ini}; if the game stops on " +
+                          "magenta, enable the host filesystem in PCSX2's settings.");
+                return;
+            }
+
+            string[] lines = File.ReadAllLines(ini);
+            int section = Array.FindIndex(lines, l => l.Trim() == "[EmuCore]");
+            if (section < 0)
+            {
+                Debug.Log($"[PS2 Build] no [EmuCore] section in {ini}; leaving it alone.");
+                return;
+            }
+            int end = section + 1;
+            while (end < lines.Length && !lines[end].TrimStart().StartsWith("["))
+                end++;
+            for (int i = section + 1; i < end; i++)
+            {
+                string t = lines[i].Trim();
+                if (!t.StartsWith("HostFs", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (t.EndsWith("true", StringComparison.OrdinalIgnoreCase))
+                    return; // already on
+                lines[i] = "HostFs = true";
+                File.WriteAllLines(ini, lines);
+                Debug.Log("[PS2 Build] enabled PCSX2's host filesystem ([EmuCore] HostFs) so " +
+                          "this host: build can read the build folder.");
+                return;
+            }
+            var withKey = new List<string>(lines);
+            withKey.Insert(section + 1, "HostFs = true");
+            File.WriteAllLines(ini, withKey);
+            Debug.Log("[PS2 Build] enabled PCSX2's host filesystem ([EmuCore] HostFs) so " +
+                      "this host: build can read the build folder.");
         }
     }
 }

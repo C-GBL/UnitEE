@@ -104,6 +104,45 @@ namespace os
         return IsStdHandle(handle) ? kFileTypeChar : kFileTypeDisk;
     }
 
+    // cdrom0: paths as the IOP's ISO9660 driver wants them: backslashes,
+    // upper case, and the ";1" version suffix. libil2cpp composes
+    // "<dataDir>/Metadata/global-metadata.dat" with forward slashes and no
+    // version, which the driver does not match -- so a disc-only boot could
+    // never start the managed runtime. host: (PCSX2's HLE, ps2link) takes
+    // paths as given and is left alone.
+    static std::string DiscPath(const std::string& path)
+    {
+        static const char kDisc[] = "cdrom0:";
+        const size_t n = sizeof(kDisc) - 1;
+        if (path.size() < n)
+            return path;
+        for (size_t i = 0; i < n; ++i)
+        {
+            char c = path[i];
+            if (c >= 'A' && c <= 'Z')
+                c = static_cast<char>(c - 'A' + 'a');
+            if (c != kDisc[i])
+                return path;
+        }
+        std::string out(kDisc);
+        size_t i = n;
+        if (i < path.size() && (path[i] == '/' || path[i] == '\\'))
+            ++i;
+        out += '\\';
+        for (; i < path.size(); ++i)
+        {
+            char c = path[i];
+            if (c == '/')
+                c = '\\';
+            else if (c >= 'a' && c <= 'z')
+                c = static_cast<char>(c - 'a' + 'A');
+            out += c;
+        }
+        if (out.find(';') == std::string::npos)
+            out += ";1";
+        return out;
+    }
+
     FileHandle* File::Open(const std::string& path, int openMode, int accessMode, int shareMode, int options, int* error)
     {
         int flags = 0;
@@ -138,7 +177,8 @@ namespace os
                 break;
         }
 
-        const int fd = fioOpen(path.c_str(), flags);
+        const std::string native = DiscPath(path);
+        const int fd = fioOpen(native.c_str(), flags);
         if (fd < 0)
         {
             *error = kErrorCodeFileNotFound;
@@ -305,7 +345,7 @@ namespace os
 
     UnityPalFileAttributes File::GetFileAttributes(const std::string& path, int* error)
     {
-        const int fd = fioOpen(path.c_str(), PS2_FIO_O_RDONLY);
+        const int fd = fioOpen(DiscPath(path).c_str(), PS2_FIO_O_RDONLY);
         if (fd >= 0)
         {
             fioClose(fd);
@@ -324,7 +364,7 @@ namespace os
 
     bool File::GetFileStat(const std::string& path, FileStat* stat, int* error)
     {
-        const int fd = fioOpen(path.c_str(), PS2_FIO_O_RDONLY);
+        const int fd = fioOpen(DiscPath(path).c_str(), PS2_FIO_O_RDONLY);
         if (fd < 0)
         {
             *error = kErrorCodeFileNotFound;

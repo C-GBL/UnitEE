@@ -32,5 +32,12 @@ uint64_t ticks_per_second();
 // or a negative error.
 int load_irx(const char* name, const void* blob, unsigned blob_size);
 
+// Whether "host:" (PCSX2's host filesystem, or ps2link) is tried as a media
+// root at all. A disc-only build turns it off at boot so the game reads
+// exactly what a console reads, whatever the emulator happens to serve
+// (build profile: Host Filesystem -> PS2_GAME_HOST_FS). Default: on.
+void set_host_media_enabled(bool enabled);
+bool host_media_enabled();
+
 } // namespace platform
 } // namespace ps2ur

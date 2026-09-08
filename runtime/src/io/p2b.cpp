@@ -1,4 +1,5 @@
 #include "ps2ur/p2b.h"
+#include "ps2ur/platform.h"
 
 #include "ps2ur/alloc.h"
 #include "ps2ur/log.h"
@@ -350,14 +351,21 @@ bool resolve_media_path(const char* name, char* out, uint32_t capacity)
         const char* prefix;
         const char* suffix;
         bool upper;
+        bool host;
     };
     static const Candidate kCandidates[] = {
-        {"host:", "", false},
-        {"", "", false},
-        {"cdrom0:\\", ";1", true},
+        {"host:", "", false, true},
+        {"", "", false, false},
+        {"cdrom0:\\", ";1", true, false},
     };
 
     for (const Candidate& c : kCandidates) {
+        // A disc-only build never asks host: (platform policy, set at boot
+        // from the build profile), so where a file resolves does not depend
+        // on what the emulator happens to be serving.
+        if (c.host && !platform::host_media_enabled()) {
+            continue;
+        }
         uint32_t len = 0;
         // The prefix and the ;1 suffix keep their own case; only the file
         // name is upper-cased for ISO 9660.

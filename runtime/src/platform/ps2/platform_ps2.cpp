@@ -81,6 +81,18 @@ int append_path(char* dest, int at, int limit, const char* src, bool upper)
 } // namespace
 
 // Loads an IOP module: storage roots first, embedded blob as a last resort.
+static bool g_host_media_enabled = true;
+
+void set_host_media_enabled(bool enabled)
+{
+    g_host_media_enabled = enabled;
+}
+
+bool host_media_enabled()
+{
+    return g_host_media_enabled;
+}
+
 int load_irx(const char* name, const void* blob, unsigned blob_size)
 {
     // Try the storage roots a console might have, in the order a build
@@ -90,6 +102,9 @@ int load_irx(const char* name, const void* blob, unsigned blob_size)
     static const char* const kRoots[] = {"host:", "mass:"};
     int module_result = 0;
     for (unsigned i = 0; i < 2u; ++i) {
+        if (i == 0u && !g_host_media_enabled) {
+            continue; // disc-only build: host: is never asked
+        }
         int at = append_path(path, 0, 48, kRoots[i], false);
         at = append_path(path, at, 62, name, false);
         path[at] = '\0';

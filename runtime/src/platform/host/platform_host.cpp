@@ -48,6 +48,18 @@ uint64_t ticks_per_second()
     return 1000000000ull; // nanoseconds
 }
 
+static bool g_host_media_enabled = true;
+
+void set_host_media_enabled(bool enabled)
+{
+    g_host_media_enabled = enabled;
+}
+
+bool host_media_enabled()
+{
+    return g_host_media_enabled;
+}
+
 int load_irx(const char* name, const void* blob, unsigned blob_size)
 {
     // No IOP on the workstation. Reporting failure keeps callers on the

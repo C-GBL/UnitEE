@@ -65,6 +65,13 @@
 #define PS2_GAME_DEVELOPMENT 1
 #endif
 
+// Which media the game reads, from the generated game_config.h (build
+// profile: Host Filesystem). A hand build of this tree without the Unity
+// step gets the historical default: host: first, disc as fallback.
+#ifndef PS2_GAME_HOST_FS
+#define PS2_GAME_HOST_FS 1
+#endif
+
 // --- Boot-stage colour ramp (M13 task 4) ------------------------------------
 //
 // The first real-hardware boot showed the BIOS logo, warped, forever: the GS
@@ -111,6 +118,26 @@ void boot_stage(uint32_t stage)
 #else
     (void)stage;
 #endif
+}
+
+// Where il2cpp reads "<dataDir>/Metadata/global-metadata.dat" from. host:
+// only when the build asked for it AND the emulator is actually serving it:
+// a host: build booted with PCSX2's host filesystem off used to die right
+// here, at magenta, with the reason in an EE console nobody had enabled.
+// The disc carries the metadata always, so the fallback is real.
+const char* pick_il2cpp_data_dir()
+{
+#if PS2_GAME_HOST_FS
+    char probe[64];
+    // The exact string libil2cpp will build: forward slashes, no version.
+    if (ps2ur::io::resolve_media_path("host:/Metadata/global-metadata.dat",
+                                      probe, sizeof(probe))) {
+        return "host:";
+    }
+    printf("[game] host: is not serving Metadata/global-metadata.dat; "
+           "reading il2cpp metadata from the disc\n");
+#endif
+    return "cdrom0:";
 }
 
 } // namespace
@@ -699,7 +726,12 @@ int main(void)
         (reinterpret_cast<unsigned long>(&stackAnchor) + 128) & ~15UL);
 
     platform::init();
-    printf("[game] %s starting\n", PS2_GAME_PRODUCT_NAME);
+    // The build decides the media, not the emulator's settings. Off: host:
+    // is never tried, so the game reads exactly what a console reads. On:
+    // host: first, disc as fallback (build profile: Host Filesystem).
+    platform::set_host_media_enabled(PS2_GAME_HOST_FS != 0);
+    printf("[game] %s starting (media: %s)\n", PS2_GAME_PRODUCT_NAME,
+           PS2_GAME_HOST_FS ? "host: then disc" : "disc only");
 
     // --- GS -----------------------------------------------------------------
     gfx::VideoConfig config;
@@ -876,7 +908,7 @@ int main(void)
 
     // --- Managed runtime ----------------------------------------------------
     boot_stage(5);
-    il2cpp_set_data_dir("host:");
+    il2cpp_set_data_dir(pick_il2cpp_data_dir());
     if (!il2cpp_init("IL2CPP Root Domain")) {
         fatal("il2cpp_init");
         return 1;

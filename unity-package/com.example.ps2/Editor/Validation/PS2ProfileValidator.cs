@@ -152,9 +152,11 @@ namespace Ps2.Editor
             if (p.hostFilesystem)
             {
                 ctx.Warn(
-                    "The host: filesystem is enabled. Iteration is much faster, but " +
-                    "host: reads have NO seek cost, so any load-time measurement " +
-                    "taken this way is meaningless -- measure from the ISO.");
+                    "The host: filesystem is enabled: assets and il2cpp's metadata come " +
+                    "from the build folder over PCSX2's host: (Build And Run switches " +
+                    "that on in PCSX2). The ISO still carries everything. host: reads " +
+                    "have NO seek cost, so any load-time measurement taken this way is " +
+                    "meaningless -- turn this off and measure from the ISO.");
             }
             if (p.developmentBuild)
             {
