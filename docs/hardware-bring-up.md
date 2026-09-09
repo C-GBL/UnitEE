@@ -78,6 +78,25 @@ Everything below is the intended sequence. None of it has been executed.
 
 ### 2. First boot
 
+**Start with the probe, not the game.** `samples/23-boot-probe` is a tiny ELF
+that climbs the startup sequence one rung at a time and paints the screen at
+each rung with the cheapest mechanism that could work there. Copy the ELF alone
+to a USB stick and launch it from uLaunchELF; the colour it stops on names the
+rung that failed. It needs no disc, no scene and no Unity build.
+
+| Colour | Rung reached |
+|---|---|
+| Nothing, black | The ELF did not execute, or the EE cannot write GS registers |
+| Red | ELF running; BGCOLOR written directly, no DMA, no IOP |
+| Orange | IOP reset, SIF RPC back up, buffer-load patch applied |
+| Yellow | iomanX and fileXio loaded from EE memory |
+| Magenta | Those module loads failed |
+| Blue | GS initialised and a frame drawn through the GIF DMA path |
+| Green | The frame read back from VRAM as drawn. Success |
+| Cyan | Drawn, but the readback disagreed |
+| White | GS init failed |
+
+
 A development build paints the screen a colour as each boot stage completes,
 because a console with no serial link has exactly one output device and it is
 the TV. The colour the picture stops on names the stage that failed.
