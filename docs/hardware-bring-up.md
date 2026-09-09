@@ -8,9 +8,12 @@ silicon.
 **Status: in progress.** A console arrived on 2026-09-08. The first boots
 of the game ELF went black; the boot probe then established, rung by rung,
 what this hardware does and does not do (the "First results" section below),
-and the game's startup was corrected to match. Acceptance D3 (boots and
-plays on fat and slim hardware, from DVD-R and from USB) remains open until
-the game itself runs.
+and the game's startup was corrected to match. On the second day the probe
+booted from the hard disk through Open PS2 Loader and the game, with the
+corrected startup, still did not: the "Second day" section below records
+what that rules out and the two diagnostic builds that decide what is left.
+Acceptance D3 (boots and plays on fat and slim hardware, from DVD-R and from
+USB) remains open until the game itself runs.
 
 ## Why the emulator is not the last word
 
@@ -90,6 +93,78 @@ readback, which the game does not use. The game ELF had gone black earlier
 because its startup loaded IOP modules with neither the reset nor the patch,
 ahead of any colour; both are now in the platform layer and the GS comes up
 first.
+
+### Second day (2026-09-09): the probe boots from the disk, the game does not
+
+The probe, packaged as an ISO exactly like the game (its own serial,
+SLUS-90002) and installed with HDL Installer, climbed to blue when launched
+from Open PS2 Loader. The corrected game, as an ISO through the same path and
+as a bare ELF through uLaunchELF, never showed a colour. Both launchers boot
+one of our ELFs and not the other, so the difference is inside the game ELF.
+
+What the emulator then ruled out, with the identical files:
+
+- The game ISO boots in PCSX2 through the retail path (the kernel's
+  LoadExecPS2 and the ROM loader on the IOP) to the title screen and a full
+  profiler report.
+- The game ELF launched by the real wLaunchELF inside PCSX2, using its
+  auto-launch setting, boots to the expected missing-scene failure. The
+  launcher's resident state is not the problem in the emulator.
+
+What the two ELFs say about themselves:
+
+- One load segment each, both at 0x00100000; the game's ends at 0x00A0DEC4
+  with a 3.5 MB .bss. Same 128 KB stack at the top of RAM, same heap.
+- No instruction the R5900 lacks in either. No double-precision FPU code,
+  no ll/sc, no MIPS32 extensions.
+- crt0, the kernel patches and the libc start-up have the same call graph in
+  both, pthread-embedded initialisation included.
+- The game runs 44 static constructors where the probe runs 3. The extra 41
+  belong to libstdc++ and libil2cpp: they create pthread-embedded mutexes
+  and a TLS key over kernel semaphores, register destructors, and allocate.
+  main() then has a 40 KB frame and reaches GsDevice::init() with nothing
+  in between, the probe's fourth rung.
+- uLaunchELF's loader stub and Open PS2 Loader's EE core both live below
+  0x00100000 and hand the ELF to the console's ROM loader (SifLoadElf and
+  LoadExecPS2 respectively), so neither overlaps the game and the load path
+  is the one every retail disc uses.
+
+So the failure lies between the ROM loader's jump and boot stage 1, on
+silicon only. PCSX2 runs the USA v2.20 ROM; the console's ROM version is a
+variable worth recording. Two builds decide what is left:
+
+**`23-boot-probe-big`** is the probe inside a load segment the size of the
+game's: 5.76 MB of initialised data in 90 distinct blocks and a 3.4 MB
+.bss, checked word by word after the red rung, with a 40 KB frame so the
+stack sits where the game's does. Grey after red means the console's loader
+did not deliver that segment intact, and the game never ran at all.
+
+| Colour | Meaning |
+|---|---|
+| Red, then the normal ladder to blue | A game-sized ELF loads and runs here. The game's own code is the difference |
+| Red, then grey | The load segment arrived changed or incomplete. The ELF size is the problem, not the code |
+| Nothing | Even the red rung did not run: the loader rejected the ELF outright |
+
+**The boot ladder build** of the game (`-DPS2_BOOT_LADDER=ON` on the
+il2cpp-port tree) paints the stretch before boot stage 1 with the probe's
+register-only trick, so a constructor that hangs or dies is named by the
+colour it stops on. Linker wraps count the mutexes, TLS keys and destructor
+registrations the constructors make, so third-party code is instrumented
+without being edited.
+
+| Colour | Where it stopped |
+|---|---|
+| Nothing | Before the first constructor: the load, crt0 or libc start-up |
+| Dark red | Static constructors have started; the first libstdc++ one |
+| Purple, darker | Early in the constructor list: libstdc++ locale, exception and pool set-up |
+| Purple, brighter | Later in the list: the libil2cpp metadata, class and thread-pool statics |
+| Red | main() entered; GsDevice::init() did not return |
+| Orange, then nothing else | GsDevice::init() returned; the first DMA frame never landed |
+| Orange, then blue and the normal ramp | The pre-GS stretch is fine on this build |
+| White | fatal() before the GS was up |
+
+The ladder build is a diagnostic only: its marks switch the display off, and
+it is never what a profile builds.
 
 ### 2. First boot
 

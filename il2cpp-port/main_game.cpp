@@ -45,6 +45,9 @@
 #include <cstring>
 #include <malloc.h>
 #include <stdio.h>
+#if PS2_BOOT_LADDER
+#include <graph.h>
+#endif
 
 #include "il2cpp-api.h"
 #include "il2cpp-class-internals.h"
@@ -97,6 +100,78 @@
 // GS draws", which the boot probe proved this hardware can do.
 //
 // Compiled into development builds only. Each stage costs two vsyncs.
+// --- Pre-GS boot ladder (M13 task 4, diagnostic builds) ---------------------
+//
+// Everything before boot_stage(1) is invisible from the TV, because the GS is
+// not ours yet. A console that boots the probe and not the game dies in that
+// stretch, so a diagnostic build (-DPS2_BOOT_LADDER=ON) paints it with the
+// probe's register-only trick: BGCOLOR with both read circuits off, no DMA,
+// no frame, safe from the first static constructor onwards.
+//
+//   dark red      static constructors are starting: crt0 and libc are done
+//   purple ramp   constructors running; brighter is later. One step per
+//                 destructor registration, mutex or TLS key they make, which
+//                 is what the runtime's and libstdc++'s constructors do
+//   red           main() entered
+//   orange        GsDevice::init() returned; the drawn ramp (blue) follows
+//   white         fatal() before the GS was up
+//
+// The steps come from linker wraps (--wrap=__cxa_atexit and friends, see
+// il2cpp-port/CMakeLists.txt), so third-party code is instrumented without
+// being edited. Off in every normal build: the marks disable the display.
+#if PS2_BOOT_LADDER
+namespace ladder {
+
+// Constant-initialised, so any constructor may read them.
+bool g_active = true;
+uint32_t g_step = 0;
+
+void mark(uint8_t r, uint8_t g, uint8_t b)
+{
+    graph_set_bgcolor(r, g, b);
+    graph_disable_output();
+}
+
+void step()
+{
+    if (!g_active) {
+        return;
+    }
+    const uint32_t clamped = g_step < 40u ? g_step : 40u;
+    const uint8_t v = static_cast<uint8_t>(40u + 5u * clamped);
+    ++g_step;
+    mark(v, 0, v);
+}
+
+} // namespace ladder
+
+__attribute__((constructor(101))) static void ladder_constructors_begin()
+{
+    ladder::mark(64, 0, 0);
+}
+
+extern "C" {
+int __real___cxa_atexit(void (*fn)(void*), void* arg, void* dso);
+int __wrap___cxa_atexit(void (*fn)(void*), void* arg, void* dso)
+{
+    ladder::step();
+    return __real___cxa_atexit(fn, arg, dso);
+}
+int __real_pthread_mutex_init(void* mutex, const void* attr);
+int __wrap_pthread_mutex_init(void* mutex, const void* attr)
+{
+    ladder::step();
+    return __real_pthread_mutex_init(mutex, attr);
+}
+int __real_pthread_key_create(void* key, void (*dtor)(void*));
+int __wrap_pthread_key_create(void* key, void (*dtor)(void*))
+{
+    ladder::step();
+    return __real_pthread_key_create(key, dtor);
+}
+}
+#endif
+
 namespace {
 
 ps2ur::gfx::GsDevice* g_boot_device = nullptr;
@@ -368,6 +443,11 @@ void fatal(const char* what)
     if (g_boot_device != nullptr) {
         g_boot_device->show_solid(255, 0, 0);
     }
+#if PS2_BOOT_LADDER
+    else {
+        ladder::mark(255, 255, 255);
+    }
+#endif
     SleepThread();
 }
 
@@ -726,6 +806,10 @@ bool instantiate_managed(scene::World& world, const RuntimeMethods& rm,
 
 int main(void)
 {
+#if PS2_BOOT_LADDER
+    ladder::g_active = false;
+    ladder::mark(160, 0, 0);
+#endif
     int stackAnchor;
     ps2ur_gc_stack_bottom = reinterpret_cast<char*>(
         (reinterpret_cast<unsigned long>(&stackAnchor) + 128) & ~15UL);
@@ -740,6 +824,13 @@ int main(void)
         fatal("gs device");
         return 1;
     }
+#if PS2_BOOT_LADDER
+    ladder::mark(160, 80, 0);
+    for (int i = 0; i < 30; ++i) {
+        graph_wait_vsync();
+    }
+    graph_enable_output();
+#endif
     g_boot_device = &device;
     boot_stage(1);
 

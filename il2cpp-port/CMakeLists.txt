@@ -177,3 +177,15 @@ set_source_files_properties(${M6_USER_ASSEMBLY_SOURCES}
     PROPERTIES COMPILE_OPTIONS "-O2")
 
 target_link_libraries(m6-hello PRIVATE kernel)
+
+# Diagnostic: the pre-GS boot ladder in main_game.cpp. Off by default; the
+# marks disable the display and the wraps put a call in front of every
+# destructor registration.
+option(PS2_BOOT_LADDER "Paint register-only boot marks before the GS is up" OFF)
+if(PS2_BOOT_LADDER)
+    target_compile_definitions(m6-hello PRIVATE PS2_BOOT_LADDER=1)
+    target_link_options(m6-hello PRIVATE
+        -Wl,--wrap=__cxa_atexit
+        -Wl,--wrap=pthread_mutex_init
+        -Wl,--wrap=pthread_key_create)
+endif()

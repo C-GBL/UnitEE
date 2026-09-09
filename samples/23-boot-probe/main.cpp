@@ -39,10 +39,43 @@ extern "C" unsigned char iomanx_irx_start[];
 extern "C" unsigned char iomanx_irx_end[];
 extern "C" unsigned char filexio_irx_start[];
 extern "C" unsigned char filexio_irx_end[];
+#if PROBE_BIG
+extern "C" const uint32_t probe_ballast[];
+extern "C" const uint32_t probe_ballast_end[];
+extern "C" uint8_t probe_bss_ballast[];
+#endif
 
 namespace {
 
 alignas(16) uint8_t g_frame[512 * 448 * 4];
+
+#if PROBE_BIG
+// The big variant: the same ladder inside a load segment shaped like the
+// game's (ballast.S). Rung 1b checks that every byte of that segment arrived
+// as linked: grey means the loader delivered a different ELF than the one on
+// the media, and that is the whole finding.
+constexpr uint32_t kBssBallastBytes = 3565568u;
+constexpr uint32_t kBallastWordsPerBlock = 16384u;
+
+bool ballast_intact(uint32_t* first_bad)
+{
+    const uint32_t words =
+        static_cast<uint32_t>(probe_ballast_end - probe_ballast);
+    for (uint32_t i = 0; i < words; ++i) {
+        if (probe_ballast[i] != 0xA5000000u + i / kBallastWordsPerBlock) {
+            *first_bad = i * 4u;
+            return false;
+        }
+    }
+    for (uint32_t i = 0; i < kBssBallastBytes; ++i) {
+        if (probe_bss_ballast[i] != 0u) {
+            *first_bad = 0x80000000u | i;
+            return false;
+        }
+    }
+    return true;
+}
+#endif
 
 // The CRTC is already scanning whatever the launcher left, so a vsync wait
 // works before the GS is ever initialised by us.
@@ -70,6 +103,26 @@ int main(void)
     // cannot reach the GS at all.
     sign(160, 0, 0, "1 red: ELF running, GS registers reachable");
     hold(45);
+
+#if PROBE_BIG
+    // Rung 1b: the segment. A frame the size of the game's main() puts the
+    // stack where the game's is while the check runs.
+    volatile uint8_t frame_ballast[40000];
+    frame_ballast[0] = 1u;
+    frame_ballast[sizeof(frame_ballast) - 1u] = 1u;
+    uint32_t first_bad = 0;
+    if (!ballast_intact(&first_bad)) {
+        sign(128, 128, 128, "1b grey: load segment NOT intact");
+        printf("[boot-probe] first bad offset %08x (bit 31: bss)\n",
+               static_cast<unsigned>(first_bad));
+        printf("PS2UR_TOKEN_BOOTPROBE_FAIL ballast\n");
+        SleepThread();
+        return 1;
+    }
+    printf("[boot-probe] 1b: %u KB of data and %u KB of bss intact\n",
+           static_cast<unsigned>((probe_ballast_end - probe_ballast) / 256),
+           static_cast<unsigned>(kBssBallastBytes / 1024u));
+#endif
 
     // Rung 2: a clean IOP, the way a retail title starts. This is what makes
     // the same ELF behave identically under a launcher that left its own

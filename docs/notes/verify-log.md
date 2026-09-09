@@ -1211,3 +1211,63 @@ something is not thereby caused by it; the ini had changed a minute before
 the first failing run and the staging directory some time before that. And
 a test that passes for months on a temp directory's leftovers is a test
 that has never actually run its own setup.
+
+## The probe boots from the disk and the game does not (M13, 2026-09-09)
+
+Three results from the console, all through the launchers a console owner
+actually has. The probe, packaged as an ISO with its own serial and
+installed with HDL Installer, climbs to blue from Open PS2 Loader. The
+corrected game as an ISO through the same path shows nothing. The corrected
+game as an ELF from uLaunchELF shows nothing. So both launchers boot one of
+our ELFs and neither boots the other, and whatever is wrong is inside the
+game ELF.
+
+The emulator was then made to fail the same way and would not. The identical
+game ISO boots in PCSX2 through the retail path, the kernel's LoadExecPS2
+and the ROM loader on the IOP, to the title screen and a profiler report.
+The identical game ELF launched by the real wLaunchELF inside PCSX2, through
+its LAUNCHELF.CNF auto-launch, boots to the expected missing-scene failure
+with a launcher's threads, modules and handlers underneath it. The launcher
+path is fine in the emulator.
+
+Static comparison of the two ELFs found nothing that should differ on
+silicon. Both have one load segment at 0x00100000, the same 128 KB stack at
+the top of RAM and the same heap; the game's segment ends at 0x00A0DEC4 with
+a 3.5 MB .bss. A histogram of every opcode in both found nothing the R5900
+lacks, no double-precision FPU code, no ll/sc, no MIPS32 extensions; the
+only undecodable words are VU microcode in .vutext. crt0, the ps2sdk kernel
+patches and the libc start-up have the same call graph in both, down to the
+pthread-embedded initialisation both link. The one difference before main()
+is 44 static constructors against the probe's 3; the extra 41 are libstdc++
+and libil2cpp statics that create pthread-embedded mutexes and a TLS key over
+kernel semaphores, register destructors, and allocate. main() then has a
+40 KB frame and reaches GsDevice::init() with nothing in between, which is
+the probe's fourth rung with the same 512x448 configuration.
+
+The launchers were read at source rather than remembered. uLaunchELF's
+loader stub links at 0x00084000 and loads the target with SifLoadElf; Open
+PS2 Loader's EE core links at 0x00084000 too, keeps its IOP modules below
+0x00100000, and launches the game with LoadExecPS2. Neither overlaps the
+game, and both hand the ELF to the console's own ROM loader, the path every
+retail disc takes.
+
+So the failure is between the ROM loader's jump and boot stage 1, and it is
+specific to the silicon or to the console's ROM version (PCSX2 runs the USA
+v2.20 ROM). Two builds decide what is left, and they were verified in the
+emulator before being handed over. `23-boot-probe-big` is the probe inside a
+load segment shaped like the game's, 5.76 MB of initialised data in distinct
+blocks and a 3.4 MB .bss, checked after the red rung: grey means the loader
+did not deliver a game-sized segment intact. The boot ladder build of the
+game paints the stretch before the GS with register-only marks, one step per
+mutex, TLS key or destructor registration the constructors make, through
+linker wraps rather than edits to third-party code; then red at main() and
+orange when GsDevice::init() returns. Both are in docs/hardware-bring-up.md
+with their reading tables.
+
+One observation to keep in view. The first console boot, on the build before
+the colour ramp, reached the GS: the warped logo was the display being
+reconfigured with the launcher's pixels still in VRAM. Every build since has
+shown nothing, and a blank screen is also what a configured display shows
+when the launcher left VRAM black, so "nothing" does not by itself mean the
+GS was never reached. The ladder's orange mark is there to settle exactly
+that.
