@@ -130,8 +130,10 @@ What the two ELFs say about themselves:
   is the one every retail disc uses.
 
 So the failure lies between the ROM loader's jump and boot stage 1, on
-silicon only. PCSX2 runs the USA v2.20 ROM; the console's ROM version is a
-variable worth recording. Two builds decide what is left:
+silicon only. The console is an SCPH-39001, a fat with the v1.60 USA ROM;
+PCSX2 boots the same ISO with its v2.20 USA ROM and, tried for this, with a
+v1.00 Japanese ROM older than the console's, so the kernel version is not
+it either. Two builds decide what is left:
 
 **`23-boot-probe-big`** is the probe inside a load segment the size of the
 game's: 5.76 MB of initialised data in 90 distinct blocks and a 3.4 MB
@@ -145,23 +147,38 @@ did not deliver that segment intact, and the game never ran at all.
 | Red, then grey | The load segment arrived changed or incomplete. The ELF size is the problem, not the code |
 | Nothing | Even the red rung did not run: the loader rejected the ELF outright |
 
+**Result on the SCPH-39001: blue.** A game-sized segment loads and runs, so
+the load is not the problem. The decompiled ROM loader agrees: it reads the
+ELF header and program headers, streams the load segment through a ring
+buffer, and never touches section headers or the file's size.
+
 **The boot ladder build** of the game (`-DPS2_BOOT_LADDER=ON` on the
 il2cpp-port tree) paints the stretch before boot stage 1 with the probe's
-register-only trick, so a constructor that hangs or dies is named by the
-colour it stops on. Linker wraps count the mutexes, TLS keys and destructor
+register-only trick, so the place that hangs or dies is named by the colour
+it stops on. Linker wraps put marks around the two calls crt0 makes before
+the constructors, and count the mutexes, TLS keys and destructor
 registrations the constructors make, so third-party code is instrumented
-without being edited.
+without being edited. Every mark is held for a second with a quarter second
+of black after it, so the sequence can be counted or filmed; the boot takes
+about a minute to reach blue.
+
+The first version painted dim marks, dark red and near-black purple, and
+its result on the SCPH-39001 was "black", which that palette could not
+distinguish from a death before the first constructor. The colours below
+are the second version's.
 
 | Colour | Where it stopped |
 |---|---|
-| Nothing | Before the first constructor: the load, crt0 or libc start-up |
-| Dark red | Static constructors have started; the first libstdc++ one |
-| Purple, darker | Early in the constructor list: libstdc++ locale, exception and pool set-up |
-| Purple, brighter | Later in the list: the libil2cpp metadata, class and thread-pool statics |
-| Red | main() entered; GsDevice::init() did not return |
+| Nothing | Before crt0 handed over: the load, the bss clear, or the thread and heap set-up |
+| White, as the first colour | Inside the ps2sdk kernel patches (_InitSys) |
+| Yellow, right after white | Between the kernel patches and libc start-up |
+| Green | Inside libc start-up (_libcglue_init): the fd table, the pthread glue, the locks, the clock |
+| Cyan | Between libc and the first constructor |
+| Grey | The first constructors, before any counted step |
+| Yellow, green, cyan, magenta, white, repeating | The constructor steps, one per mutex, TLS key or destructor registration. Count them |
+| Red twice, then red held | main() entered and GsDevice::init() did not return |
 | Orange, then nothing else | GsDevice::init() returned; the first DMA frame never landed |
 | Orange, then blue and the normal ramp | The pre-GS stretch is fine on this build |
-| White | fatal() before the GS was up |
 
 The ladder build is a diagnostic only: its marks switch the display off, and
 it is never what a profile builds.

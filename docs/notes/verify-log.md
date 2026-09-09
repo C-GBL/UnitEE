@@ -1271,3 +1271,26 @@ shown nothing, and a blank screen is also what a configured display shows
 when the launcher left VRAM black, so "nothing" does not by itself mean the
 GS was never reached. The ladder's orange mark is there to settle exactly
 that.
+
+Results, the same evening, on an SCPH-39001 (a fat, v1.60 USA ROM). The
+big probe climbs to blue: a game-sized segment loads and runs, which the
+decompiled ROM loader also says, since it reads only the ELF header and the
+program headers and streams the segment through a ring buffer. The ladder
+build shows nothing at all. That should have been decisive and was not,
+because the ladder's first marks were dark red and a purple starting at 40
+of 255, which on a television are black; a death anywhere in the first ten
+constructor steps would have looked the same as a death before the first
+one. Two more things were ruled out before the ladder was rebuilt. The
+kernel version: PCSX2 boots the same ISO with a v1.00 Japanese ROM, older
+than the console's, through all seven stages (its -elf shortcut does not
+work with that ROM at all, which wasted one comparison). And the file
+layout: a stripped ELF with an identical load segment was built for the
+case the loader read section headers, and the loader source shows it does
+not.
+
+The second ladder holds every mark for a second, bright, with a black gap,
+and adds marks around the two calls crt0 makes before the constructors
+(_InitSys and _libcglue_init, through linker wraps), so the stretch before
+the first constructor is split in three. The stretch it covers is now:
+white, yellow, green, cyan, grey, then the counted steps, then red twice,
+then orange. Reading table in docs/hardware-bring-up.md.

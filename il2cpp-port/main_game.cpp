@@ -108,13 +108,20 @@
 // probe's register-only trick: BGCOLOR with both read circuits off, no DMA,
 // no frame, safe from the first static constructor onwards.
 //
-//   dark red      static constructors are starting: crt0 and libc are done
-//   purple ramp   constructors running; brighter is later. One step per
-//                 destructor registration, mutex or TLS key they make, which
-//                 is what the runtime's and libstdc++'s constructors do
-//   red           main() entered
+//   white         crt0 done (bss cleared, thread and heap set up)
+//   yellow        the ps2sdk kernel patches (_InitSys) returned
+//   green         libc start-up (_libcglue_init) entered
+//   cyan          libc up
+//   grey          the first static constructor is running
+//   yellow, green, cyan, magenta, white, repeating: one step per
+//                 destructor registration, mutex or TLS key the constructors
+//                 make, which is what libstdc++'s and libil2cpp's do
+//   red, twice    main() entered
 //   orange        GsDevice::init() returned; the drawn ramp (blue) follows
-//   white         fatal() before the GS was up
+//   red, held     fatal() before the GS was up, or init() never returned
+//
+// Every mark is held for a second with a quarter second of black after it,
+// so the sequence can be counted or filmed; the boot takes about a minute.
 //
 // The steps come from linker wraps (--wrap=__cxa_atexit and friends, see
 // il2cpp-port/CMakeLists.txt), so third-party code is instrumented without
@@ -132,25 +139,69 @@ void mark(uint8_t r, uint8_t g, uint8_t b)
     graph_disable_output();
 }
 
+// Register-only vsync wait: the CRTC is already scanning whatever the
+// launcher left, so this works before libc, before the kernel patches, and
+// before the GS is ours.
+void hold(int frames)
+{
+    for (int i = 0; i < frames; ++i) {
+        graph_wait_vsync();
+    }
+}
+
+// A colour held for a second, then a quarter second of black, so two equal
+// steps in a row can be told apart and the whole sequence can be counted
+// or filmed. The first ladder painted dim marks that read as black on a
+// television, which is exactly the report it was built to disambiguate.
+void show(uint8_t r, uint8_t g, uint8_t b)
+{
+    mark(r, g, b);
+    hold(60);
+    mark(0, 0, 0);
+    hold(15);
+}
+
 void step()
 {
     if (!g_active) {
         return;
     }
-    const uint32_t clamped = g_step < 40u ? g_step : 40u;
-    const uint8_t v = static_cast<uint8_t>(40u + 5u * clamped);
+    static const uint8_t kPalette[5][3] = {
+        {255, 255, 0},   // yellow
+        {0, 255, 0},     // green
+        {0, 255, 255},   // cyan
+        {255, 0, 255},   // magenta
+        {255, 255, 255}, // white
+    };
+    const uint8_t* c = kPalette[g_step % 5u];
     ++g_step;
-    mark(v, 0, v);
+    show(c[0], c[1], c[2]);
 }
 
 } // namespace ladder
 
 __attribute__((constructor(101))) static void ladder_constructors_begin()
 {
-    ladder::mark(64, 0, 0);
+    ladder::show(128, 128, 128); // grey: crt0 and libc done, constructors next
 }
 
 extern "C" {
+// crt0 calls these two between SetupHeap and the constructors; wrapping them
+// splits the invisible stretch before the first constructor in three.
+void __real__InitSys(void);
+void __wrap__InitSys(void)
+{
+    ladder::show(255, 255, 255); // white: crt0 done, kernel patches next
+    __real__InitSys();
+    ladder::show(255, 255, 0);   // yellow: kernel patches done
+}
+void __real__libcglue_init(void);
+void __wrap__libcglue_init(void)
+{
+    ladder::show(0, 255, 0);     // green: libc start-up next
+    __real__libcglue_init();
+    ladder::show(0, 255, 255);   // cyan: libc up, constructors next
+}
 int __real___cxa_atexit(void (*fn)(void*), void* arg, void* dso);
 int __wrap___cxa_atexit(void (*fn)(void*), void* arg, void* dso)
 {
@@ -445,7 +496,7 @@ void fatal(const char* what)
     }
 #if PS2_BOOT_LADDER
     else {
-        ladder::mark(255, 255, 255);
+        ladder::mark(255, 0, 0); // red held: fatal() before the GS was up
     }
 #endif
     SleepThread();
@@ -808,7 +859,9 @@ int main(void)
 {
 #if PS2_BOOT_LADDER
     ladder::g_active = false;
-    ladder::mark(160, 0, 0);
+    ladder::show(255, 0, 0); // red, twice: main() entered
+    ladder::show(255, 0, 0);
+    ladder::mark(255, 0, 0);
 #endif
     int stackAnchor;
     ps2ur_gc_stack_bottom = reinterpret_cast<char*>(
@@ -825,10 +878,9 @@ int main(void)
         return 1;
     }
 #if PS2_BOOT_LADDER
-    ladder::mark(160, 80, 0);
-    for (int i = 0; i < 30; ++i) {
-        graph_wait_vsync();
-    }
+    ladder::show(255, 128, 0); // orange: GsDevice::init() returned
+    printf("[ladder] %u constructor steps before main\n",
+           static_cast<unsigned>(ladder::g_step));
     graph_enable_output();
 #endif
     g_boot_device = &device;

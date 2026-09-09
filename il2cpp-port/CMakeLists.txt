@@ -185,6 +185,8 @@ option(PS2_BOOT_LADDER "Paint register-only boot marks before the GS is up" OFF)
 if(PS2_BOOT_LADDER)
     target_compile_definitions(m6-hello PRIVATE PS2_BOOT_LADDER=1)
     target_link_options(m6-hello PRIVATE
+        -Wl,--wrap=_InitSys
+        -Wl,--wrap=_libcglue_init
         -Wl,--wrap=__cxa_atexit
         -Wl,--wrap=pthread_mutex_init
         -Wl,--wrap=pthread_key_create)
