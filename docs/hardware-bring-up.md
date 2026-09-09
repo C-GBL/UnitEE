@@ -5,13 +5,12 @@ that works in PCSX2 and making it work on a retail console, plus the
 catalogue of places the emulator is known to be more forgiving than the
 silicon.
 
-**Status: not yet performed.** The development console for this project
-failed mid-project and has not been replaced, so everything below is written
-from the emulator side and from the hardware's documented behaviour. Nothing
-here has been confirmed against a real PlayStation 2, and this file says so
-in each place it matters rather than pretending otherwise. Acceptance D3
-(boots and plays on fat and slim hardware, from DVD-R and from USB) remains
-open, and with it M13's acceptance as a whole.
+**Status: in progress.** A console arrived on 2026-09-08. The first boots
+of the game ELF went black; the boot probe then established, rung by rung,
+what this hardware does and does not do (the "First results" section below),
+and the game's startup was corrected to match. Acceptance D3 (boots and
+plays on fat and slim hardware, from DVD-R and from USB) remains open until
+the game itself runs.
 
 ## Why the emulator is not the last word
 
@@ -37,7 +36,7 @@ the ones to check first when a console does something the emulator did not.
 
 | Item | Emulator | Hardware | State |
 |---|---|---|---|
-| Cache flush before a DMA read | Tolerates a missing flush in many cases, because it reads the same memory the EE wrote | The DMAC reads physical RAM and does not see dirty cache lines. Every buffer handed to a DMA channel must be flushed first | Handled: the chain flushes itself and every referenced block before kicking, a lesson the GIF path learned at M2. **Unverified on hardware** |
+| Cache flush before a DMA read | Tolerates a missing flush in many cases, because it reads the same memory the EE wrote | The DMAC reads physical RAM and does not see dirty cache lines. Every buffer handed to a DMA channel must be flushed first | Handled: the chain flushes itself and every referenced block before kicking, a lesson the GIF path learned at M2. **Verified on hardware** for the GIF frame packet: the probe's blue rung |
 | Chain buffer alignment | Accepts unaligned qwords | DMA tags must be qword aligned or the transfer runs off into whatever follows | Handled: every GS and DMA structure is 16-byte aligned with a static assertion on its size |
 | Scratchpad addressing | Treats it as ordinary memory | Single-cycle memory at a fixed physical address, not covered by the cache and not visible to the conservative collector | Handled: the scratchpad is excluded from collector scanning by design. **Unverified on hardware** |
 | Waiting for a channel | Returns promptly | A channel that is never waited on leaves the next kick writing into a transfer in flight | Handled: the chain waits before reusing its buffer |
@@ -58,6 +57,9 @@ the ones to check first when a console does something the emulator did not.
 | Boot ELF name versus disc serial | Boots anything | A non-American BIOS refuses a disc whose executable name does not match its serial | Handled: the build profile carries both and the validator checks they correspond. **Unverified on hardware** |
 | Disc seek time | Effectively zero over the host filesystem | Roughly 100 ms per seek | Not measurable in the emulator at all. File order on the ISO is planned from a recorded access trace; the payoff can only be measured on hardware |
 | IOP module load | Tolerant of load order | Requires SIF RPC and the IOP heap up before a module that allocates | Handled: the platform layer brings them up in order, a sequence found the hard way at M10 |
+| Loading a module from an EE buffer | Works without any patch | The ROM loadfile has no such RPC; `sbv_patch_enable_lmb` must be applied first or the load never returns | **Found on hardware.** The game hung here under both launchers. Console builds apply the patch before any buffer load; PCSX2 tolerates it too |
+| Launcher-resident IOP modules | Not a factor | uLaunchELF and Open PS2 Loader leave their own iomanX, fileXio and more resident; a boot that does not reset the IOP runs on those | **Found on hardware.** Console builds (host filesystem off in the profile) reset the IOP retail-style before loading anything. PCSX2 tolerates the reset, `host:` included; host-filesystem builds skip it because a ps2link loop on hardware would not survive it |
+| VRAM readback (local-to-host transfer) | Copies VRAM out instantly | The reverse GIF path needs an exact BUSDIR, FIFO and channel-direction sequence and hangs on any mistake | **Found on hardware:** `read_framebuffer` hangs. It is a verification tool the game never calls; goldens stay emulator-only until it is fixed |
 | Field timing | Vsync-locked cleanly | Interlaced field timing is stricter | The profiler reports dropped flips, which is the measurement that would catch this |
 
 ## Procedure
@@ -75,6 +77,19 @@ Everything below is the intended sequence. None of it has been executed.
 - **Network.** With ps2client, the executable is pushed over the network and
   the console's output comes back on the same link, which is the closest
   thing to the emulator's log that hardware offers.
+
+### First results from a console (2026-09-08)
+
+The probe climbed red, orange, yellow and blue on a retail console launched
+from uLaunchELF, and stopped on blue. That establishes, on silicon: the ELF
+executes and its layout loads; the EE can write GS privileged registers; a
+retail-style IOP reset comes back; iomanX and fileXio load from EE memory once
+the buffer-load patch is applied; the GS initialises; and a frame drawn over
+the GIF DMA path lands, cache flush and all. The rung that failed is the VRAM
+readback, which the game does not use. The game ELF had gone black earlier
+because its startup loaded IOP modules with neither the reset nor the patch,
+ahead of any colour; both are now in the platform layer and the GS comes up
+first.
 
 ### 2. First boot
 
@@ -104,10 +119,10 @@ the TV. The colour the picture stops on names the stage that failed.
 | Colour | Stage completed |
 |---|---|
 | Warped BIOS logo, no colour ever | The GS display was configured but nothing was drawn: the GS or DMA path itself is broken on this hardware |
-| Blue | GS initialised, display configured |
-| Green | Boot scene found on the media |
-| Yellow | Scene container read into RAM |
-| Cyan | Container parsed, world loaded |
+| Blue | GS initialised, a frame drawn over DMA |
+| Green | IOP reset, SIF up, iomanX and fileXio loaded |
+| Yellow | Boot scene found on the media |
+| Cyan | Container read, parsed, world loaded |
 | Magenta | Pads and audio up |
 | White | Managed runtime up (`il2cpp_init`) |
 | Orange | Assets uploaded, scripts instantiated; the first real frame follows |

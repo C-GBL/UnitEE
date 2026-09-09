@@ -110,14 +110,25 @@ if [ -f "$USER_INI" ]; then
     awk -v root="$USER_ROOT" '
         /^Renderer = / { print "Renderer = 13"; next }
         /^EnableEEConsole = / { print "EnableEEConsole = true"; next }
+        /^HostFs = / { print "HostFs = true"; next }
         /^(Bios|Snapshots|Savestates|MemoryCards|Cache|Textures|InputProfiles|Videos) = / {
             split($0, kv, " = ")
             if (kv[2] !~ /:/) { print kv[1] " = " root "/" kv[2]; next }
         }
         { print }
     ' "$USER_INI" > "$PCSX2_DIR/inis/PCSX2.ini"
+    # host: is the harness's whole staging mechanism, and PCSX2 serves it
+    # only with [EmuCore] HostFs on. The user's ini is not a safe source for
+    # that key: a console build's Deploy step leaves the interactive PCSX2
+    # with it OFF (the build profile decides the media there), and the
+    # harness then inherited it and lost every file it staged -- the samples
+    # that read nothing kept passing, which hid it (verify-log M13). If the
+    # key was absent rather than false, the rule above never fired: add it.
+    if ! grep -q '^HostFs = ' "$PCSX2_DIR/inis/PCSX2.ini"; then
+        sed -i 's/^\[EmuCore\]$/[EmuCore]\nHostFs = true/' "$PCSX2_DIR/inis/PCSX2.ini"
+    fi
 else
-    printf '[EmuCore/GS]\nRenderer = 13\n[Logging]\nEnableEEConsole = true\n' \
+    printf '[EmuCore]\nHostFs = true\n[EmuCore/GS]\nRenderer = 13\n[Logging]\nEnableEEConsole = true\n' \
         > "$PCSX2_DIR/inis/PCSX2.ini"
     echo "run-emu-test: WARNING -- $USER_INI not found; using a minimal"
     echo "              portable config (BIOS path may be missing)."

@@ -91,6 +91,9 @@ add_library(ps2ur STATIC ${PS2UR_SOURCES})
 target_include_directories(ps2ur PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 if(PS2UR_PLATFORM STREQUAL "ps2")
+    # platform_ps2.cpp applies the sbv "load module buffer" patch at boot;
+    # every consumer of the library needs libpatches to link (M13 task 4).
+    target_link_libraries(ps2ur PUBLIC patches)
     target_compile_definitions(ps2ur PUBLIC PS2UR_PLATFORM_PS2=1)
 
     # Embedded IOP modules for fileXio (see irx_blobs.S). The assembler needs

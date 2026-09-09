@@ -9,9 +9,11 @@
 
 #if defined(PS2UR_PLATFORM_PS2)
 
+#include <iopcontrol.h>
 #include <iopheap.h>
 #include <kernel.h>
 #include <loadfile.h>
+#include <sbv_patches.h>
 #include <sifrpc.h>
 #include <stdio.h>
 
@@ -24,13 +26,33 @@ extern "C" unsigned char filexio_irx_end[];
 namespace ps2ur {
 namespace platform {
 
-bool init()
+bool init(bool console_boot)
 {
     // SIF RPC first: file I/O (host:, cdrom0:, mc0:) and every other IOP
     // service rides on it. Discovered the hard way -- fopen("host:...")
     // fails with no useful error when this is missing, because the fio RPC
     // endpoint was never brought up (plan section 3.5).
     SifInitRpc(0);
+
+    // Reset the IOP the way a retail title does, so the modules loaded below
+    // land on a known IOP rather than on whatever the launcher left behind.
+    // The first real-hardware boots went black under both Open PS2 Loader
+    // and uLaunchELF while the same ELF reached the GS from a cold disc
+    // boot; the difference was the launchers' resident IOP modules, and the
+    // boot probe (samples/23-boot-probe) climbed past this rung only once it
+    // reset first (verify-log M13, 2026-09-08).
+    //
+    // Console builds only, by policy rather than necessity: PCSX2 turned out
+    // to tolerate the reset, host: included, but a host-filesystem build is
+    // also the shape a ps2link loop on hardware takes, and there a reset
+    // would take ps2link's IOP side down. The caller knows which build this is.
+    if (console_boot) {
+        while (!SifIopReset("", 0)) {
+        }
+        while (!SifIopSync()) {
+        }
+        SifInitRpc(0);
+    }
 
     // ps2sdk's newlib does file I/O exclusively through fileXio, which is NOT
     // a ROM module: without iomanX + fileXio on the IOP every open() fails
@@ -43,6 +65,18 @@ bool init()
     // a larger one (audsrv) hangs waiting for an allocation that never
     // comes -- see verify-log, M10.
     SifInitIopHeap();
+    // A real console's ROM loadfile has no "load module from an EE buffer"
+    // RPC at all; this patch adds it. PCSX2 accepts buffer loads without it,
+    // which is exactly how every emulator test passed while hardware hung
+    // on the very next line. Verified on a console by the boot probe.
+    //
+    // Gated with the reset, for the same policy reason. PCSX2 tolerates the
+    // patch as well: a sample booted the console way loaded its scene over
+    // host: in the emulator without complaint.
+    if (console_boot) {
+        sbv_patch_enable_lmb();
+        sbv_patch_disable_prefix_check();
+    }
     int mod_ret = 0;
     const int iomanx_id = SifExecModuleBuffer(
         iomanx_irx_start,

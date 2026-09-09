@@ -1152,3 +1152,62 @@ with the symbol absent.
 A zero from an instrument with nothing attached to it looks exactly like a
 zero from a healthy system. That is the second time in this milestone a
 number had to be disbelieved before it became useful.
+
+## The first console: black under two launchers, and what the probe proved (M13, 2026-09-08)
+
+The game ELF went black on a retail PlayStation 2 under Open PS2 Loader and
+again under uLaunchELF, two launchers with nothing in common but the console,
+while an earlier cold disc boot had at least reconfigured the display. Every
+emulator test passed. A black screen names no rung, so a probe ELF was built
+to climb startup one rung at a time and paint each with the cheapest
+mechanism that could work there: BGCOLOR written straight into a privileged
+register for the first rung, a retail-style IOP reset for the second, module
+loads from EE memory for the third, GS init plus one DMA-drawn frame for the
+fourth, and a VRAM readback of that frame for the fifth.
+
+On the console it climbed red, orange, yellow, blue, and stopped on blue.
+
+That is a lot of verified fact for one boot. The ELF layout loads and runs.
+The EE reaches the GS. The IOP resets and SIF comes back. Modules load from
+EE memory, but only because the probe applied sbv_patch_enable_lmb first:
+the ROM loadfile on real hardware has no load-from-buffer RPC, PCSX2 does
+not need the patch, and the runtime had never called it. The GS initialises
+and a GIF DMA frame lands on screen with the cache flush doing its job. The
+one failure is the VRAM readback, a verification tool the game never calls.
+
+So the console was fine and the game's startup order was wrong: it loaded
+iomanX and fileXio with neither an IOP reset nor the patch, and it did that
+before painting any colour, which is why the ramp said nothing. Two fixes.
+The platform layer now resets the IOP the way a retail title does, so the
+same ELF sees the same IOP from a disc, from Open PS2 Loader and from
+uLaunchELF, and applies the buffer-load patch before any module load. And
+the game brings the GS up before any IOP work, so blue means exactly "the
+ELF runs and the GS draws", which this hardware has now demonstrated.
+
+The first version reset the IOP and applied the patch unconditionally, and
+every emulator test that reads a file failed at once, which looked exactly
+like the emulator objecting to the reset. It was not. Two unrelated things
+had broken underneath. The user's PCSX2.ini had HostFs = false, saved by
+PCSX2 after a console build's Deploy step launched it, and the test harness
+copied that ini without forcing the one key its whole staging mechanism
+depends on. And the golden checker had never staged its scene files at all:
+it leaned on copies earlier runs had left in the emulator's temp directory,
+which had since been cleaned, so every scene-reading golden failed together
+while the one that reads nothing passed. Gating the reset changed nothing,
+which should have been the tell sooner than it was.
+
+With the harness forcing HostFs and each golden declaring its scene in a
+header the checker stages, a sample booted the console way, reset and patch
+included, loaded its scene over host: in PCSX2 without complaint. So the
+reset and the patch are harmless in the emulator too. The console_boot gate
+stays regardless, as policy rather than necessity: an emulator build keeps
+the boot every test was passed with, and a host-filesystem build is the
+shape a ps2link loop on hardware will take, where a reset would take
+ps2link's IOP side down with it. The readback hang goes in the catalogue as
+emulator-only tooling until the reverse GIF path is done properly.
+
+Two lessons for the file. A failure that arrives the moment you change
+something is not thereby caused by it; the ini had changed a minute before
+the first failing run and the staging directory some time before that. And
+a test that passes for months on a temp directory's leftovers is a test
+that has never actually run its own setup.

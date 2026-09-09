@@ -1,6 +1,7 @@
 # Golden tile CRC32s -- regenerated 2026-08-03 by tools/goldens/check.sh --update
 # Source ELF: 17-skinning.elf
 # Format: <tile_x> <tile_y> <crc32>.
+# Files: build/skinscene.p2b build/skin-golden.bin
 GOLDEN 256x256 at (128,96) tiles 8x8
 0 0 26FE75BA
 1 0 26FE75BA

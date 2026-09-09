@@ -8,7 +8,18 @@
 namespace ps2ur {
 namespace platform {
 
-bool init();
+// 'console_boot' selects a console boot: the IOP is reset the way a retail
+// title does it, so the modules loaded next land on a known IOP rather than
+// on whatever the launcher left resident, and the sbv "load module buffer"
+// patch is applied, without which a real console cannot load a module from
+// EE memory at all. Both are verified on a console by the boot probe, and
+// both turned out to be harmless under PCSX2, host: included (checked
+// 2026-09-08). It still defaults OFF, for two reasons: the emulator boot
+// every test has passed with stays exactly what it was, and a
+// host-filesystem build is the shape a ps2link development loop on hardware
+// takes, where resetting the IOP would take ps2link's own modules down with
+// it (M13 task 4).
+bool init(bool console_boot = false);
 void shutdown();
 
 // 'level' is (int)ps2ur::LogLevel. 'message' is a single formatted line, no newline.

@@ -16,8 +16,9 @@ static Clock::time_point boot_epoch()
     return s_epoch;
 }
 
-bool init()
+bool init(bool console_boot)
 {
+    (void)console_boot; // no IOP on the host
     boot_epoch(); // latch the epoch
     return true;
 }

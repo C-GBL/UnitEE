@@ -23,6 +23,20 @@ verified by framebuffer CRC diff via PCSX2."
 - A golden update is an explicit, reviewed action (a `--rebless` mode), never
   automatic.
 
+## A golden declares the scene it needs
+
+A sample that reads a container must have that container staged next to
+the ELF, because PCSX2 maps `host:` to the ELF's directory. The golden says
+which one in its header, and `check.sh` stages it before the run:
+
+    # Files: build/m5-scene.p2b
+
+Paths are relative to the repository root and must not contain spaces.
+Until this line existed the checker leaned on whatever earlier runs had left
+in the staging directory, and every scene-reading golden failed together the
+first time that directory was clean. A failure to open the scene is now
+reported as exactly that, never as a CRC mismatch.
+
 ## Open questions for the missing spec
 
 - TODO(spec missing: section 14.3): exact CRC algorithm and whether the CRC

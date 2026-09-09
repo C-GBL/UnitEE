@@ -82,14 +82,19 @@
 // that failed; red means fatal() was reached. If the screen never leaves the
 // warped logo even for stage 1, the GS or DMA path itself is broken.
 //
-//   1  blue     GS initialised, display configured
-//   2  green    boot scene found on media
-//   3  yellow   scene container read into RAM
-//   4  cyan     container parsed, world loaded
+//   1  blue     GS initialised, display configured, a frame drawn over DMA
+//   2  green    IOP reset, SIF up, iomanX and fileXio loaded
+//   3  yellow   boot scene found on media
+//   4  cyan     container read, parsed, world loaded
 //   5  magenta  pads and audio up
 //   6  white    managed runtime up (il2cpp_init)
 //   7  orange   assets uploaded, scripts instantiated
 //      red      fatal(): the log line just before it says what
+//
+// The GS comes up BEFORE the IOP work on purpose: the first real console
+// went black with no colour at all, because the IOP module loading it was
+// stuck in ran ahead of the ramp. Blue now means only "the ELF runs and the
+// GS draws", which the boot probe proved this hardware can do.
 //
 // Compiled into development builds only. Each stage costs two vsyncs.
 namespace {
@@ -725,14 +730,6 @@ int main(void)
     ps2ur_gc_stack_bottom = reinterpret_cast<char*>(
         (reinterpret_cast<unsigned long>(&stackAnchor) + 128) & ~15UL);
 
-    platform::init();
-    // The build decides the media, not the emulator's settings. Off: host:
-    // is never tried, so the game reads exactly what a console reads. On:
-    // host: first, disc as fallback (build profile: Host Filesystem).
-    platform::set_host_media_enabled(PS2_GAME_HOST_FS != 0);
-    printf("[game] %s starting (media: %s)\n", PS2_GAME_PRODUCT_NAME,
-           PS2_GAME_HOST_FS ? "host: then disc" : "disc only");
-
     // --- GS -----------------------------------------------------------------
     gfx::VideoConfig config;
     config.width = PS2_GAME_SCREEN_WIDTH;
@@ -745,6 +742,19 @@ int main(void)
     }
     g_boot_device = &device;
     boot_stage(1);
+
+    // A build that does not use the host filesystem is a console build, and
+    // a console build resets the IOP and applies the buffer-load patch (see
+    // platform::init). An emulator build must do neither.
+    platform::init(/*console_boot=*/PS2_GAME_HOST_FS == 0);
+    boot_stage(2);
+    // The build decides the media, not the emulator's settings. Off: host:
+    // is never tried, so the game reads exactly what a console reads. On:
+    // host: first, disc as fallback (build profile: Host Filesystem).
+    platform::set_host_media_enabled(PS2_GAME_HOST_FS != 0);
+    printf("[game] %s starting (media: %s)\n", PS2_GAME_PRODUCT_NAME,
+           PS2_GAME_HOST_FS ? "host: then disc" : "disc only");
+
 
     // --- Boot scene ---------------------------------------------------------
     Arena file_arena;
@@ -809,7 +819,7 @@ int main(void)
         return 1;
     }
     printf("[game] boot scene: %s\n", scene_path);
-    boot_stage(2);
+    boot_stage(3);
 
     uint32_t file_size = 0;
     const void* file_data = io::load_file(scene_path, file_arena, &file_size);
@@ -825,7 +835,6 @@ int main(void)
         return 1;
     }
     io::P2bFile file;
-    boot_stage(3);
     if (!file.parse(file_data, file_size)) {
         printf("[game] container error: %s\n", file.error());
         fatal("boot scene malformed");

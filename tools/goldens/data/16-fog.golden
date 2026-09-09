@@ -1,6 +1,7 @@
 # Golden tile CRC32s -- regenerated 2026-08-03 by tools/goldens/check.sh --update
 # Source ELF: 16-fog.elf
 # Format: <tile_x> <tile_y> <crc32>.
+# Files: build/fogscene.p2b
 GOLDEN 512x448 at (0,0) tiles 8x8
 0 0 109A60E6
 1 0 109A60E6

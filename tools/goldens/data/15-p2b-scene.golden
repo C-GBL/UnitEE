@@ -1,6 +1,7 @@
 # Golden tile CRC32s -- regenerated 2026-08-03 by tools/goldens/check.sh --update
 # Source ELF: 15-p2b-scene.elf
 # Format: <tile_x> <tile_y> <crc32>.
+# Files: build/m5-scene.p2b
 GOLDEN 256x256 at (128,96) tiles 8x8
 0 0 2DE6BFA1
 1 0 9D267563

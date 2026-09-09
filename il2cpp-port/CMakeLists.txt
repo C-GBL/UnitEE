@@ -80,7 +80,7 @@ if(PS2UR_RUNTIME)
     # sits on top of them.
     target_link_libraries(m6-hello PRIVATE
         "${PS2UR_RUNTIME}/libps2ur.a"
-        draw graph math3d packet packet2 dma
+        draw graph math3d packet packet2 dma patches
         # M10 added platform services to the runtime, so anything linking
         # libps2ur.a now needs their SDK libraries too: pad (input), mc
         # (memory card) and audsrv (audio). Without these the link fails on
