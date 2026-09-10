@@ -1294,3 +1294,31 @@ and adds marks around the two calls crt0 makes before the constructors
 the first constructor is split in three. The stretch it covers is now:
 white, yellow, green, cyan, grey, then the counted steps, then red twice,
 then orange. Reading table in docs/hardware-bring-up.md.
+
+The second ladder, filmed on the SCPH-39001 from the hard disk: white at
+eight seconds, black for three, yellow for one, green for one, then black
+for five minutes. That is unambiguous. crt0 hands over; the ps2sdk kernel
+patches return, though they take about three seconds on this console and
+none in the emulator; libc start-up is entered and never returns. Not a
+constructor after all, and nothing the game wrote: `_libcglue_init` is the
+same code in the probe that climbs to blue under the same launcher.
+
+Its parts, from the disassembly: `__fdman_init` (a semaphore, the fd table,
+stdio's first malloc), `__libpthreadglue_init` (pthread-embedded, six
+mutexes over kernel semaphores), `__locks_init` (eight semaphores for
+newlib's locks), `_libcglue_rtc_update` (reads the Timer 2 system time that
+`_InitSys` started, then `ps2time`, which reads the RTC with
+`sceCdReadClock`, a SIF RPC that creates a semaphore and sleeps on it until
+the SIF0 DMA interrupt signals it), and `_libcglue_timezone_update` (OSD
+config syscalls, snprintf, setenv). The RPC is the one thing in the list
+that can wait forever. The third ladder puts a mark after each part and
+brackets the timer read and the RTC answer separately, so the next film
+names the part.
+
+Two hypotheses were closed in the emulator meanwhile. Uninitialised memory:
+`samples/24-dirty-launcher` links at 0x01F00000, moves to a private stack,
+fills every free byte of RAM with 0xA5, loads game.elf through the ROM
+loader and jumps, and the game boots under it. And pthread-embedded's
+semaphore structures do leave the attr field unset on the stack, which
+would have been the kind of thing zeroed RAM hides, but the dirty launcher
+covers that too.

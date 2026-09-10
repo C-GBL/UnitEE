@@ -187,6 +187,13 @@ if(PS2_BOOT_LADDER)
     target_link_options(m6-hello PRIVATE
         -Wl,--wrap=_InitSys
         -Wl,--wrap=_libcglue_init
+        -Wl,--wrap=__fdman_init
+        -Wl,--wrap=__libpthreadglue_init
+        -Wl,--wrap=__locks_init
+        -Wl,--wrap=_libcglue_rtc_update
+        -Wl,--wrap=GetTimerSystemTime
+        -Wl,--wrap=sceCdReadClock
+        -Wl,--wrap=_libcglue_timezone_update
         -Wl,--wrap=__cxa_atexit
         -Wl,--wrap=pthread_mutex_init
         -Wl,--wrap=pthread_key_create)

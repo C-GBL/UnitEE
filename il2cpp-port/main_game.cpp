@@ -110,7 +110,10 @@
 //
 //   white         crt0 done (bss cleared, thread and heap set up)
 //   yellow        the ps2sdk kernel patches (_InitSys) returned
-//   green         libc start-up (_libcglue_init) entered
+//   green         libc start-up (_libcglue_init) entered, then inside it:
+//                 magenta (fd table), white (pthread glue), yellow (locks),
+//                 grey (clock update entered), orange (timer read), blue
+//                 (RTC answered), magenta (clock done), white (timezone)
 //   cyan          libc up
 //   grey          the first static constructor is running
 //   yellow, green, cyan, magenta, white, repeating: one step per
@@ -201,6 +204,58 @@ void __wrap__libcglue_init(void)
     ladder::show(0, 255, 0);     // green: libc start-up next
     __real__libcglue_init();
     ladder::show(0, 255, 255);   // cyan: libc up, constructors next
+}
+// The console stopped after green (verify-log, 2026-09-09), so libc
+// start-up itself is split: one mark after each thing it does, and the two
+// hardware reads inside the clock update bracketed on their own.
+void __real___fdman_init(void);
+void __wrap___fdman_init(void)
+{
+    __real___fdman_init();
+    ladder::show(255, 0, 255);   // magenta: fd table and stdio up
+}
+void __real___libpthreadglue_init(void);
+void __wrap___libpthreadglue_init(void)
+{
+    __real___libpthreadglue_init();
+    ladder::show(255, 255, 255); // white: pthread glue up
+}
+void __real___locks_init(void);
+void __wrap___locks_init(void)
+{
+    __real___locks_init();
+    ladder::show(255, 255, 0);   // yellow: newlib locks up
+}
+void __real__libcglue_rtc_update(void);
+void __wrap__libcglue_rtc_update(void)
+{
+    ladder::show(128, 128, 128); // grey: clock update entered
+    __real__libcglue_rtc_update();
+    ladder::show(255, 0, 255);   // magenta: clock update done
+}
+unsigned long long __real_GetTimerSystemTime(void);
+unsigned long long __wrap_GetTimerSystemTime(void)
+{
+    const unsigned long long t = __real_GetTimerSystemTime();
+    if (ladder::g_active) {
+        ladder::show(255, 128, 0); // orange: the Timer 2 system time was read
+    }
+    return t;
+}
+int __real_sceCdReadClock(void* clock);
+int __wrap_sceCdReadClock(void* clock)
+{
+    const int r = __real_sceCdReadClock(clock);
+    if (ladder::g_active) {
+        ladder::show(0, 0, 255);   // blue: the RTC answered over SIF
+    }
+    return r;
+}
+void __real__libcglue_timezone_update(void);
+void __wrap__libcglue_timezone_update(void)
+{
+    __real__libcglue_timezone_update();
+    ladder::show(255, 255, 255); // white: timezone set
 }
 int __real___cxa_atexit(void (*fn)(void*), void* arg, void* dso);
 int __wrap___cxa_atexit(void (*fn)(void*), void* arg, void* dso)

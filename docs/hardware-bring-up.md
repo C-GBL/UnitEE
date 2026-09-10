@@ -172,7 +172,7 @@ are the second version's.
 | Nothing | Before crt0 handed over: the load, the bss clear, or the thread and heap set-up |
 | White, as the first colour | Inside the ps2sdk kernel patches (_InitSys) |
 | Yellow, right after white | Between the kernel patches and libc start-up |
-| Green | Inside libc start-up (_libcglue_init): the fd table, the pthread glue, the locks, the clock |
+| Green | libc start-up (_libcglue_init) entered. Inside it, in order: magenta (fd table and stdio), white (pthread glue), yellow (newlib locks), grey (clock update entered), orange (Timer 2 system time read), blue (RTC answered over SIF), magenta (clock update done), white (timezone set) |
 | Cyan | Between libc and the first constructor |
 | Grey | The first constructors, before any counted step |
 | Yellow, green, cyan, magenta, white, repeating | The constructor steps, one per mutex, TLS key or destructor registration. Count them |
@@ -182,6 +182,22 @@ are the second version's.
 
 The ladder build is a diagnostic only: its marks switch the display off, and
 it is never what a profile builds.
+
+**Result of the second ladder on the SCPH-39001**, filmed: white at eight
+seconds, black for three, yellow, green, then black for five minutes. So
+crt0 hands over, the kernel patches return (slowly: `_InitSys` took about
+three seconds where the emulator takes none), libc start-up is entered and
+never returns. The third ladder, whose marks are the ones listed above,
+splits libc start-up into its parts. The clock update is the one part that
+talks to hardware: it reads the Timer 2 system time and then the RTC over a
+SIF RPC that sleeps on a semaphore until the SIF0 interrupt signals it.
+
+**`samples/24-dirty-launcher`** closes one more emulator gap. PCSX2 boots
+from zeroed RAM; a console launched from uLaunchELF or Open PS2 Loader hands
+the game a heap and a stack full of leftovers. The launcher links at
+0x01F00000, moves to a private stack, fills every byte it does not occupy
+with 0xA5, loads game.elf through the ROM loader and jumps. The game boots
+under it in PCSX2, so uninitialised memory is not the difference either.
 
 ### 2. First boot
 
