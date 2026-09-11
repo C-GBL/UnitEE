@@ -269,6 +269,14 @@ struct UIElement {
     // builtin 8x8 debug font -- which is what old scenes carry.
     int16_t font = -1;
     bool visible = true;
+    // Glow (PS2BootGlowText's console path): the glyph run drawn again in
+    // a ring of glow_spread px, additively at glow_intensity of its alpha,
+    // under the crisp run; glow_dilate widens the inner ring. Zero is plain
+    // text, which is what every scene starts as -- only the managed side
+    // ever sets these, through ps2ur_ui_set_text_glow.
+    float glow_spread = 0.0f;
+    float glow_intensity = 0.0f;
+    float glow_dilate = 0.0f;
     char text[kMaxUITextLength] = {};
 };
 
@@ -411,6 +419,7 @@ public:
     void ui_set_rect(uint32_t i, float x, float y, float w, float h);
     void ui_set_colour(uint32_t i, uint32_t rgba);
     void ui_set_text(uint32_t i, const char* text);
+    void ui_set_text_glow(uint32_t i, float spread, float intensity, float dilate);
     void ui_set_visible(uint32_t i, bool visible);
 
     // Steps every playing system: emission, integration, expiry. Call with

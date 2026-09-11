@@ -300,4 +300,22 @@ namespace UnityEngine
             s_Selectables[s_Focus].SetFocused(true);
         }
     }
+    /// <summary>
+    /// Console-side bloom for a Text: the runtime draws the glyph run again
+    /// in a ring of 'spread' pixels, additively at 'intensity' (0..1) of its
+    /// alpha, under the crisp text; 'dilate' (0..1) widens the inner ring.
+    /// PS2-only, like PS2Input -- there is no shader path on the console,
+    /// and additive passes are how the era faked a glow. Zero intensity is
+    /// plain text. PS2BootGlowText's UNITY_PS2 branch drives it.
+    /// </summary>
+    public static class PS2TextGlow
+    {
+        public static void Set(UI.Text text, float spread, float intensity, float dilate)
+        {
+            if (text != null && text.Element >= 0)
+            {
+                Native.ps2ur_ui_set_text_glow(text.Element, spread, intensity, dilate);
+            }
+        }
+    }
 }

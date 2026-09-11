@@ -66,6 +66,11 @@ public:
     // Non-integer scaling on a nearest-filtered 8x8 font just looks broken.
     void set_scale(uint32_t scale) { m_scale = scale < 1u ? 1u : scale; }
 
+    // Additive blending (Cs*As + Cd) for the baked-font draws that follow:
+    // the ring of passes under a bloomed wordmark stacks towards white
+    // instead of each pass painting over the last. Off is the normal blend.
+    void set_additive(bool on) { m_additive = on; }
+
     // Draws text at a screen position, in pixels. Newlines advance a line.
     void draw_text(GsDevice& device, int32_t x, int32_t y, const char* text);
 
@@ -138,6 +143,7 @@ private:
     VramAlloc m_atlas;
     bool m_initialized = false;
     uint32_t m_scale = 1;
+    bool m_additive = false;
     uint8_t m_r = 255, m_g = 255, m_b = 255;
 };
 

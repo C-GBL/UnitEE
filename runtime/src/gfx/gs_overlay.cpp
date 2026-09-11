@@ -328,7 +328,9 @@ void DebugOverlay::draw_text_font(GsDevice& device, const UIFont& font,
     GsPacket& packet = device.packet();
     packet.begin_packed_ad(4);
     packet.add_ad(GsReg::TEST_1, gs_test(false, 0, 0, 0, false, 0, false, 1));
-    packet.add_ad(GsReg::ALPHA_1, gs_alpha(0, 1, 0, 1));
+    // Additive (Cs*As + Cd) for glow passes, the standard blend otherwise.
+    packet.add_ad(GsReg::ALPHA_1,
+                  m_additive ? gs_alpha(0, 2, 0, 1) : gs_alpha(0, 1, 0, 1));
     packet.add_ad(GsReg::CLAMP_1, 5); // glyph UVs are exact; never wrap
     packet.add_ad(GsReg::PRMODECONT, 1);
 

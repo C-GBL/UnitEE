@@ -10,6 +10,14 @@ namespace UnityEngine.Internal
         [DllImport("__Internal")]
         internal static extern void ps2ur_debug_log(string message);
 
+        // Selects the on-screen diagnostics page: 0 off, 1 frame timing, 2 profiler zones, 3 memory regions, 4 VRAM allocations. Select on the pad cycles the same pages; values out of range turn it off.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_debug_overlay_set_page(int page);
+
+        // The diagnostics page currently shown (see ps2ur_debug_overlay_set_page).
+        [DllImport("__Internal")]
+        internal static extern int ps2ur_debug_overlay_page();
+
         // Creates a root entity (parentHandle 0) or a child. Returns the new handle, or 0 if the entity table is full.
         [DllImport("__Internal")]
         internal static extern int ps2ur_entity_create(int parentHandle);
@@ -334,6 +342,10 @@ namespace UnityEngine.Internal
         // Replaces a text element's string (48-byte cap, baked 8x8 font). cstr on a set-on-change path, not per frame.
         [DllImport("__Internal")]
         internal static extern void ps2ur_ui_set_text(int element, string text);
+
+        // Console-side bloom for a text element: the glyph run is drawn again in a ring of 'spread' pixels, additively at 'intensity' (0..1) of its alpha, under the crisp run; 'dilate' (0..1) widens the inner ring. 0 intensity is plain text. PS2BootGlowText's UNITY_PS2 branch drives it.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_ui_set_text_glow(int element, float spread, float intensity, float dilate);
 
         // Shows/hides an element; Behaviour.enabled on the managed graphics.
         [DllImport("__Internal")]

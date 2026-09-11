@@ -117,6 +117,16 @@ public:
     bool upload_texture(const void* data, const VramAlloc& dest, uint32_t w,
                         uint32_t h, PixelFormat fmt);
 
+    // The same transfer restricted to rows [y0, y0 + rows) of a texture 'h'
+    // rows tall in VRAM. A texture bigger than one packet -- a 256x1024
+    // font atlas is 16384 qwords against the 8192-qword default -- goes up
+    // as several of these, one per packet, sized from packet_capacity().
+    bool upload_texture_rows(const void* data, const VramAlloc& dest, uint32_t w,
+                             uint32_t h, PixelFormat fmt, uint32_t y0, uint32_t rows);
+
+    // Qwords one frame packet can hold, for banding uploads to fit.
+    uint32_t packet_capacity() const { return m_packet.capacity(); }
+
     // Binds a texture for subsequent draws. 'fmt' and the dimensions must
     // match what was uploaded. Dimensions are powers of two.
     void set_texture(const VramAlloc& tex, uint32_t w, uint32_t h, PixelFormat fmt);

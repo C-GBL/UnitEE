@@ -317,30 +317,41 @@ void GsDevice::present()
 bool GsDevice::upload_texture(const void* data, const VramAlloc& dest, uint32_t w,
                               uint32_t h, PixelFormat fmt)
 {
+    return upload_texture_rows(data, dest, w, h, fmt, 0, h);
+}
+
+bool GsDevice::upload_texture_rows(const void* data, const VramAlloc& dest, uint32_t w,
+                                   uint32_t h, PixelFormat fmt, uint32_t y0,
+                                   uint32_t rows)
+{
     PS2UR_ASSERT(m_initialized);
-    if (data == nullptr || !dest.valid() || w == 0 || h == 0) {
+    if (data == nullptr || !dest.valid() || w == 0 || h == 0 || rows == 0 ||
+        y0 + rows > h) {
         return false;
     }
 
-    const uint32_t bytes = (w * h * bits_per_pixel(fmt)) / 8u;
-    if ((bytes & 15u) != 0) {
-        log(LogLevel::Error, "gfx: texture payload must be a whole number of qwords");
+    const uint32_t row_bytes = (w * bits_per_pixel(fmt)) / 8u;
+    const uint32_t bytes = row_bytes * rows;
+    const uint32_t skip_bytes = row_bytes * y0;
+    if ((bytes & 15u) != 0 || (skip_bytes & 15u) != 0) {
+        log(LogLevel::Error, "gfx: texture band must be a whole number of qwords");
         return false;
     }
     const uint32_t qwords = bytes / 16u;
 
     // Describe the destination, then hand the GIF the raw pixels in IMAGE
-    // mode. TRXDIR is written last because it arms the transfer.
+    // mode. TRXPOS carries the band's first row; TRXDIR is written last
+    // because it arms the transfer.
     m_packet.begin_packed_ad(4);
     m_packet.add_ad(GsReg::BITBLTBUF,
                     gs_bitbltbuf(0, 0, PixelFormat::PSMCT32,
                                  dest.block(), buffer_width_units(w), fmt));
-    m_packet.add_ad(GsReg::TRXPOS, gs_trxpos(0, 0, 0, 0, 0));
-    m_packet.add_ad(GsReg::TRXREG, gs_trxreg(w, h));
+    m_packet.add_ad(GsReg::TRXPOS, gs_trxpos(0, 0, 0, y0, 0));
+    m_packet.add_ad(GsReg::TRXREG, gs_trxreg(w, rows));
     m_packet.add_ad(GsReg::TRXDIR, 0); // 0 = host -> local
 
     m_packet.begin_image(qwords);
-    const Qword* src = static_cast<const Qword*>(data);
+    const Qword* src = static_cast<const Qword*>(data) + skip_bytes / 16u;
     for (uint32_t i = 0; i < qwords; ++i) {
         m_packet.add_qword(src[i].lo, src[i].hi);
     }

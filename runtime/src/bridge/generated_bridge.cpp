@@ -4,6 +4,8 @@
 
 const Ps2urBridgeEntry ps2ur_bridge_table[] = {
     { "ps2ur_debug_log", reinterpret_cast<const void*>(&ps2ur_debug_log) },
+    { "ps2ur_debug_overlay_set_page", reinterpret_cast<const void*>(&ps2ur_debug_overlay_set_page) },
+    { "ps2ur_debug_overlay_page", reinterpret_cast<const void*>(&ps2ur_debug_overlay_page) },
     { "ps2ur_entity_create", reinterpret_cast<const void*>(&ps2ur_entity_create) },
     { "ps2ur_entity_destroy", reinterpret_cast<const void*>(&ps2ur_entity_destroy) },
     { "ps2ur_entity_alive", reinterpret_cast<const void*>(&ps2ur_entity_alive) },
@@ -89,6 +91,7 @@ const Ps2urBridgeEntry ps2ur_bridge_table[] = {
     { "ps2ur_ui_get_colour", reinterpret_cast<const void*>(&ps2ur_ui_get_colour) },
     { "ps2ur_ui_set_colour", reinterpret_cast<const void*>(&ps2ur_ui_set_colour) },
     { "ps2ur_ui_set_text", reinterpret_cast<const void*>(&ps2ur_ui_set_text) },
+    { "ps2ur_ui_set_text_glow", reinterpret_cast<const void*>(&ps2ur_ui_set_text_glow) },
     { "ps2ur_ui_set_visible", reinterpret_cast<const void*>(&ps2ur_ui_set_visible) },
 };
 

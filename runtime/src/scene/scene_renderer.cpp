@@ -78,6 +78,43 @@ inline gfx::Qword qword4f(float x, float y, float z, float w)
 
 } // namespace
 
+// The console's bloom for a bloomed Text (PS2BootGlowText's UNITY_PS2
+// path): the glyph run drawn again in a ring around itself, additively at
+// a fraction of the element's alpha, so overlapping passes stack towards
+// white -- the era's way of faking a glow, and cheap on the GS. Two rings
+// of eight: the outer at glow_spread, the inner at under half of it,
+// widened by glow_dilate. The crisp run goes on top, drawn by the caller.
+static void draw_text_glow(gfx::GsDevice& device, gfx::DebugOverlay& overlay,
+                           const gfx::UIFont& font, const UIElement& ui,
+                           int32_t x, int32_t y, int32_t w, int32_t h,
+                           uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+{
+    static const int8_t kDir[8][2] = {{1, 0},  {1, 1},   {0, 1},  {-1, 1},
+                                      {-1, 0}, {-1, -1}, {0, -1}, {1, -1}};
+    const float outer = ui.glow_spread;
+    const float inner = ui.glow_spread * (0.35f + 0.25f * ui.glow_dilate);
+    // Sixteen passes at full intensity sum to about the element's own
+    // alpha where they all overlap; no single pass is anywhere near opaque.
+    const float per_pass = static_cast<float>(a) * ui.glow_intensity * 0.18f;
+    const uint8_t pa = static_cast<uint8_t>(per_pass > 127.0f ? 127.0f : per_pass);
+    if (pa == 0u) {
+        return;
+    }
+    overlay.set_additive(true);
+    for (int ring = 0; ring < 2; ++ring) {
+        const float radius = ring == 0 ? outer : inner;
+        for (int d = 0; d < 8; ++d) {
+            const bool diagonal = kDir[d][0] != 0 && kDir[d][1] != 0;
+            const float len = diagonal ? radius * 0.7071f : radius;
+            const int32_t dx = static_cast<int32_t>(static_cast<float>(kDir[d][0]) * len);
+            const int32_t dy = static_cast<int32_t>(static_cast<float>(kDir[d][1]) * len);
+            overlay.draw_text_font(device, font, x + dx, y + dy, w, h, ui.align_h,
+                                   ui.align_v, r, g, b, pa, ui.text);
+        }
+    }
+    overlay.set_additive(false);
+}
+
 bool SceneRenderer::init_ui(gfx::GsDevice& device)
 {
     // Call BETWEEN frames. The font atlas upload is GS packet data, and
@@ -741,6 +778,10 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
                         uint32_t tw = 0, th = 0;
                         if (font.texture != 0xFFFFFFFFu &&
                             bind_texture(bind_user, font.texture, &tw, &th)) {
+                            if (ui.glow_intensity > 0.0f && ui.glow_spread > 0.0f) {
+                                draw_text_glow(device, m_ui_overlay, font, ui, x, y,
+                                               w, h, r, g, b, a);
+                            }
                             m_ui_overlay.draw_text_font(
                                 device, font, x, y, w, h, ui.align_h,
                                 ui.align_v, r, g, b, a, ui.text);

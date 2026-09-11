@@ -62,6 +62,15 @@ extern "C" void ps2ur_ui_set_text(int32_t element, const char* text)
     }
 }
 
+extern "C" void ps2ur_ui_set_text_glow(int32_t element, float spread, float intensity,
+                                       float dilate)
+{
+    scene::World* world = bridge::world();
+    if (world != nullptr && element >= 0) {
+        world->ui_set_text_glow(static_cast<uint32_t>(element), spread, intensity, dilate);
+    }
+}
+
 extern "C" void ps2ur_ui_set_visible(int32_t element, int32_t visible)
 {
     scene::World* world = bridge::world();

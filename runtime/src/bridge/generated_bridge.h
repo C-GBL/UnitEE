@@ -85,6 +85,10 @@ extern "C" {
 
 // UTF-8 message to the EE console at Info level. Diagnostic path; the per-call string copy is accepted (ADR-002 cstr rules).
 void ps2ur_debug_log(const char* message);
+// Selects the on-screen diagnostics page: 0 off, 1 frame timing, 2 profiler zones, 3 memory regions, 4 VRAM allocations. Select on the pad cycles the same pages; values out of range turn it off.
+void ps2ur_debug_overlay_set_page(int32_t page);
+// The diagnostics page currently shown (see ps2ur_debug_overlay_set_page).
+int32_t ps2ur_debug_overlay_page(void);
 // Creates a root entity (parentHandle 0) or a child. Returns the new handle, or 0 if the entity table is full.
 int32_t ps2ur_entity_create(int32_t parentHandle);
 // Destroys the entity and its children. The handle's generation is retired: stale handles fail alive() forever after.
@@ -240,6 +244,8 @@ uint32_t ps2ur_ui_get_colour(int32_t element);
 void ps2ur_ui_set_colour(int32_t element, uint32_t rgba);
 // Replaces a text element's string (48-byte cap, baked 8x8 font). cstr on a set-on-change path, not per frame.
 void ps2ur_ui_set_text(int32_t element, const char* text);
+// Console-side bloom for a text element: the glyph run is drawn again in a ring of 'spread' pixels, additively at 'intensity' (0..1) of its alpha, under the crisp run; 'dilate' (0..1) widens the inner ring. 0 intensity is plain text. PS2BootGlowText's UNITY_PS2 branch drives it.
+void ps2ur_ui_set_text_glow(int32_t element, float spread, float intensity, float dilate);
 // Shows/hides an element; Behaviour.enabled on the managed graphics.
 void ps2ur_ui_set_visible(int32_t element, int32_t visible);
 

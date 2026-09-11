@@ -1575,6 +1575,16 @@ void World::ui_set_colour(uint32_t i, uint32_t rgba)
     }
 }
 
+void World::ui_set_text_glow(uint32_t i, float spread, float intensity, float dilate)
+{
+    if (i < m_ui_count) {
+        UIElement& e = m_ui[i];
+        e.glow_spread = spread < 0.0f ? 0.0f : spread;
+        e.glow_intensity = intensity < 0.0f ? 0.0f : (intensity > 1.0f ? 1.0f : intensity);
+        e.glow_dilate = dilate < 0.0f ? 0.0f : (dilate > 1.0f ? 1.0f : dilate);
+    }
+}
+
 void World::ui_set_text(uint32_t i, const char* text)
 {
     if (i >= m_ui_count || text == nullptr) {
