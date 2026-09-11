@@ -69,6 +69,8 @@ void note_scene_begin(bool additive)
 {
     g_last_additive = additive;
     if (g_world != nullptr) {
+        g_pre_counts.lights = g_world->light_count();
+        g_pre_counts.shadows = g_world->shadow_count();
         g_pre_counts.rigidbodies = g_world->rigidbody_count();
         g_pre_counts.animator_refs = g_world->animator_ref_count();
         g_pre_counts.audio_sources = g_world->audio_source_count();
@@ -382,6 +384,26 @@ int32_t controller_of(int32_t handle)
 }
 
 } // namespace
+
+// ---- lights (M14) ----------------------------------------------------------
+
+extern "C" void ps2ur_light_set(int32_t handle, int32_t kind, float r, float g, float b,
+                                float range, float spotCos, int32_t enabled)
+{
+    const int32_t index = resolve(handle);
+    if (index < 0 || g_world == nullptr) {
+        return;
+    }
+    g_world->set_light(index, static_cast<uint32_t>(kind < 0 ? 0 : kind), ps2ur::Vec3{r, g, b},
+                       range, spotCos, enabled != 0);
+}
+
+extern "C" void ps2ur_scene_set_ambient(float r, float g, float b)
+{
+    if (g_world != nullptr) {
+        g_world->camera_mut().ambient = ps2ur::Vec3{r, g, b};
+    }
+}
 
 extern "C" void ps2ur_anim_update(float dt)
 {

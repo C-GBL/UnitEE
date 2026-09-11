@@ -113,6 +113,8 @@ bool World::load(const io::P2bFile& file)
             m.zwrite = (flags & 1u) != 0u;
             m.blend = (flags & 2u) != 0u;
             m.transparent = (flags & 4u) != 0u;
+            m.clamp = (flags & 8u) != 0u;
+            m.sky = (flags & 16u) != 0u;
         }
         m_material_count = count;
     }
@@ -601,6 +603,7 @@ bool World::load(const io::P2bFile& file)
         // layer 48, tag 50, flags 52, component_first 56, component_count 60.
         e.name_hash = v.u32(at + 44);
         e.layer = v.u16(at + 48);
+        e.follow_camera = (v.u32(at + 52) & kEntityFlagFollowCamera) != 0u;
         e.alive = true;
         e.active = true;
         e.dirty = true;
@@ -669,16 +672,78 @@ bool World::load(const io::P2bFile& file)
                     m_camera.fog_near = v.f32(data_off + 56);
                     m_camera.fog_far = v.f32(data_off + 60);
                 }
+                if (v.ok(data_off, 80u)) {
+                    // M14: ambient (r, g, b, pad) after the fog block.
+                    m_camera.ambient = Vec3{v.f32(data_off + 64), v.f32(data_off + 68),
+                                            v.f32(data_off + 72)};
+                }
             } else if (type == kComponentDirectionalLight) {
+                // 24-byte v1 payload (a directional light's direction and
+                // colour) or the 48-byte M14 payload with kind, range, spot
+                // cosine and flags. Every light goes in the table; the
+                // first DIRECTIONAL one also fills m_light for older callers.
                 if (!v.ok(data_off, 24u)) {
                     m_error = "light payload truncated";
                     return false;
                 }
-                m_light.entity = static_cast<int32_t>(i);
-                m_light.dir = Vec3{v.f32(data_off + 0), v.f32(data_off + 4),
-                                   v.f32(data_off + 8)};
-                m_light.colour = Vec3{v.f32(data_off + 12), v.f32(data_off + 16),
-                                      v.f32(data_off + 20)};
+                Light lt;
+                lt.entity = static_cast<int32_t>(i);
+                lt.colour = Vec3{v.f32(data_off + 12), v.f32(data_off + 16),
+                                 v.f32(data_off + 20)};
+                if (v.ok(data_off, 48u)) {
+                    lt.kind = v.u32(data_off + 24);
+                    lt.range = v.f32(data_off + 28);
+                    lt.spot_cos = v.f32(data_off + 32);
+                    lt.enabled = (v.u32(data_off + 36) & 1u) != 0u;
+                }
+                if (lt.kind > 2u) {
+                    lt.kind = 0u;
+                }
+                if (lt.kind == 0u && m_light.entity < 0) {
+                    m_light.entity = static_cast<int32_t>(i);
+                    m_light.dir = Vec3{v.f32(data_off + 0), v.f32(data_off + 4),
+                                       v.f32(data_off + 8)};
+                    m_light.colour = lt.colour;
+                }
+                if (m_light_count < kMaxLights) {
+                    m_lights[m_light_count++] = lt;
+                } else {
+                    log(LogLevel::Warn, "scene: more than %u lights; the rest are dropped",
+                        static_cast<unsigned>(kMaxLights));
+                }
+            } else if (type == kComponentShadow) {
+                if (!v.ok(data_off, 20u)) {
+                    m_error = "shadow payload truncated";
+                    return false;
+                }
+                if (m_shadow_count >= kMaxShadows) {
+                    m_error = "too many shadow casters";
+                    return false;
+                }
+                ShadowRef& sh = m_shadows[m_shadow_count];
+                sh.entity = static_cast<int32_t>(i);
+                sh.mode = v.u32(data_off + 0);
+                sh.radius = v.f32(data_off + 4);
+                sh.strength = v.f32(data_off + 8);
+                sh.max_height = v.f32(data_off + 12);
+                e.shadow = static_cast<int16_t>(m_shadow_count);
+                ++m_shadow_count;
+            } else if (type == kComponentLod) {
+                if (!v.ok(data_off, 16u)) {
+                    m_error = "lod payload truncated";
+                    return false;
+                }
+                if (m_lod_count >= kMaxLods) {
+                    m_error = "too many lod levels";
+                    return false;
+                }
+                LodRef& lr = m_lods[m_lod_count];
+                lr.entity = static_cast<int32_t>(i);
+                lr.min_height = v.f32(data_off + 0);
+                lr.max_height = v.f32(data_off + 4);
+                lr.size = v.f32(data_off + 8);
+                e.lod = static_cast<int16_t>(m_lod_count);
+                ++m_lod_count;
             } else if (type == kComponentSkinnedMeshRenderer) {
                 if (!v.ok(data_off, 16u)) {
                     m_error = "skinned renderer payload truncated";
@@ -1087,6 +1152,9 @@ bool World::append(const io::P2bFile& file)
         mesh.material_index += material_base;
         m_meshes[mesh_base + i] = mesh;
     }
+    const uint32_t light_base = m_light_count;
+    const uint32_t shadow_base = m_shadow_count;
+    const uint32_t lod_base = m_lod_count;
     for (uint32_t i = 0; i < incoming.m_entity_count; ++i) {
         Entity entity = incoming.m_entities[i];
         if (entity.parent >= 0) {
@@ -1098,10 +1166,46 @@ bool World::append(const io::P2bFile& file)
         if (entity.material >= 0) {
             entity.material += static_cast<int32_t>(material_base);
         }
+        if (entity.shadow >= 0) {
+            entity.shadow = static_cast<int16_t>(entity.shadow + static_cast<int32_t>(shadow_base));
+        }
+        if (entity.lod >= 0) {
+            entity.lod = static_cast<int16_t>(entity.lod + static_cast<int32_t>(lod_base));
+        }
         entity.dirty = true;
         m_entities[entity_base + i] = entity;
         m_generation[entity_base + i] = 1;
     }
+    // M14 tables ride along with their entities; over capacity, the extras
+    // are dropped with a log line rather than failing the whole load.
+    for (uint32_t i = 0; i < incoming.m_light_count; ++i) {
+        if (m_light_count >= kMaxLights) {
+            log(LogLevel::Warn, "scene: additive load drops a light (table full)");
+            break;
+        }
+        Light lt = incoming.m_lights[i];
+        lt.entity += static_cast<int32_t>(entity_base);
+        m_lights[m_light_count++] = lt;
+    }
+    for (uint32_t i = 0; i < incoming.m_shadow_count; ++i) {
+        if (m_shadow_count >= kMaxShadows) {
+            log(LogLevel::Warn, "scene: additive load drops a shadow (table full)");
+            break;
+        }
+        ShadowRef sh = incoming.m_shadows[i];
+        sh.entity += static_cast<int32_t>(entity_base);
+        m_shadows[m_shadow_count++] = sh;
+    }
+    for (uint32_t i = 0; i < incoming.m_lod_count; ++i) {
+        if (m_lod_count >= kMaxLods) {
+            log(LogLevel::Warn, "scene: additive load drops a lod level (table full)");
+            break;
+        }
+        LodRef lr = incoming.m_lods[i];
+        lr.entity += static_cast<int32_t>(entity_base);
+        m_lods[m_lod_count++] = lr;
+    }
+    (void)light_base;
 
     // Scripts: the type name points into the INCOMING file's buffer, which
     // the caller keeps alive for as long as the world (the same contract as
@@ -1572,6 +1676,45 @@ void World::ui_set_colour(uint32_t i, uint32_t rgba)
 {
     if (i < m_ui_count) {
         m_ui[i].colour = rgba;
+    }
+}
+
+int32_t World::light_for_entity(int32_t entity_index) const
+{
+    for (uint32_t i = 0; i < m_light_count; ++i) {
+        if (m_lights[i].entity == entity_index) {
+            return static_cast<int32_t>(i);
+        }
+    }
+    return -1;
+}
+
+void World::set_light(int32_t entity_index, uint32_t kind, Vec3 colour, float range,
+                      float spot_cos, bool enabled)
+{
+    if (entity_index < 0 || static_cast<uint32_t>(entity_index) >= m_entity_count) {
+        return;
+    }
+    int32_t at = light_for_entity(entity_index);
+    if (at < 0) {
+        if (m_light_count >= kMaxLights) {
+            log(LogLevel::Warn, "scene: light table full (%u); Light on entity %d ignored",
+                static_cast<unsigned>(kMaxLights), static_cast<int>(entity_index));
+            return;
+        }
+        at = static_cast<int32_t>(m_light_count++);
+        m_lights[at] = Light{};
+        m_lights[at].entity = entity_index;
+    }
+    Light& lt = m_lights[at];
+    lt.kind = kind > 2u ? 0u : kind;
+    lt.colour = colour;
+    lt.range = range;
+    lt.spot_cos = spot_cos;
+    lt.enabled = enabled;
+    if (lt.kind == 0u && (m_light.entity < 0 || m_light.entity == entity_index)) {
+        m_light.entity = entity_index;
+        m_light.colour = colour;
     }
 }
 

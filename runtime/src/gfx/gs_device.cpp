@@ -424,6 +424,13 @@ void GsDevice::set_texture_indexed(const VramAlloc& tex, uint32_t w, uint32_t h,
     m_packet.add_ad(GsReg::TEXA, gs_texa(0x80, false, 0x80));
 }
 
+void GsDevice::set_texture_clamp(bool clamp)
+{
+    PS2UR_ASSERT(m_initialized);
+    m_packet.begin_packed_ad(1);
+    m_packet.add_ad(GsReg::CLAMP_1, gs_clamp(clamp, clamp));
+}
+
 void GsDevice::set_material_state(uint64_t test, uint64_t alpha, bool blend, bool zwrite)
 {
     PS2UR_ASSERT(m_initialized);

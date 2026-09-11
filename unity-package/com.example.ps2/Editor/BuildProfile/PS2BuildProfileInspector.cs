@@ -98,6 +98,14 @@ namespace Ps2.Editor
                 Field("textureMaxSize");
                 Field("audioSampleRate");
                 Field("strictContent");
+                Field("exportSkybox");
+                if (profile.exportSkybox)
+                    Field("skyboxFaceSize");
+                Field("textureFormat");
+                Field("staticBatching");
+                if (profile.staticBatching)
+                    Field("staticBatchCellSize");
+                Field("triangleBudget");
             }
 
             if (Group(7))

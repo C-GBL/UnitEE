@@ -86,12 +86,15 @@ Self-contained indexed texture:
 ```
 TexHeader {
     u32 width, height       // powers of two
-    u32 format              // GS PSM code; v1 emits PSMT8 (0x13)
-    u32 clut_entries        // 256 for PSMT8
+    u32 format              // GS PSM code: PSMT8 (0x13), or PSMT4 (0x14, M14)
+    u32 clut_entries        // 256 for PSMT8, 16 for PSMT4 (stored linearly,
+                            // 8x2 in the CLUT buffer; no CSM1 swap)
 }
 u32 clut[clut_entries]      // PSMCT32 entries, alpha already 0..128,
                             // ALREADY in CSM1 storage order
 u8  indices[width*height]   // RASTER order -- the GS transfer engine
+                            // (PSMT4: width*height/2 bytes, the left texel
+                            // of each pair in the low nibble)
                             // swizzles in hardware (verify-log 2026-08-01)
 ```
 
@@ -106,7 +109,8 @@ Material[count] {           // 48 bytes each; reader rejects other strides
     f32 tint[4]             // reserved, (1,1,1,1)
     u64 gs_test             // TEST_1 register value; 0 = device default
     u64 gs_alpha            // ALPHA_1 register value; used when blend set
-    u32 flags               // bit0 zwrite, bit1 blend, bit2 transparent-pass
+    u32 flags               // bit0 zwrite, bit1 blend, bit2 transparent-pass,
+                            // bit3 clamp addressing, bit4 sky (drawn first) (M14)
     u32 pad
 }
 ```
@@ -134,7 +138,7 @@ Entity[entity_count] {
     u32 name_hash
     u16 layer
     u16 tag
-    u32 flags
+    u32 flags               // bit0 follow camera (the sky, M14)
     u32 component_first     // into ComponentRef[]
     u16 component_count
     u16 pad                 // zero; keeps the struct 4-byte aligned (the
@@ -145,7 +149,8 @@ ComponentRef[component_count] {
                             // 4 Script (M7), 5 SkinnedMeshRenderer (M9),
                             // 6 Rigidbody (M11), 7 Animator (M12.5),
                             // 8 AudioSource, 9 AudioListener,
-                            // 10 PS2ParticleSystem, 11 UIElement (M12.5)
+                            // 10 PS2ParticleSystem, 11 UIElement (M12.5),
+                            // 12 Shadow, 13 Lod (M14)
     u16 pad
     u32 data_offset         // from the start of this section
 }
@@ -161,8 +166,16 @@ Camera (M8, 64B) { ...v1...; u32 orthographic; f32 ortho_size;
                    u32 clear_flags;          // 1 colour+depth, 2 depth only
                    u32 clear_rgb;            // r | g<<8 | b<<16
                    u32 layer_mask;
-                   u32 fog_enabled; u32 fog_rgb; f32 fog_near; f32 fog_far }
+                   u32 fog_enabled; u32 fog_rgb; f32 fog_near; f32 fog_far
+                   // M14 (80 B; readers accept 64): f32 ambient[3]; f32 pad }
 DirectionalLight { f32 dir[3]; f32 colour[3] }   // dir points FROM the light
+                 // M14 tail (48 B; readers accept 24): u32 kind (0 dir,
+                 // 1 point, 2 spot); f32 range; f32 spot_cos; u32 flags
+                 // (bit0 enabled); u32 pad[2]. Direction and position are
+                 // taken from the entity at runtime; 'dir' is v1 compat.
+Shadow (M14, 20B) { u32 mode;              // 0 blob, 1 blob + projected
+                   f32 radius; f32 strength; f32 max_height; u32 flags }
+Lod (M14, 16B)   { f32 min_height; f32 max_height; f32 size; u32 flags }
 Script (M7)      { u32 scrp_offset }             // into the SCRP section
 SkinnedMeshRenderer (M9, 16B) {   // one record per SKMS the renderer
                                   // draws: a multi-material renderer is

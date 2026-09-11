@@ -184,6 +184,33 @@
       "params": []
     },
     {
+      "name": "ps2ur_light_set",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "Creates or updates the Light on an entity (M14): kind 0 directional, 1 point, 2 spot; colour premultiplied by intensity; range and cos(half spot angle) for the two local kinds. The light's direction and position come from the entity's transform each frame.",
+      "returns": "void",
+      "params": [
+        {"name": "handle", "type": "i32"},
+        {"name": "kind", "type": "i32"},
+        {"name": "r", "type": "f32"},
+        {"name": "g", "type": "f32"},
+        {"name": "b", "type": "f32"},
+        {"name": "range", "type": "f32"},
+        {"name": "spotCos", "type": "f32"},
+        {"name": "enabled", "type": "i32"}
+      ]
+    },
+    {
+      "name": "ps2ur_scene_set_ambient",
+      "cs_class": "UnityEngine.Internal.Native",
+      "doc": "RenderSettings.ambientLight (M14): the ambient term the lit programs add, 0..1 per channel.",
+      "returns": "void",
+      "params": [
+        {"name": "r", "type": "f32"},
+        {"name": "g", "type": "f32"},
+        {"name": "b", "type": "f32"}
+      ]
+    },
+    {
       "name": "ps2ur_entity_create",
       "cs_class": "UnityEngine.Internal.Native",
       "doc": "Creates a root entity (parentHandle 0) or a child. Returns the new handle, or 0 if the entity table is full.",

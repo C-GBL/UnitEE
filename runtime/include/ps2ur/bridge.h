@@ -70,6 +70,8 @@ unsigned int scene_last_load_bytes();
 // World table sizes captured when the load BEGAN: for an additive load,
 // creates run from these counts to the new totals.
 struct PreLoadCounts {
+    unsigned int lights;
+    unsigned int shadows;
     unsigned int rigidbodies;
     unsigned int animator_refs;
     unsigned int audio_sources;

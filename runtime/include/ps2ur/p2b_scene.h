@@ -54,6 +54,10 @@ inline constexpr uint32_t kMaxSkinnedRenderers = 24;
 // renderer on one character must show the SAME pose, so they share one.
 // Bound at load, one per distinct (skeleton, controller) pair.
 inline constexpr uint32_t kMaxAnimators = 4;
+// M14: dynamic lights, shadow casters and LOD levels.
+inline constexpr uint32_t kMaxLights = 8;
+inline constexpr uint32_t kMaxShadows = 32;
+inline constexpr uint32_t kMaxLods = 64;
 
 inline constexpr uint16_t kComponentMeshRenderer = 1;
 inline constexpr uint16_t kComponentCamera = 2;
@@ -66,6 +70,11 @@ inline constexpr uint16_t kComponentAudioSource = 8;
 inline constexpr uint16_t kComponentAudioListener = 9;
 inline constexpr uint16_t kComponentParticleSystem = 10;
 inline constexpr uint16_t kComponentUIElement = 11;
+inline constexpr uint16_t kComponentShadow = 12; // PS2Shadow (M14)
+inline constexpr uint16_t kComponentLod = 13;    // LODGroup level (M14)
+
+// Entity flags (SCEN entity record, u32 at 52).
+inline constexpr uint32_t kEntityFlagFollowCamera = 1u; // sky: sits on the camera
 
 // uGUI subset (M12.5 task 5). Layout is BAKED at export -- real
 // RectTransform anchor math resolved against the framebuffer resolution --
@@ -118,6 +127,8 @@ struct LoadedMaterial {
     bool blend = false;    // write ALPHA_1 + PRIM carries ABE (set at export)
     bool zwrite = true;
     bool transparent = false; // render pass selection (back-to-front, no Z)
+    bool clamp = false;       // M14: CLAMP_1 clamps both axes (sky faces)
+    bool sky = false;         // M14: drawn first, before the opaque pass
 };
 
 struct Entity {
@@ -132,6 +143,9 @@ struct Entity {
     bool alive = false;
     bool active = true;    // activeSelf; activeInHierarchy = entity_visible()
     bool dirty = true;     // local TRS or ancestry changed since last pass
+    bool follow_camera = false; // kEntityFlagFollowCamera: drawn at the camera
+    int16_t shadow = -1;   // ShadowRef index, or -1
+    int16_t lod = -1;      // LodRef index, or -1
 };
 
 struct Camera {
@@ -149,6 +163,10 @@ struct Camera {
     uint8_t fog_r = 128, fog_g = 128, fog_b = 128;
     float fog_near = 10.0f;
     float fog_far = 80.0f;
+    // Ambient term the lit programs add (RenderSettings.ambientLight at
+    // export, ps2ur_scene_set_ambient at runtime). 0.157 was the hard-coded
+    // value every scene got before M14.
+    Vec3 ambient{0.157f, 0.157f, 0.157f};
 };
 
 struct DirectionalLight {
@@ -159,6 +177,44 @@ struct DirectionalLight {
 
 // A MonoBehaviour on an entity: the managed type to instantiate at startup.
 // type_name points into the p2b buffer ("Full.Type.Name, AssemblyName").
+// A Light component (M14). Directional lights light everything along
+// their entity's forward axis; point and spot lights are turned into a
+// directional light per OBJECT at draw time -- aimed from the light at the
+// object's bounds centre, attenuated by the distance -- which is what the
+// three fixed light slots of the VU programs can express, and what the era
+// did. Directions come from the entity's world matrix each frame, so a
+// light that moves, moves.
+struct Light {
+    int32_t entity = -1;
+    uint32_t kind = 0;      // 0 directional, 1 point, 2 spot
+    Vec3 colour{1, 1, 1};   // colour x intensity
+    float range = 10.0f;    // point/spot reach, world units
+    float spot_cos = 0.7f;  // cos(half the spot angle)
+    bool enabled = true;
+};
+
+// A PS2Shadow component (M14): a soft dark blob under the entity, and for
+// mode 1 the entity's own meshes redrawn flattened onto the ground along
+// the strongest directional light.
+struct ShadowRef {
+    int32_t entity = -1;
+    uint32_t mode = 0;        // 0 blob, 1 blob + projected
+    float radius = 0.5f;      // blob radius at ground level
+    float strength = 0.6f;    // 0..1 darkening
+    float max_height = 3.0f;  // the blob fades to nothing this far above ground
+};
+
+// One LODGroup level (M14), on the entity that carries that level's
+// renderer: drawn while the group's relative screen height is in
+// [min_height, max_height). 'size' is the group's world-space bounds size,
+// the quantity Unity divides by distance.
+struct LodRef {
+    int32_t entity = -1;
+    float min_height = 0.0f;
+    float max_height = 2.0f;
+    float size = 1.0f;
+};
+
 struct ScriptRef {
     int32_t entity = -1;
     const char* type_name = "";
@@ -483,6 +539,20 @@ public:
     bool has_light() const { return m_light.entity >= 0; }
     const DirectionalLight& light() const { return m_light; }
 
+    // M14 lights. m_light stays the first directional light for older
+    // callers; the renderer picks per object from this table.
+    uint32_t light_count() const { return m_light_count; }
+    const Light& light_at(uint32_t i) const { return m_lights[i]; }
+    int32_t light_for_entity(int32_t entity_index) const;
+    // Creates or updates the entity's light (scripts: Light component).
+    void set_light(int32_t entity_index, uint32_t kind, Vec3 colour, float range,
+                   float spot_cos, bool enabled);
+
+    uint32_t shadow_count() const { return m_shadow_count; }
+    const ShadowRef& shadow(uint32_t i) const { return m_shadows[i]; }
+    uint32_t lod_count() const { return m_lod_count; }
+    const LodRef& lod(uint32_t i) const { return m_lods[i]; }
+
 private:
     Entity m_entities[kMaxEntities];
     Mat4 m_world[kMaxEntities];
@@ -537,6 +607,12 @@ private:
 
     Camera m_camera;
     DirectionalLight m_light;
+    Light m_lights[kMaxLights];
+    uint32_t m_light_count = 0;
+    ShadowRef m_shadows[kMaxShadows];
+    uint32_t m_shadow_count = 0;
+    LodRef m_lods[kMaxLods];
+    uint32_t m_lod_count = 0;
     const char* m_error = "";
 };
 

@@ -18,6 +18,14 @@ namespace UnityEngine.Internal
         [DllImport("__Internal")]
         internal static extern int ps2ur_debug_overlay_page();
 
+        // Creates or updates the Light on an entity (M14): kind 0 directional, 1 point, 2 spot; colour premultiplied by intensity; range and cos(half spot angle) for the two local kinds. The light's direction and position come from the entity's transform each frame.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_light_set(int handle, int kind, float r, float g, float b, float range, float spotCos, int enabled);
+
+        // RenderSettings.ambientLight (M14): the ambient term the lit programs add, 0..1 per channel.
+        [DllImport("__Internal")]
+        internal static extern void ps2ur_scene_set_ambient(float r, float g, float b);
+
         // Creates a root entity (parentHandle 0) or a child. Returns the new handle, or 0 if the entity table is full.
         [DllImport("__Internal")]
         internal static extern int ps2ur_entity_create(int parentHandle);

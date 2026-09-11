@@ -1062,6 +1062,11 @@ namespace Ps2.Editor
         // live where the character actually is, not at the raw mesh scale --
         // an FBX authored in centimetres has 0.01-unit mesh bounds under a
         // x100 node, and either mis-scale culls wrong.
+        // Running totals for the build's budget report (M14); the scene
+        // exporter zeroes them before a rig bakes.
+        public static int SkinnedTrianglesThisScene;
+        public static int SkinnedBatchesThisScene;
+
         public static byte[] ExportSkinnedMesh(Mesh mesh, uint materialIndex,
                                                Color32 fallbackColour,
                                                Transform[] bones,
@@ -1105,6 +1110,7 @@ namespace Ps2.Editor
                                 ? mesh.GetTriangles(submesh)
                                 : mesh.triangles;
             int triangleCount = indices.Length / 3;
+            SkinnedTrianglesThisScene += triangleCount;
             // 6 qwords need 42 vertices to stay under the 8-bit VIF NUM
             // limit of 255 unpacked qwords; 5-qword batches keep their 48.
             int stride = textured ? 6 : 5;
@@ -1196,6 +1202,7 @@ namespace Ps2.Editor
             int tablesBytes = batches.Count * 64;
             int blobsStart = Align16(32 + descsBytes + tablesBytes);
 
+            SkinnedBatchesThisScene += batches.Count;
             var header = new ByteBuffer();
             header.U32((uint)batches.Count);
             header.U32(materialIndex);

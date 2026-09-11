@@ -14,8 +14,10 @@ uint64_t RenderQueue::make_key(uint32_t pass, uint32_t kind,
         depth01 = 1.0f;
     }
     uint32_t depth = static_cast<uint32_t>(depth01 * 16777215.0f); // 2^24-1
-    if (pass != 0) {
-        depth = 16777215u - depth; // transparent: back-to-front
+    // Passes (M14): 0 sky, 1 opaque (front-to-back), 2 transparent
+    // (back-to-front).
+    if (pass == 2u) {
+        depth = 16777215u - depth;
     }
     return (static_cast<uint64_t>(pass & 3u) << 62) |
            (static_cast<uint64_t>(kind & 7u) << 59) |

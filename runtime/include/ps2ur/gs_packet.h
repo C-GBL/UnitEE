@@ -259,6 +259,15 @@ constexpr uint64_t gs_tex1_nearest()
     return 0; // LCM=0, MXL=0, MMAG=0 (NEAREST), MMIN=0 (NEAREST)
 }
 
+// CLAMP: WMS/WMT 0 = REPEAT, 1 = CLAMP (to the texture edge). The sky's
+// faces clamp so a bilinear sample at a face edge never wraps to the far
+// side of the texture (M14); everything else repeats, the GS default.
+constexpr uint64_t gs_clamp(bool clamp_u, bool clamp_v)
+{
+    return static_cast<uint64_t>(clamp_u ? 1u : 0u) |
+           (static_cast<uint64_t>(clamp_v ? 1u : 0u) << 2);
+}
+
 // TEXA: how alpha is expanded for formats that do not carry a full 8 bits.
 constexpr uint64_t gs_texa(uint8_t alpha0, bool use_alpha_bit, uint8_t alpha1)
 {

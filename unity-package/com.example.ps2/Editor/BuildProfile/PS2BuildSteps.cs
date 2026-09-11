@@ -121,15 +121,46 @@ namespace Ps2.Editor
             // so a build could warn about a 1024x1024 texture and then ship
             // it into VRAM that could not hold it (verify-log M12.5).
             P2bSceneExporter.MaxTextureSize = ctx.Profile.textureMaxSize;
+            P2bSceneExporter.SkyboxFaceSize =
+                ctx.Profile.exportSkybox ? ctx.Profile.skyboxFaceSize : 0;
+            P2bSceneExporter.StaticBatching = ctx.Profile.staticBatching;
+            P2bSceneExporter.StaticBatchCellSize = ctx.Profile.staticBatchCellSize;
+            P2bTextureExporter.Mode =
+                ctx.Profile.textureFormat == PS2TextureFormat.FourBit
+                    ? P2bTextureExporter.FormatMode.FourBit
+                    : ctx.Profile.textureFormat == PS2TextureFormat.EightBit
+                        ? P2bTextureExporter.FormatMode.EightBit
+                        : P2bTextureExporter.FormatMode.Auto;
             P2bSceneExporter.AudioSampleRate = ctx.Profile.audioSampleRate;
             foreach (string scenePath in ctx.ScenePaths)
             {
                 string output = OutputFor(ctx, scenePath);
                 EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Single);
+                P2bSceneExporter.LastStats = null;
                 P2bSceneExporter.ExportActiveScene(output);
                 if (!File.Exists(output))
                     throw new PS2BuildException(
                         $"Exporting '{scenePath}' produced no output at '{output}'.");
+                // M14: the scene's budget, checked against the profile.
+                PS2SceneBudget budget = P2bSceneExporter.LastStats;
+                if (budget != null)
+                {
+                    budget.scene = Path.GetFileNameWithoutExtension(scenePath);
+                    ctx.SceneBudgets.Add(budget);
+                    if (budget.textureKb > ctx.Profile.textureBudgetKb)
+                        ctx.Warn($"scene '{budget.scene}': textures need {budget.textureKb} KB of " +
+                                 $"VRAM against the profile's {ctx.Profile.textureBudgetKb} KB " +
+                                 "budget; some will be skipped at load. Largest: " +
+                                 string.Join(", ", budget.largestTextures));
+                    int tris = budget.triangles + budget.skinnedTriangles;
+                    if (tris > ctx.Profile.triangleBudget)
+                        ctx.Warn($"scene '{budget.scene}': {tris} triangles against the " +
+                                 $"profile's {ctx.Profile.triangleBudget}; expect dropped " +
+                                 "frames. Largest: " + string.Join(", ", budget.largestMeshes));
+                    if (budget.drawCommands > 400)
+                        ctx.Warn($"scene '{budget.scene}': {budget.drawCommands} draw commands " +
+                                 "a frame; mark props Batching Static or reduce them.");
+                }
             }
             // Put the Editor back where it was; a build must not quietly
             // change which scene the user has open.

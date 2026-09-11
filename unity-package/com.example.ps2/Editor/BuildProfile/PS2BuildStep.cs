@@ -75,6 +75,7 @@ namespace Ps2.Editor
 
         public readonly List<PS2StepResult> Results = new List<PS2StepResult>();
         public readonly List<string> Warnings = new List<string>();
+        public readonly List<PS2SceneBudget> SceneBudgets = new List<PS2SceneBudget>(); // M14
 
         /// <summary>Content hashes from the previous build, for IsUpToDate.</summary>
         public PS2BuildCache Cache;

@@ -17,7 +17,7 @@ presumed to be the explicit "not supported" list. TODO(spec missing: section
 | Object model | `Object`, `GameObject`, `Component`, `Transform` (`Rotate`/`Translate` in `Space.Self` or `Space.World`), `MonoBehaviour`, `ScriptableObject` (assets only), tags, layers, `Find`/`GetComponent` family |
 | Lifecycle | `Awake`, `OnEnable`, `Start`, `Update`, `FixedUpdate`, `LateUpdate`, `OnDisable`, `OnDestroy`, coroutines (`WaitForSeconds`, `WaitForFixedUpdate`, `WaitUntil`, `null`) |
 | Attributes | Inspector and serialization attributes compile as inert markers so Editor scripts build unchanged: `SerializeField`, `SerializeReference`, `HideInInspector`, `Header`, `Tooltip`, `Space`, `Range`, `Min`, `Multiline`, `TextArea`, `Delayed`, `NonReorderable`, `InspectorName`, `ColorUsage`, `GradientUsage`, `ContextMenu`, `ContextMenuItem`, `RequireComponent`, `AddComponentMenu`, `DisallowMultipleComponent`, `ExecuteInEditMode`, `ExecuteAlways`, `HelpURL`, `SelectionBase`, `CreateAssetMenu`, `PreferBinarySerialization`, `Icon`, `FormerlySerializedAs`. Left out on purpose because the runtime would not honour them: `DefaultExecutionOrder`, `RuntimeInitializeOnLoadMethod`. **Field values are not exported**: a MonoBehaviour reaches the console as a type reference (`P2bSceneExporter`, user scripts) and its fields take their C# initialisers, not Inspector edits. |
-| Rendering | `MeshFilter`, `MeshRenderer`, `SkinnedMeshRenderer`, `Camera` (perspective + ortho), a fixed material model (below), `Light` (directional + ambient, baked-ish), sorting layers |
+| Rendering | `MeshFilter`, `MeshRenderer`, `SkinnedMeshRenderer`, `Camera` (perspective + ortho), a fixed material model (below), `Light` (directional, point and spot, dynamic, three per object; `RenderSettings.ambientLight`), the scene skybox baked to a camera-following cube, `PS2Shadow` (blob and planar projected), `LODGroup` levels on MeshRenderers, static batching, sorting layers (deviations 39-44) |
 | Animation | `Animation`-style clip playback with crossfade, additive blending, root motion; a simplified `Animator` supporting states + transitions authored in a restricted controller |
 | Physics | `Physics.Raycast`/`SphereCast`/`OverlapSphereNonAlloc` against a baked BVH and primitives; `Rigidbody` (semi-implicit Euler); `BoxCollider`, `SphereCollider`, `CapsuleCollider`, `MeshCollider` (static, baked to world space offline); `CharacterController` (swept capsule, step + slope); trigger + collision callbacks (deviations 16-21) |
 | Audio | `AudioSource` (2D + simple 3D pan/attenuation), `AudioClip` (streamed music, resident SFX), `AudioListener` |
@@ -318,3 +318,65 @@ These are listed prominently here and asserted in the conformance suite
     page directly, so a scene can boot into it. The page is runtime
     state and survives scene loads. Nothing of this exists in the Editor;
     a script that calls it there should guard with `UNITY_PS2`.
+
+39. **Lights are dynamic, three per object, and point lights are
+    per-object directional lights.** Every `Light` of type Directional,
+    Point or Spot exports and becomes a `Light` component on the console
+    (`GetComponent<Light>()` works; `color`, `intensity`, `range`,
+    `spotAngle`, `type`, `enabled` write through). Direction and position
+    are read from the transform every frame, so a light that moves or
+    rotates lights accordingly. The VU programs take three lights per
+    batch, so each object is lit by the three brightest that reach it,
+    chosen per frame: a directional light along its forward axis, a point
+    light as a directional light aimed from the light at the object's
+    bounds centre and attenuated by `(1 - d / (range + radius))^2`, a
+    spot light the same inside its cone. Objects are lit as wholes -- a
+    point light never falls off across one large mesh, which is why
+    static batching (deviation 44) keeps its cells small. Up to 8 lights
+    per scene; Area lights export as nothing. `RenderSettings.ambientLight`
+    exports (flat, or the Trilight average) and can be set at runtime.
+
+40. **Shadows are `PS2Shadow`, blob or planar projected.** There are no
+    shadow maps on this hardware. A `PS2Shadow` (blob) draws a soft dark
+    fan under its object on whatever a ray straight down hits, faded by
+    height; mode Projected also redraws the object's lit meshes and
+    skinned renderers flattened onto that ground along the scene's
+    brightest directional light, blended as `Cd * (1 - strength)`. That
+    is the object drawn twice: use Projected for the player and a few key
+    things. Unlit and textured-unlit meshes cannot be turned black by
+    constants and cast a blob only. Shadows fall on the ground the ray
+    found, not on other objects, and the ground must be collision (a
+    baked `MeshCollider` or primitive) for the ray to find it. The
+    component's fields are baked at export.
+
+41. **The skybox bakes to six faces on a camera-following cube.** When a
+    camera clears to Skybox and `RenderSettings.skybox` is set, the
+    exporter renders the skybox through a 90-degree camera into six
+    textures of the profile's Skybox Face Size (any skybox shader works:
+    6-sided, cubemap, panoramic, procedural, custom) and adds a cube of
+    radius 4 that sits on the camera, drawn first with no Z write. Six
+    128x128 faces cost 96 KB of VRAM and 6 draws. The sky never fogs and
+    never lights.
+
+42. **`LODGroup` levels apply to `MeshRenderer`s only.** Each level's
+    renderers get the level's window as a LOD record; the runtime draws a
+    renderer while Unity's relative screen height (the group's size over
+    the distance, divided by the view's vertical extent) is inside it,
+    and culls below the last level exactly as Unity does. Fade modes are
+    not modelled (levels switch). Skinned levels are not modelled: a
+    character's renderers share one entity, so every level would land on
+    it; such groups draw every level and the build warns.
+
+43. **4-bit textures.** With Texture Format Auto (the default) a texture
+    whose resized image has 16 colours or fewer exports as PSMT4, lossless
+    and half the VRAM; FourBit quantises every texture to 16 colours;
+    EightBit keeps 256. The runtime reads the format from the section.
+
+44. **Static batching merges at export.** Objects marked Batching Static
+    (with no Rigidbody or Animator above them, no `PS2Shadow`, and not an
+    LOD level) have their meshes merged per material and per cell of
+    Static Batch Cell Size world units into world-space meshes on
+    synthetic root entities. The objects keep their transforms and
+    scripts, but carry no mesh on the console, so moving one moves
+    nothing: Batching Static means what it says. The per-object light
+    pick (deviation 39) and frustum culling then work per cell.

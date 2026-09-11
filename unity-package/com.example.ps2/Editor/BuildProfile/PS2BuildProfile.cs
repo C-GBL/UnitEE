@@ -46,6 +46,14 @@ namespace Ps2.Editor
         Speed
     }
 
+    /// <summary>Texture depth (M14). Auto: 4-bit when the image has 16 colours or fewer.</summary>
+    public enum PS2TextureFormat
+    {
+        Auto,
+        EightBit,
+        FourBit
+    }
+
     /// <summary>Where Build and Run sends the result (plan 13.1 Deploy).</summary>
     public enum PS2DeployTarget
     {
@@ -163,6 +171,33 @@ namespace Ps2.Editor
         [Tooltip("Treat content warnings (oversized or non-power-of-two textures) " +
                  "as errors instead of auto-resizing.")]
         public bool strictContent = false;
+
+        [Tooltip("Bake the scene's skybox (any skybox shader) into six faces drawn " +
+                 "on a cube that follows the camera, when a camera clears to Skybox.")]
+        public bool exportSkybox = true;
+
+        [Tooltip("Texels per skybox face. Six 128x128 faces cost 96 KB of VRAM; " +
+                 "256 costs 384 KB.")]
+        public int skyboxFaceSize = 128;
+
+        [Tooltip("Auto: textures with 16 colours or fewer export 4-bit (half the VRAM, " +
+                 "lossless). FourBit quantises everything to 16 colours. EightBit " +
+                 "keeps every texture at 256 colours.")]
+        public PS2TextureFormat textureFormat = PS2TextureFormat.Auto;
+
+        [Tooltip("Merge meshes on objects marked Batching Static, per material and " +
+                 "per cell, into world-space meshes: fewer draw commands per frame. " +
+                 "The objects keep their transforms; their MeshRenderer is gone on " +
+                 "the console.")]
+        public bool staticBatching = true;
+
+        [Tooltip("Cell size for static batching, in world units. Smaller cells cull " +
+                 "better; larger cells draw fewer meshes.")]
+        public float staticBatchCellSize = 16f;
+
+        [Tooltip("Triangles per scene the build report warns above (after near-plane " +
+                 "subdivision). A 30 fps scene lives around 20,000.")]
+        public int triangleBudget = 20000;
 
         // ---- Deploy -------------------------------------------------------
 

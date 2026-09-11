@@ -6,6 +6,8 @@ const Ps2urBridgeEntry ps2ur_bridge_table[] = {
     { "ps2ur_debug_log", reinterpret_cast<const void*>(&ps2ur_debug_log) },
     { "ps2ur_debug_overlay_set_page", reinterpret_cast<const void*>(&ps2ur_debug_overlay_set_page) },
     { "ps2ur_debug_overlay_page", reinterpret_cast<const void*>(&ps2ur_debug_overlay_page) },
+    { "ps2ur_light_set", reinterpret_cast<const void*>(&ps2ur_light_set) },
+    { "ps2ur_scene_set_ambient", reinterpret_cast<const void*>(&ps2ur_scene_set_ambient) },
     { "ps2ur_entity_create", reinterpret_cast<const void*>(&ps2ur_entity_create) },
     { "ps2ur_entity_destroy", reinterpret_cast<const void*>(&ps2ur_entity_destroy) },
     { "ps2ur_entity_alive", reinterpret_cast<const void*>(&ps2ur_entity_alive) },

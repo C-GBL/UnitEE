@@ -35,6 +35,7 @@ namespace Ps2.Editor
             "SkinnedMeshRenderer", "Camera", "Light", "Animator", "Animation",
             "AudioSource", "AudioListener", "BoxCollider", "SphereCollider",
             "CapsuleCollider", "MeshCollider", "Rigidbody", "CharacterController",
+            "LODGroup", // M14
         };
 
         /// <summary>
@@ -65,6 +66,8 @@ namespace Ps2.Editor
             // canvas drags in that export as nothing and harm nothing.
             "Canvas", "CanvasRenderer", "Image", "RawImage", "Text",
             "Button", "Slider", "CanvasScaler", "GraphicRaycaster",
+            // M14: MeshRenderer levels export with their windows.
+            "LODGroup",
         };
 
         /// <summary>

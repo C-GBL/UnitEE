@@ -14,6 +14,49 @@ namespace Ps2.Editor
     /// Machine-readable build report, written next to the output as
     /// build-report.json (plan section 13.4).
     /// </summary>
+    /// <summary>
+    /// What one scene costs on the console, as exported (M14): the numbers
+    /// a frame budget is made of, with the worst offenders named so the
+    /// report says what to shrink, not only that something is too big.
+    /// </summary>
+    [Serializable]
+    public sealed class PS2SceneBudget
+    {
+        public string scene = "";
+        public int entities;
+        public int drawCommands;      // mesh sections + skinned records drawn per frame
+        public int meshSections;
+        public int triangles;         // rigid, after near-plane subdivision
+        public int skinnedTriangles;
+        public int skinnedBatches;
+        public int textures;
+        public int fourBitTextures;
+        public int textureKb;         // VRAM, in 8 KB pages, CLUTs included
+        public int materials;
+        public int colliders;
+        public int collisionTriangles;
+        public int lights;
+        public int shadows;           // blob 1, projected 2
+        public List<string> largestTextures = new List<string>();
+        public List<string> largestMeshes = new List<string>();
+
+        private readonly List<(string name, int cost)> m_Textures = new List<(string, int)>();
+        private readonly List<(string name, int cost)> m_Meshes = new List<(string, int)>();
+
+        public void NoteTexture(string name, int kb) => Note(m_Textures, largestTextures, name, kb, " KB");
+        public void NoteMesh(string name, int tris) => Note(m_Meshes, largestMeshes, name, tris, " tris");
+
+        private static void Note(List<(string name, int cost)> all, List<string> top,
+                                 string name, int cost, string unit)
+        {
+            all.Add((name, cost));
+            all.Sort((a, b) => b.cost.CompareTo(a.cost));
+            top.Clear();
+            for (int i = 0; i < all.Count && i < 3; i++)
+                top.Add(all[i].name + " " + all[i].cost + unit);
+        }
+    }
+
     [Serializable]
     public sealed class PS2BuildReport
     {
@@ -38,6 +81,7 @@ namespace Ps2.Editor
         public long isoBytes;
         public List<Step> steps = new List<Step>();
         public List<string> warnings = new List<string>();
+        public List<PS2SceneBudget> scenes = new List<PS2SceneBudget>(); // M14
     }
 
     /// <summary>
@@ -174,6 +218,7 @@ namespace Ps2.Editor
                 });
             }
             report.warnings.AddRange(ctx.Warnings);
+            report.scenes.AddRange(ctx.SceneBudgets);
             if (File.Exists(ctx.ElfPath))
             {
                 report.elfPath = ctx.ElfPath;
@@ -486,6 +531,21 @@ namespace Ps2.Editor
                 sb.AppendLine($"  ELF {report.elfBytes / 1024} KB  {report.elfPath}");
             if (report.isoBytes > 0)
                 sb.AppendLine($"  ISO {report.isoBytes / 1024} KB  {report.isoPath}");
+            foreach (PS2SceneBudget s in report.scenes)
+            {
+                sb.AppendLine($"  scene {s.scene}: {s.drawCommands} draws, {s.triangles} tris" +
+                              (s.skinnedTriangles > 0
+                                   ? $" + {s.skinnedTriangles} skinned in {s.skinnedBatches} batches"
+                                   : "") +
+                              $", {s.textures} textures {s.textureKb} KB" +
+                              (s.fourBitTextures > 0 ? $" ({s.fourBitTextures} 4-bit)" : "") +
+                              $", {s.lights} lights, {s.shadows} shadow draws, " +
+                              $"{s.collisionTriangles} collision tris");
+                if (s.largestTextures.Count > 0)
+                    sb.AppendLine($"    largest textures: {string.Join(", ", s.largestTextures)}");
+                if (s.largestMeshes.Count > 0)
+                    sb.AppendLine($"    largest meshes: {string.Join(", ", s.largestMeshes)}");
+            }
             if (report.warnings.Count > 0)
                 sb.AppendLine($"  {report.warnings.Count} warning(s)");
             if (report.succeeded)

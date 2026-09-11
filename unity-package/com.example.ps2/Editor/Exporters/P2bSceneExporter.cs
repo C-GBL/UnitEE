@@ -22,6 +22,7 @@ namespace Ps2.Editor
             // sees an ordinary child entity with a mesh.
             public Transform Transform;
             public ushort Layer; // synthetic records copy the parent's layer
+            public uint Flags;   // SCEN entity flags (M14: bit0 follow camera)
             public int Parent;
             public int Mesh;     // mesh-list index; AFTER chunk resolution,
                                  // the final MESH section index. -1 if none
@@ -37,6 +38,9 @@ namespace Ps2.Editor
             public AudioSource Audio;           // M12.5 task 2, or null
             public bool Listener;               // has an AudioListener
             public Ps2.Runtime.PS2ParticleSystem Particles; // task 4, or null
+            public Ps2.Runtime.PS2Shadow Shadow;              // M14, or null
+            public bool HasLod;                               // M14 LOD level
+            public float LodMin, LodMax, LodSize;
             public UIRecord Ui;                 // task 5, or null
         }
 
@@ -98,6 +102,46 @@ namespace Ps2.Editor
         // 512x448 the framebuffers leave about 1.4 MB of VRAM, so one
         // 1024x1024 PSMT8 texture would not fit on its own.
         internal static int MaxTextureSize = 256;
+
+        // The skybox's face size in texels (build profile: Skybox Face
+        // Size), 0 to export no sky. Six faces at 128 cost 96 KB of VRAM.
+        internal static int SkyboxFaceSize = 128;
+
+        // What the last export cost, for the build report (M14).
+        internal static PS2SceneBudget LastStats;
+
+        // M14 static batching (build profile: Static Batching). Meshes on
+        // objects flagged Batching Static merge, per material and per cell
+        // of this many world units, into world-space meshes on synthetic
+        // root entities: fewer draw commands and constant uploads a frame.
+        // The originals keep their entities (scripts still find them) but
+        // carry no mesh. Objects with a Rigidbody or Animator above them,
+        // a PS2Shadow, or an LOD level are never merged.
+        internal static bool StaticBatching = true;
+        internal static float StaticBatchCellSize = 16f;
+
+        private sealed class StaticGroup
+        {
+            public uint Kind;
+            public uint MaterialIndex;
+            public Color32 Fallback;
+            public ushort Layer;
+            public List<Vector3> P = new List<Vector3>();
+            public List<Vector3> N = new List<Vector3>();
+            public List<Vector2> T = new List<Vector2>();
+            public List<Color32> C = new List<Color32>();
+            public int Sources; // renderers merged
+        }
+
+        private static Dictionary<string, StaticGroup> s_staticGroups;
+
+        // LODGroup levels (M14): renderer transform -> the level's window.
+        private struct LodLevel
+        {
+            public float Min, Max, Size;
+        }
+
+        private static Dictionary<Transform, LodLevel> s_lodOf;
 
         // The profile's audio sample rate, set by the build step. 22050 is
         // the plan's SFX rate and the profile default.
@@ -172,6 +216,10 @@ namespace Ps2.Editor
             // assets, which is what makes an imported character work.
             var rigWarnings = new List<string>();
             bool autoBakedRig = false;
+            P2bAnimExporter.SkinnedTrianglesThisScene = 0;
+            P2bAnimExporter.SkinnedBatchesThisScene = 0;
+            var budget = new PS2SceneBudget();
+            LastStats = budget;
             if (PendingSkin == null)
             {
                 PendingSkin = P2bRigExporter.Bake(roots, rigWarnings);
@@ -217,11 +265,28 @@ namespace Ps2.Editor
                 }
             }
 
+            s_lodOf = CollectLodLevels();
+            s_staticGroups = new Dictionary<string, StaticGroup>();
             foreach (GameObject root in roots)
             {
                 Walk(root.transform, -1, entities, meshes, meshLookup, textures,
                      textureLookup, materials, materialLookup);
             }
+            var batchTemps = new List<UnityEngine.Object>();
+            int staticSources = 0, staticChunks = 0;
+            EmitStaticBatches(entities, meshes, batchTemps, ref staticSources,
+                              ref staticChunks);
+            s_staticGroups = null;
+            s_lodOf = null;
+            if (staticChunks > 0)
+                Debug.Log("[PS2] static batching: " + staticSources + " renderers merged into " +
+                          staticChunks + " world-space meshes");
+
+            // M14: the skybox, baked to six faces around a camera-following
+            // cube. Temporary objects are destroyed once the file is written.
+            var skyTemps = new List<UnityEngine.Object>();
+            BakeSkybox(entities, meshes, textures, textureLookup, materials,
+                       materialLookup, skyTemps);
 
             // Particle textures (M12.5 task 4): registered after the walk
             // found the components, deduplicated against everything else.
@@ -358,6 +423,8 @@ namespace Ps2.Editor
                     key.Mesh, EffectiveKind(key.Kind), key.MaterialIndex,
                     key.Fallback, key.MaxUserScale, key.Submesh,
                     key.MaxUserScaleAxes);
+                budget.triangles += P2bMeshExporter.LastTriangles;
+                budget.NoteMesh(key.Mesh.name, P2bMeshExporter.LastTriangles);
                 firstSectionOf[k] = meshSections.Count;
                 chunkCountOf[k] = chunks.Count;
                 foreach (byte[] c in chunks)
@@ -393,6 +460,7 @@ namespace Ps2.Editor
                             {
                                 Transform = null,
                                 Layer = layer,
+                                Flags = rec.Flags, // a sky chunk follows too
                                 Parent = i,
                                 Mesh = section,
                             });
@@ -434,9 +502,13 @@ namespace Ps2.Editor
             }
             foreach (Texture2D t in textures)
             {
-                writer.AddSection(P2bWriter.SectionTex,
-                                  P2bTextureExporter.Export(t, MaxTextureSize),
-                                  t.name);
+                byte[] section = P2bTextureExporter.Export(t, MaxTextureSize);
+                writer.AddSection(P2bWriter.SectionTex, section, t.name);
+                int kb = P2bTextureExporter.VramBytes(section) / 1024;
+                budget.textureKb += kb;
+                if (P2bTextureExporter.IsFourBit(section))
+                    budget.fourBitTextures++;
+                budget.NoteTexture(t.name, kb);
             }
             // Font atlases as TEX sections AFTER the art (their indices
             // follow it), encoded directly -- known palette, no quantiser,
@@ -563,11 +635,399 @@ namespace Ps2.Editor
             {
                 if (e.Body != null) bodies++;
             }
+            budget.entities = entities.Count;
+            budget.meshSections = meshSections.Count;
+            budget.textures = textures.Count;
+            budget.materials = materials.Count;
+            budget.colliders = phys.ColliderCount;
+            budget.collisionTriangles = phys.TriangleCount;
+            budget.skinnedTriangles = P2bAnimExporter.SkinnedTrianglesThisScene;
+            budget.skinnedBatches = P2bAnimExporter.SkinnedBatchesThisScene;
+            foreach (var e in entities)
+            {
+                if (e.Mesh >= 0) budget.drawCommands++;
+                if (e.IsLight) budget.lights++;
+                if (e.Shadow != null)
+                    budget.shadows += e.Shadow.mode == Ps2.Runtime.PS2Shadow.Mode.Projected ? 2 : 1;
+                if (e.Skinned != null && PendingSkin != null)
+                    budget.drawCommands += PendingSkin.RendererMeshes.TryGetValue(e.Skinned, out var drawn)
+                                               ? drawn.Count : 1;
+            }
             Debug.Log($"[PS2] exported '{path}': {entities.Count} entities, " +
                       $"{meshes.Count} meshes, {textures.Count} textures, " +
                       $"{materials.Count} materials, {scriptComponents} scripts, " +
                       $"{phys.ColliderCount} colliders, {bodies} rigidbodies, " +
                       $"{phys.TriangleCount} collision triangles");
+            foreach (UnityEngine.Object o in skyTemps)
+            {
+                if (o != null)
+                    UnityEngine.Object.DestroyImmediate(o);
+            }
+            foreach (UnityEngine.Object o in batchTemps)
+            {
+                if (o != null)
+                    UnityEngine.Object.DestroyImmediate(o);
+            }
+        }
+
+        // ---- M14: LOD groups --------------------------------------------------
+        //
+        // Each level's MeshRenderers get the level's window as a LOD record
+        // on their own entity; the runtime evaluates Unity's relative screen
+        // height (size / distance over the view's vertical extent) per
+        // entity. Skinned levels are not modelled: a character's renderers
+        // share one entity, so every level would land on it.
+        private static Dictionary<Transform, LodLevel> CollectLodLevels()
+        {
+            var map = new Dictionary<Transform, LodLevel>();
+            bool warnedSkinned = false;
+            foreach (LODGroup group in UnityEngine.Object.FindObjectsByType<LODGroup>(
+                         FindObjectsSortMode.None))
+            {
+                if (!group.enabled)
+                    continue;
+                LOD[] lods = group.GetLODs();
+                Vector3 ls = group.transform.lossyScale;
+                float size = group.size * Mathf.Max(Mathf.Abs(ls.x),
+                                                    Mathf.Max(Mathf.Abs(ls.y),
+                                                              Mathf.Abs(ls.z)));
+                for (int i = 0; i < lods.Length; i++)
+                {
+                    var level = new LodLevel
+                    {
+                        Min = lods[i].screenRelativeTransitionHeight,
+                        Max = i == 0 ? 2f : lods[i - 1].screenRelativeTransitionHeight,
+                        Size = size,
+                    };
+                    foreach (Renderer r in lods[i].renderers)
+                    {
+                        if (r == null)
+                            continue;
+                        if (r is SkinnedMeshRenderer)
+                        {
+                            if (!warnedSkinned)
+                                Debug.LogWarning("[PS2] LODGroup '" + group.name +
+                                                 "': skinned levels are not modelled on the " +
+                                                 "console; every level of the character draws.");
+                            warnedSkinned = true;
+                            continue;
+                        }
+                        map[r.transform] = level;
+                    }
+                }
+            }
+            return map;
+        }
+
+        // ---- M14: static batching ---------------------------------------------
+        private static bool IsBatchable(Transform t)
+        {
+            if (!StaticBatching)
+                return false;
+            if (!GameObjectUtility.AreStaticEditorFlagsSet(t.gameObject,
+                                                            StaticEditorFlags.BatchingStatic))
+                return false;
+            if (s_lodOf != null && s_lodOf.ContainsKey(t))
+                return false;
+            if (t.GetComponent<Ps2.Runtime.PS2Shadow>() != null)
+                return false;
+            if (t.GetComponentInParent<Rigidbody>() != null ||
+                t.GetComponentInParent<Animator>() != null)
+                return false;
+            return true;
+        }
+
+        private static void CollectStatic(Transform t, Mesh mesh, int submesh, uint kind,
+                                          uint materialIndex, Color32 fallback)
+        {
+            string key = kind + ":" + materialIndex + ":" + fallback.r + "," + fallback.g +
+                         "," + fallback.b + "," + fallback.a + ":" + t.gameObject.layer;
+            if (!s_staticGroups.TryGetValue(key, out StaticGroup group))
+            {
+                group = new StaticGroup
+                {
+                    Kind = kind,
+                    MaterialIndex = materialIndex,
+                    Fallback = fallback,
+                    Layer = (ushort)t.gameObject.layer,
+                };
+                s_staticGroups[key] = group;
+            }
+            Matrix4x4 m = t.localToWorldMatrix;
+            Vector3[] positions = mesh.vertices;
+            Vector3[] normals = mesh.normals;
+            Vector2[] uvs = mesh.uv;
+            Color32[] colours = mesh.colors32;
+            int[] indices = submesh >= 0 && submesh < mesh.subMeshCount
+                                ? mesh.GetTriangles(submesh)
+                                : mesh.triangles;
+            for (int i = 0; i < indices.Length; i++)
+            {
+                int src = indices[i];
+                group.P.Add(m.MultiplyPoint3x4(positions[src]));
+                group.N.Add(normals.Length > src
+                                ? m.MultiplyVector(normals[src]).normalized
+                                : Vector3.up);
+                group.T.Add(uvs.Length > src ? uvs[src] : Vector2.zero);
+                group.C.Add(colours.Length > src ? colours[src] : fallback);
+            }
+            group.Sources++;
+        }
+
+        private static void EmitStaticBatches(List<EntityRecord> entities,
+                                              List<MeshKey> meshes,
+                                              List<UnityEngine.Object> temps,
+                                              ref int sources, ref int chunks)
+        {
+            if (s_staticGroups == null)
+                return;
+            float cell = Mathf.Max(2f, StaticBatchCellSize);
+            const int MaxTrisPerMesh = 12000; // well inside the 16-chunk ceiling
+            foreach (StaticGroup group in s_staticGroups.Values)
+            {
+                sources += group.Sources;
+                // Triangles by cell, so a merged mesh still culls by region.
+                var byCell = new Dictionary<(int, int, int), List<int>>();
+                int triCount = group.P.Count / 3;
+                for (int tri = 0; tri < triCount; tri++)
+                {
+                    Vector3 c = (group.P[tri * 3] + group.P[tri * 3 + 1] + group.P[tri * 3 + 2]) / 3f;
+                    var key = (Mathf.FloorToInt(c.x / cell), Mathf.FloorToInt(c.y / cell),
+                               Mathf.FloorToInt(c.z / cell));
+                    if (!byCell.TryGetValue(key, out List<int> list))
+                    {
+                        list = new List<int>();
+                        byCell[key] = list;
+                    }
+                    list.Add(tri);
+                }
+                foreach (var kv in byCell)
+                {
+                    List<int> tris = kv.Value;
+                    for (int start = 0; start < tris.Count; start += MaxTrisPerMesh)
+                    {
+                        int n = Mathf.Min(MaxTrisPerMesh, tris.Count - start);
+                        var mesh = new Mesh
+                        {
+                            name = "static-batch-" + kv.Key.Item1 + "_" + kv.Key.Item2 + "_" +
+                                   kv.Key.Item3,
+                            indexFormat = UnityEngine.Rendering.IndexFormat.UInt32,
+                        };
+                        mesh.hideFlags = HideFlags.HideAndDontSave;
+                        var p = new Vector3[n * 3];
+                        var nn = new Vector3[n * 3];
+                        var uv = new Vector2[n * 3];
+                        var col = new Color32[n * 3];
+                        var idx = new int[n * 3];
+                        for (int i = 0; i < n; i++)
+                        {
+                            int tri = tris[start + i];
+                            for (int v = 0; v < 3; v++)
+                            {
+                                int dst = i * 3 + v;
+                                int src = tri * 3 + v;
+                                p[dst] = group.P[src];
+                                nn[dst] = group.N[src];
+                                uv[dst] = group.T[src];
+                                col[dst] = group.C[src];
+                                idx[dst] = dst;
+                            }
+                        }
+                        mesh.vertices = p;
+                        mesh.normals = nn;
+                        mesh.uv = uv;
+                        mesh.colors32 = col;
+                        mesh.triangles = idx;
+                        mesh.RecalculateBounds();
+                        temps.Add(mesh);
+                        int keyIndex = meshes.Count;
+                        meshes.Add(new MeshKey
+                        {
+                            Mesh = mesh,
+                            Submesh = -1,
+                            Kind = group.Kind,
+                            MaterialIndex = group.MaterialIndex,
+                            Fallback = group.Fallback,
+                            MaxUserScale = 1f,
+                            MaxUserScaleAxes = Vector3.one,
+                        });
+                        entities.Add(new EntityRecord
+                        {
+                            Transform = null,
+                            Layer = group.Layer,
+                            Parent = -1,
+                            Mesh = keyIndex,
+                        });
+                        chunks++;
+                    }
+                }
+            }
+        }
+
+        // ---- M14: skybox ----------------------------------------------------
+        //
+        // Unity's skybox is a shader; the PS2 has none. What it does have is
+        // the era's answer: a small textured cube that sits on the camera,
+        // drawn first with no Z write and a depth test that always passes,
+        // so the world paints over it. The six faces are RENDERED here by a
+        // 90-degree camera at the origin, one per axis, which works for every
+        // skybox shader Unity ships (6-sided, cubemap, panoramic, procedural)
+        // and for any custom one. Each face is one textured mesh with clamp
+        // addressing and its own material; the cube is 4 units across so its
+        // triangles are subdivided small enough that the near-plane
+        // rejection at the screen edges never shows a hole.
+        private const uint KindSkyExport = 102;
+        private const float SkyRadius = 4f;
+        private const int SkyGrid = 4;
+
+        private static void BakeSkybox(List<EntityRecord> entities, List<MeshKey> meshes,
+                                       List<Texture2D> textures,
+                                       Dictionary<Texture2D, int> textureLookup,
+                                       List<(uint, uint)> materials,
+                                       Dictionary<string, int> materialLookup,
+                                       List<UnityEngine.Object> temps)
+        {
+            if (SkyboxFaceSize <= 0 || RenderSettings.skybox == null)
+                return;
+            bool wanted = false;
+            foreach (var e in entities)
+            {
+                if (e.IsCamera && e.Camera != null &&
+                    e.Camera.clearFlags == CameraClearFlags.Skybox)
+                    wanted = true;
+            }
+            if (!wanted)
+                return;
+
+            int n = Mathf.Clamp(Mathf.ClosestPowerOfTwo(SkyboxFaceSize), 16, 512);
+            var go = new GameObject("PS2 Sky Bake Camera");
+            go.hideFlags = HideFlags.HideAndDontSave;
+            temps.Add(go);
+            var cam = go.AddComponent<Camera>();
+            cam.enabled = false;
+            cam.clearFlags = CameraClearFlags.Skybox;
+            cam.cullingMask = 0;
+            cam.fieldOfView = 90f;
+            cam.nearClipPlane = 0.1f;
+            cam.farClipPlane = 100f;
+            cam.allowHDR = false;
+            cam.allowMSAA = false;
+            cam.transform.position = Vector3.zero;
+            var rt = new RenderTexture(n, n, 0, RenderTextureFormat.ARGB32);
+            rt.hideFlags = HideFlags.HideAndDontSave;
+            temps.Add(rt);
+
+            // Face basis: forward, up; right follows. Any consistent choice
+            // works, since the face mesh's UVs are derived from the same basis.
+            var faces = new (string name, Vector3 fwd, Vector3 up)[]
+            {
+                ("front", Vector3.forward, Vector3.up),
+                ("back", Vector3.back, Vector3.up),
+                ("right", Vector3.right, Vector3.up),
+                ("left", Vector3.left, Vector3.up),
+                ("up", Vector3.up, Vector3.back),
+                ("down", Vector3.down, Vector3.forward),
+            };
+
+            RenderTexture previous = RenderTexture.active;
+            var keys = new List<int>();
+            foreach (var face in faces)
+            {
+                cam.transform.rotation = Quaternion.LookRotation(face.fwd, face.up);
+                cam.targetTexture = rt;
+                cam.aspect = 1f;
+                cam.Render();
+                RenderTexture.active = rt;
+                var tex = new Texture2D(n, n, TextureFormat.RGBA32, false);
+                tex.hideFlags = HideFlags.HideAndDontSave;
+                tex.name = "sky-" + face.name;
+                tex.ReadPixels(new Rect(0, 0, n, n), 0, 0);
+                tex.Apply(false, false);
+                temps.Add(tex);
+                cam.targetTexture = null;
+
+                int ti = textures.Count;
+                textures.Add(tex);
+                textureLookup[tex] = ti;
+                string matKey = KindSkyExport + ":" + ti;
+                if (!materialLookup.TryGetValue(matKey, out int mi))
+                {
+                    mi = materials.Count;
+                    materials.Add((KindSkyExport, (uint)ti));
+                    materialLookup[matKey] = mi;
+                }
+
+                Mesh faceMesh = BuildSkyFace(face.fwd, face.up, face.name);
+                faceMesh.hideFlags = HideFlags.HideAndDontSave;
+                temps.Add(faceMesh);
+                keys.Add(meshes.Count);
+                meshes.Add(new MeshKey
+                {
+                    Mesh = faceMesh,
+                    Submesh = -1,
+                    Kind = KindSkyExport,
+                    MaterialIndex = (uint)mi,
+                    Fallback = new Color32(255, 255, 255, 255),
+                    MaxUserScale = 1f,
+                    MaxUserScaleAxes = Vector3.one,
+                });
+            }
+            RenderTexture.active = previous;
+
+            var record = new EntityRecord
+            {
+                Transform = null,
+                Layer = 0,
+                Flags = 1u, // follow the camera
+                Parent = -1,
+                Mesh = keys[0],
+                ExtraMeshes = keys.GetRange(1, keys.Count - 1),
+            };
+            entities.Add(record);
+            Debug.Log("[PS2] skybox baked: six " + n + "x" + n + " faces from '" +
+                      RenderSettings.skybox.name + "'");
+        }
+
+        // One face of the sky cube as a grid, UVs from the bake camera's
+        // basis: u = 0.5 + 0.5 * (P.right / P.forward), v likewise with up,
+        // which is exactly where a 90-degree camera put that direction in
+        // the image (v up, matching the texture the exporter flips).
+        private static Mesh BuildSkyFace(Vector3 fwd, Vector3 up, string name)
+        {
+            Vector3 right = Vector3.Cross(up, fwd).normalized;
+            int g = SkyGrid;
+            var verts = new Vector3[(g + 1) * (g + 1)];
+            var uvs = new Vector2[verts.Length];
+            for (int y = 0; y <= g; y++)
+            {
+                for (int x = 0; x <= g; x++)
+                {
+                    float fx = -1f + 2f * x / g;
+                    float fy = -1f + 2f * y / g;
+                    verts[y * (g + 1) + x] = (fwd + right * fx + up * fy) * SkyRadius;
+                    uvs[y * (g + 1) + x] = new Vector2(0.5f + 0.5f * fx, 0.5f + 0.5f * fy);
+                }
+            }
+            var tris = new int[g * g * 6];
+            int t = 0;
+            for (int y = 0; y < g; y++)
+            {
+                for (int x = 0; x < g; x++)
+                {
+                    int i0 = y * (g + 1) + x;
+                    int i1 = i0 + 1;
+                    int i2 = i0 + (g + 1);
+                    int i3 = i2 + 1;
+                    tris[t++] = i0; tris[t++] = i2; tris[t++] = i1;
+                    tris[t++] = i1; tris[t++] = i2; tris[t++] = i3;
+                }
+            }
+            var mesh = new Mesh { name = "ps2-sky-" + name };
+            mesh.vertices = verts;
+            mesh.uv = uvs;
+            mesh.triangles = tris;
+            mesh.RecalculateBounds();
+            return mesh;
         }
 
         private static void Walk(Transform t, int parent,
@@ -585,11 +1045,20 @@ namespace Ps2.Editor
                 Mesh = -1,
             };
 
+            if (s_lodOf != null && s_lodOf.TryGetValue(t, out LodLevel lodLevel))
+            {
+                record.HasLod = true;
+                record.LodMin = lodLevel.Min;
+                record.LodMax = lodLevel.Max;
+                record.LodSize = lodLevel.Size;
+            }
+
             var filter = t.GetComponent<MeshFilter>();
             var renderer = t.GetComponent<MeshRenderer>();
             if (filter != null && renderer != null && filter.sharedMesh != null)
             {
                 Mesh mesh = filter.sharedMesh;
+                bool batchStatic = s_staticGroups != null && IsBatchable(t);
                 // ONE exported mesh per SUBMESH, each with its own material.
                 // sharedMaterial (the first) applied to mesh.triangles (all
                 // of them) painted every kit ground slab's lawn submesh with
@@ -638,6 +1107,13 @@ namespace Ps2.Editor
                     Color32 fallback = mat != null
                         ? (Color32)mat.color
                         : new Color32(255, 255, 255, 255);
+                    if (batchStatic)
+                    {
+                        // Merged after the walk; this entity keeps no mesh.
+                        CollectStatic(t, mesh, mesh.subMeshCount > 1 ? s : -1, kind,
+                                      (uint)mi, fallback);
+                        continue;
+                    }
                     string meshKey = mesh.GetInstanceID() + ":" + s + ":" +
                                      kind + ":" + mi + ":" + fallback.r + "," +
                                      fallback.g + "," + fallback.b + "," +
@@ -702,6 +1178,7 @@ namespace Ps2.Editor
             record.Audio = t.GetComponent<AudioSource>();
             record.Listener = t.GetComponent<AudioListener>() != null;
             record.Particles = t.GetComponent<Ps2.Runtime.PS2ParticleSystem>();
+            record.Shadow = t.GetComponent<Ps2.Runtime.PS2Shadow>();
             record.Ui = CaptureUI(t);
 
             var camera = t.GetComponent<Camera>();
@@ -711,7 +1188,9 @@ namespace Ps2.Editor
                 record.Camera = camera;
             }
             var light = t.GetComponent<Light>();
-            if (light != null && light.type == LightType.Directional)
+            if (light != null && (light.type == LightType.Directional ||
+                                  light.type == LightType.Point ||
+                                  light.type == LightType.Spot))
             {
                 record.IsLight = true;
                 record.Light = light;
@@ -751,8 +1230,9 @@ namespace Ps2.Editor
         private const uint KindCutoutTexturedExport = 100;
 
         private static uint EffectiveKind(uint kind) =>
-            kind == KindCutoutTexturedExport ? P2bMeshExporter.KindUnlitTextured
-                                             : kind;
+            kind == KindCutoutTexturedExport || kind == KindSkyExport
+                ? P2bMeshExporter.KindUnlitTextured
+                : kind;
 
         // Kind selection (plan 7.3): explicit transparent/cutout/additive
         // classification from the material, then the M5 texture/normals
@@ -790,6 +1270,12 @@ namespace Ps2.Editor
         // no alpha test). Bit layout matches ps2ur::gfx::gs_test.
         private static ulong GsTestFor(uint kind)
         {
+            if (kind == KindSkyExport)
+            {
+                // Depth test on but ALWAYS passing (ZTE=1, ZTST=1): the sky
+                // draws first, behind everything, without touching Z.
+                return (1UL << 16) | (1UL << 17);
+            }
             if (kind == P2bMeshExporter.KindCutout ||
                 kind == KindCutoutTexturedExport)
             {
@@ -969,9 +1455,12 @@ namespace Ps2.Editor
             return 0;
         }
 
-        // bit0 zwrite, bit1 blend, bit2 transparent-pass.
+        // bit0 zwrite, bit1 blend, bit2 transparent-pass, bit3 clamp
+        // addressing, bit4 sky (drawn first).
         private static uint MaterialFlags(uint kind)
         {
+            if (kind == KindSkyExport)
+                return 8u | 16u; // clamp, sky, no Z write
             if (kind == P2bMeshExporter.KindLitAlpha ||
                 kind == P2bMeshExporter.KindAdditive)
                 return 2u | 4u; // blend, transparent, no Z write
@@ -1029,7 +1518,43 @@ namespace Ps2.Editor
                     p.U32((uint)fc.r | ((uint)fc.g << 8) | ((uint)fc.b << 16));
                     p.F32(RenderSettings.fogStartDistance);
                     p.F32(RenderSettings.fogEndDistance);
+                    // M14: the ambient term (80 bytes; readers accept 64).
+                    // Flat ambient as authored; Trilight averaged; Skybox
+                    // mode has no equivalent here and falls back to the flat
+                    // colour Unity keeps behind it, scaled by the intensity.
+                    Color ambient = RenderSettings.ambientLight;
+                    if (RenderSettings.ambientMode == UnityEngine.Rendering.AmbientMode.Trilight)
+                        ambient = (RenderSettings.ambientSkyColor + RenderSettings.ambientEquatorColor +
+                                   RenderSettings.ambientGroundColor) / 3f;
+                    else if (RenderSettings.ambientMode == UnityEngine.Rendering.AmbientMode.Skybox)
+                        ambient = RenderSettings.ambientLight * RenderSettings.ambientIntensity;
+                    p.F32(ambient.r);
+                    p.F32(ambient.g);
+                    p.F32(ambient.b);
+                    p.F32(0f);
                     comps.Add((2, p.ToArray()));
+                }
+                if (e.HasLod)
+                {
+                    // 16 bytes: the level's [min, max) relative screen height,
+                    // the group's world-space size, flags.
+                    var p = new ByteBuffer();
+                    p.F32(e.LodMin);
+                    p.F32(e.LodMax);
+                    p.F32(Mathf.Max(0.001f, e.LodSize));
+                    p.U32(0);
+                    comps.Add((13, p.ToArray()));
+                }
+                if (e.Shadow != null)
+                {
+                    // 20 bytes: mode, blob radius, strength, fade height, flags.
+                    var p = new ByteBuffer();
+                    p.U32(e.Shadow.mode == Ps2.Runtime.PS2Shadow.Mode.Projected ? 1u : 0u);
+                    p.F32(Mathf.Max(0.05f, e.Shadow.radius));
+                    p.F32(Mathf.Clamp01(e.Shadow.strength));
+                    p.F32(Mathf.Max(0.1f, e.Shadow.maxHeight));
+                    p.U32(0);
+                    comps.Add((12, p.ToArray()));
                 }
                 if (e.IsLight)
                 {
@@ -1041,6 +1566,16 @@ namespace Ps2.Editor
                     p.F32(e.Light.color.r * e.Light.intensity);
                     p.F32(e.Light.color.g * e.Light.intensity);
                     p.F32(e.Light.color.b * e.Light.intensity);
+                    // M14 tail (48 bytes; readers accept the old 24): kind,
+                    // range, cos(half spot angle), flags bit0 enabled.
+                    uint kind = e.Light.type == LightType.Point ? 1u
+                              : e.Light.type == LightType.Spot ? 2u : 0u;
+                    p.U32(kind);
+                    p.F32(e.Light.range);
+                    p.F32(Mathf.Cos(e.Light.spotAngle * 0.5f * Mathf.Deg2Rad));
+                    p.U32(e.Light.enabled && e.Light.gameObject.activeInHierarchy ? 1u : 0u);
+                    p.U32(0);
+                    p.U32(0);
                     comps.Add((3, p.ToArray()));
                 }
                 // Skinned renderer records live on the entity the rig's rest
@@ -1287,7 +1822,7 @@ namespace Ps2.Editor
                     b.U32(0);
                     b.U16(e.Layer);
                     b.U16(0); // tag
-                    b.U32(0); // flags
+                    b.U32(e.Flags);
                     b.U32((uint)perEntity[i].first);
                     b.U16((ushort)perEntity[i].count);
                     b.U16(0);
@@ -1306,7 +1841,7 @@ namespace Ps2.Editor
                 b.U32((uint)P2bWriter.Fnv1a64(t.name));
                 b.U16((ushort)t.gameObject.layer);
                 b.U16(0); // tag
-                b.U32(0); // flags
+                b.U32(e.Flags);
                 b.U32((uint)perEntity[i].first);
                 b.U16((ushort)perEntity[i].count);
                 b.U16(0); // pad

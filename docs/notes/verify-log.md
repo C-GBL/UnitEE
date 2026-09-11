@@ -1430,3 +1430,68 @@ yet paid for: the emulator's default configuration is a different machine.
 The accurate configuration is slow (a quarter speed on a Ryzen 5800X) and
 worth one boot per milestone, because it is the only one that reports this
 class of bug.
+
+
+## M14: dynamic lights, shadows, a sky, and four build optimisations (2026-09-11)
+
+Three feature requests in one: lighting with shadows, a skybox, and build
+optimisations. What the hardware allows decided the shape of each
+(ADR-012).
+
+**Lights.** The VU programs had three light slots and an ambient per batch
+since M4 and M9; the renderer filled one, from a directional light fixed at
+export, and hard-coded the ambient. Now every Directional, Point and Spot
+light exports (48-byte payload, readers accept the old 24), the shim has a
+`Light` component whose writes push through the bridge, and the renderer
+picks the three brightest lights per object per frame, reading directions
+and positions from the light entities' world matrices. A point light is a
+directional light aimed at the object with a quadratic falloff -- the
+era's approximation, and the reason static batching cells stay small.
+`RenderSettings.ambientLight` exports in the camera payload (80 bytes).
+
+**Shadows.** `PS2Shadow`: a 16-triangle black fan with an alpha ramp on the
+ground a downward raycast finds, faded by height; mode Projected redraws
+the object's lit meshes and skinned renderers through a planar projection
+along the brightest directional light with the lights zeroed, blended
+`Cd * (1 - strength)` through the GS FIX alpha. The skinned pass was
+lifted into a helper so the shadow pass could draw a character through a
+different matrix with the lights off.
+
+**Sky.** Six faces rendered at export by a 90-degree camera (any skybox
+shader), on a radius-4 cube flagged to draw at the camera's position,
+first, with an always-passing depth test, no Z write and clamp addressing
+(a new MATL flag, and the first use of CLAMP_1). The render queue gained
+a pass ordering: sky, opaque, transparent.
+
+**Optimisations.** PSMT4 textures (Auto when 16 colours or fewer; the
+runtime reads the section's format and bands uploads by whole qwords);
+static batching at export, per material and per cell, into world-space
+meshes on synthetic root entities; `LODGroup` levels on MeshRenderers as
+[min, max) relative-height windows the renderer evaluates per entity; and
+a per-scene budget in the build report -- draws, triangles, skinned
+batches, texture VRAM, lights, shadow draws, with the largest textures and
+meshes named and warnings against the profile's budgets.
+
+**Verified** on the demo's 3D scene dressed for the purpose (static floor,
+projected shadow on the player, a warm point light, the default skybox):
+the container decodes as designed -- two Light records (kind 0 and 1), a
+Shadow record (mode 1), a sky entity flagged 1 with five flagged chunk
+children, six sky materials with flags 24 (clamp + sky), six 128x128 sky
+textures of which the flat underside came out 4-bit, and the floor slab
+merged into six cell meshes with its own entity carrying no mesh. The
+build report read: 12 draws, 2440 triangles plus 4432 skinned in 278
+batches, 94 KB of texture VRAM, 2 lights, 2 shadow draws.
+
+One thing found on the way: a Unity project under a path as deep as the
+session scratchpad's makes the package manager drop files from its cache
+without saying so, and the Editor assembly then fails to compile against
+uGUI. The verification project lives at a short path now.
+
+Booted in PCSX2 (hardware renderer, the user's defaults), captured through
+PrintWindow: the default skybox's gradient behind the floor, the floor
+slab lit as six merged cells, the player capybara tinted by the warm point
+light beside it, a projected silhouette on the ground under it with the
+blob's soft edge around it, and the second capybara small in the distance.
+The first capture was of the wrong window: CopyFromScreen takes whatever
+is in front, and a chat client was; PrintWindow with PW_RENDERFULLCONTENT
+reads the window's own surface and does not need to bring it forward.

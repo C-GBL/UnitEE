@@ -429,6 +429,8 @@ struct GpuTexture {
     gfx::VramAlloc tex;
     gfx::VramAlloc clut;
     uint32_t w = 0, h = 0;
+    gfx::PixelFormat fmt = gfx::PixelFormat::PSMT8; // M14: or PSMT4
+    uint32_t clut_entries = 256;                     // 16 for PSMT4
 };
 
 struct BindContext {
@@ -455,8 +457,8 @@ bool bind_texture(void* user, uint32_t index, uint32_t* out_w, uint32_t* out_h)
     } else {
         return false;
     }
-    ctx->device->set_texture_indexed(t->tex, t->w, t->h,
-                                     gfx::PixelFormat::PSMT8, t->clut, 256);
+    ctx->device->set_texture_indexed(t->tex, t->w, t->h, t->fmt, t->clut,
+                                     t->clut_entries);
     *out_w = t->w;
     *out_h = t->h;
     // Callers that CHECK the result still take their own fallbacks (the
@@ -563,6 +565,8 @@ void fatal(const char* what)
 struct RuntimeMethods {
     const MethodInfo* create_script;
     const MethodInfo* create_rigidbody;
+    const MethodInfo* create_light;
+    const MethodInfo* create_shadow;
     const MethodInfo* bind_colliders;
     const MethodInfo* create_animator;
     const MethodInfo* create_audio_source;
@@ -578,6 +582,8 @@ struct RuntimeMethods {
     {
         create_script = find_runtime_method("CreateScript", 2);
         create_rigidbody = find_runtime_method("CreateRigidbody", 5);
+        create_light = find_runtime_method("CreateLight", 8);
+        create_shadow = find_runtime_method("CreatePS2Shadow", 5);
         bind_colliders = find_runtime_method("BindColliders", 0);
         create_animator = find_runtime_method("CreateAnimator", 1);
         create_audio_source = find_runtime_method("CreateAudioSource", 7);
@@ -590,6 +596,7 @@ struct RuntimeMethods {
         tick = find_runtime_method("Tick", 1);
         return create_script != nullptr && tick != nullptr &&
                create_rigidbody != nullptr && bind_colliders != nullptr &&
+               create_light != nullptr && create_shadow != nullptr &&
                create_animator != nullptr && create_audio_source != nullptr &&
                create_audio_listener != nullptr &&
                create_particles != nullptr && create_ui_graphic != nullptr &&
@@ -654,14 +661,29 @@ bool upload_scene_textures(gfx::GsDevice& device, const io::P2bFile& file,
         GpuTexture& gt = textures[base + t];
         gt.w = rd_u32(p + 0);
         gt.h = rd_u32(p + 4);
-        gt.tex = device.vram().alloc_buffer(gt.w, gt.h, gfx::PixelFormat::PSMT8,
-                                            "game-tex");
+        // M14: the section names its format. PSMT4 halves the texel bytes
+        // and carries a 16-entry CLUT; anything else is the M5 PSMT8 layout.
+        const uint32_t raw_fmt = rd_u32(p + 8);
+        gt.fmt = raw_fmt == 0x14u ? gfx::PixelFormat::PSMT4 : gfx::PixelFormat::PSMT8;
+        gt.clut_entries = gt.fmt == gfx::PixelFormat::PSMT4 ? 16u : 256u;
+        const uint8_t* texels = p + 16u + gt.clut_entries * 4u;
+        gt.tex = device.vram().alloc_buffer(gt.w, gt.h, gt.fmt, "game-tex");
         gt.clut = device.vram().alloc_clut("game-clut");
         bool ok = gt.tex.valid() && gt.clut.valid();
         if (ok) {
-            const uint32_t row_qwords = gt.w / 16u; // PSMT8: one byte per texel
+            const uint32_t row_bytes = (gt.w * gfx::bits_per_pixel(gt.fmt)) / 8u;
             uint32_t rows_per_band =
-                row_qwords > 0u ? (device.packet_capacity() - 64u) / row_qwords : gt.h;
+                row_bytes > 0u ? ((device.packet_capacity() - 64u) * 16u) / row_bytes
+                               : gt.h;
+            // A band is whole qwords: rows narrower than 16 bytes go up in
+            // multiples that make one (a 16-wide PSMT4 row is 8 bytes).
+            if (row_bytes < 16u && row_bytes > 0u) {
+                const uint32_t align = 16u / row_bytes;
+                rows_per_band = (rows_per_band / align) * align;
+                if (rows_per_band == 0u) {
+                    rows_per_band = align;
+                }
+            }
             if (rows_per_band == 0u) {
                 rows_per_band = 1u;
             }
@@ -670,8 +692,8 @@ bool upload_scene_textures(gfx::GsDevice& device, const io::P2bFile& file,
                     (gt.h - y) < rows_per_band ? (gt.h - y) : rows_per_band;
                 device.begin_frame();
                 device.clear(0, 0, 0);
-                ok = device.upload_texture_rows(p + 16u + 1024u, gt.tex, gt.w, gt.h,
-                                                gfx::PixelFormat::PSMT8, y, rows);
+                ok = device.upload_texture_rows(texels, gt.tex, gt.w, gt.h, gt.fmt, y,
+                                                rows);
                 device.end_frame();
             }
         }
@@ -679,7 +701,7 @@ bool upload_scene_textures(gfx::GsDevice& device, const io::P2bFile& file,
             device.begin_frame();
             device.clear(0, 0, 0);
             ok = device.upload_clut(reinterpret_cast<const uint32_t*>(p + 16u),
-                                    gt.clut, 256);
+                                    gt.clut, gt.clut_entries);
             device.end_frame();
         }
         if (!ok) {
@@ -764,6 +786,29 @@ bool instantiate_managed(scene::World& world, const RuntimeMethods& rm,
         void* args[5] = {&handle, &mass, &linear_damping, &angular_damping,
                          &flags};
         if (!invoke_checked(rm.create_rigidbody, args, "CreateRigidbody")) {
+            return false;
+        }
+    }
+    for (uint32_t l = from.lights; l < world.light_count(); ++l) {
+        const scene::Light& lt = world.light_at(l);
+        int32_t handle = world.handle_of(lt.entity);
+        int32_t kind = static_cast<int32_t>(lt.kind);
+        float r = lt.colour.x, g = lt.colour.y, b = lt.colour.z;
+        float range = lt.range;
+        float spot_cos = lt.spot_cos;
+        int32_t enabled = lt.enabled ? 1 : 0;
+        void* args[8] = {&handle, &kind, &r, &g, &b, &range, &spot_cos, &enabled};
+        if (!invoke_checked(rm.create_light, args, "CreateLight")) {
+            return false;
+        }
+    }
+    for (uint32_t s = from.shadows; s < world.shadow_count(); ++s) {
+        const scene::ShadowRef& sh = world.shadow(s);
+        int32_t handle = world.handle_of(sh.entity);
+        int32_t mode = static_cast<int32_t>(sh.mode);
+        float radius = sh.radius, strength = sh.strength, max_height = sh.max_height;
+        void* args[5] = {&handle, &mode, &radius, &strength, &max_height};
+        if (!invoke_checked(rm.create_shadow, args, "CreatePS2Shadow")) {
             return false;
         }
     }

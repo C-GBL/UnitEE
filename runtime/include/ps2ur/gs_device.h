@@ -145,6 +145,10 @@ public:
                              PixelFormat fmt, const VramAlloc& clut,
                              uint32_t clut_entries);
 
+    // Texture addressing for the draws that follow: clamp both axes, or
+    // repeat (the GS default). Written per material group (M14).
+    void set_texture_clamp(bool clamp);
+
     // Material state block (M8 task 5): appends TEST_1 (the precomputed
     // value from the .p2b material, or the device default when 0), ZBUF_1
     // with the requested Z-write mask (the base pointer is device-owned,

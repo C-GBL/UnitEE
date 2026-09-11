@@ -214,6 +214,44 @@ namespace UnityEngine.Internal
             }
         }
 
+        // One call per Light component at scene load (M14). The native
+        // table already holds the light; the managed component mirrors it
+        // so GetComponent<Light>() works and property writes push back.
+        internal static void CreateLight(int entityHandle, int kind, float r, float g,
+                                         float b, float range, float spotCos,
+                                         int enabled)
+        {
+            GameObject go = GetOrCreateWrapper(entityHandle);
+            if (go == null)
+            {
+                Debug.LogError("CreateLight: dead entity handle");
+                return;
+            }
+            var light = new Light();
+            light.Attach(go);
+            light.InitFromNative(kind, r, g, b, range, spotCos, enabled != 0);
+            go.RegisterComponent(light);
+        }
+
+        internal static void CreatePS2Shadow(int entityHandle, int mode, float radius,
+                                             float strength, float maxHeight)
+        {
+            GameObject go = GetOrCreateWrapper(entityHandle);
+            if (go == null)
+            {
+                Debug.LogError("CreatePS2Shadow: dead entity handle");
+                return;
+            }
+            var shadow = new Ps2.Runtime.PS2Shadow();
+            shadow.Attach(go);
+            shadow.mode = mode == 1 ? Ps2.Runtime.PS2Shadow.Mode.Projected
+                                    : Ps2.Runtime.PS2Shadow.Mode.Blob;
+            shadow.radius = radius;
+            shadow.strength = strength;
+            shadow.maxHeight = maxHeight;
+            go.RegisterComponent(shadow);
+        }
+
         internal static void CreatePS2ParticleSystem(int entityHandle)
         {
             GameObject go = GetOrCreateWrapper(entityHandle);

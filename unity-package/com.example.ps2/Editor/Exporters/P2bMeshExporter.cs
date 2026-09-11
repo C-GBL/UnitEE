@@ -53,6 +53,10 @@ namespace Ps2.Editor
         // (ADR-003); until then the cost is vertices, paid only by meshes
         // with big triangles.
         public const float MaxTriangleEdgeWorld = 1.5f;
+
+        // Triangles the last Export call wrote (after subdivision, capped at
+        // what fits), for the build's budget report (M14).
+        public static int LastTriangles;
         // One MESH section holds at most this many triangles: 62 batches of
         // 26 in the worst layout, inside the runtime's kMaxBatchesPerMesh
         // of 64. A subdivided mesh over it is CHUNKED into several sections
@@ -114,6 +118,7 @@ namespace Ps2.Editor
             verts = Subdivide(verts, MaxTriangleEdgeWorld, axes);
 
             int totalTris = verts.Count / 3;
+            LastTriangles = Mathf.Min(totalTris, MaxTrisPerChunk * MaxChunks);
             if (totalTris > MaxTrisPerChunk * MaxChunks)
             {
                 Debug.LogWarning(

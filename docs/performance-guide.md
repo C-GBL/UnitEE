@@ -64,6 +64,15 @@ Realistic targets for a homebrew engine of this kind, at 30 fps, 512x448:
   looks along.
 - Skinned batches carry a matrix palette in VU1 data memory: **<=24 bones per
   batch**.
+- Lighting is three lights per object, chosen per frame (M14): the cost is
+  in the pick, a few dozen multiplies per drawn object, not in the VU. A
+  projected `PS2Shadow` draws its object twice; a blob costs 16 triangles.
+- Static batching (M14) is the lever for draw-command count: each merged
+  cell is one constants upload and one kick instead of one per prop. Keep
+  cells small enough that a point light still reads per cell. LOD levels
+  cut triangles for distant `MeshRenderer`s; 4-bit textures halve VRAM
+  for anything with 16 colours or fewer. The build report lists per-scene
+  draws, triangles and texture VRAM against the profile's budgets.
 
 ### Memory and CPU
 

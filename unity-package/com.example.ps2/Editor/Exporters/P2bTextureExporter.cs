@@ -11,6 +11,7 @@ namespace Ps2.Editor
     internal static class P2bTextureExporter
     {
         public const uint FormatPsmt8 = 0x13;
+        public const uint FormatPsmt4 = 0x14;
 
         // maxSize is the profile's Texture Max Size. Passing 0 keeps the
         // source resolution.
@@ -19,7 +20,43 @@ namespace Ps2.Editor
         // a 1024x1024 texture was over the limit and then put all 1 MB of it
         // on the disc, where it did not fit in the ~1.4 MB of VRAM left after
         // the framebuffers and the upload failed at boot (verify-log M12.5).
-        public static byte[] Export(Texture2D texture, int maxSize = 0)
+
+        // M14: 4-bit textures. Auto picks PSMT4 when the (resized) image has
+        // 16 colours or fewer, which is lossless and halves the VRAM; FourBit
+        // quantises everything to 16 colours; EightBit is the M5 behaviour.
+        public enum FormatMode
+        {
+            Auto = 0,
+            EightBit = 1,
+            FourBit = 2,
+        }
+
+        public static FormatMode Mode = FormatMode.Auto;
+
+        public static byte[] Export(Texture2D texture, int maxSize = 0) =>
+            Export(texture, maxSize, Mode);
+
+        // True when the encoded section is 4-bit (header format PSMT4).
+        public static bool IsFourBit(byte[] section) =>
+            section != null && section.Length >= 12 &&
+            BitConverter.ToUInt32(section, 8) == FormatPsmt4;
+
+        // VRAM the section occupies once uploaded: texels at the format's
+        // depth plus its CLUT, in 8 KB pages (the allocator's grain).
+        public static int VramBytes(byte[] section)
+        {
+            if (section == null || section.Length < 16)
+                return 0;
+            int w = (int)BitConverter.ToUInt32(section, 0);
+            int h = (int)BitConverter.ToUInt32(section, 4);
+            uint format = BitConverter.ToUInt32(section, 8);
+            int texels = w * h;
+            int bytes = format == FormatPsmt4 ? texels / 2 : texels;
+            int pages = (bytes + 8191) / 8192;
+            return pages * 8192 + 8192 / 8; // one CLUT slot per texture
+        }
+
+        public static byte[] Export(Texture2D texture, int maxSize, FormatMode mode)
         {
             int w = texture.width;
             int h = texture.height;
@@ -39,14 +76,51 @@ namespace Ps2.Editor
             w = tw;
             h = th;
 
+            bool fourBit = mode == FormatMode.FourBit ||
+                           (mode == FormatMode.Auto && DistinctColours(pixels, 17) <= 16);
             byte[] indices;
-            Color32[] palette = MedianCut(pixels, 256, out indices);
+            Color32[] palette = MedianCut(pixels, fourBit ? 16 : 256, out indices);
 
             // GS raster origin is top-left; GetPixels32 is bottom-up. Flip.
             var flipped = new byte[indices.Length];
             for (int y = 0; y < h; y++)
             {
                 Array.Copy(indices, (h - 1 - y) * w, flipped, y * w, w);
+            }
+
+            var b = new ByteBuffer();
+            b.U32((uint)w);
+            b.U32((uint)h);
+            if (fourBit)
+            {
+                // PSMT4: two texels per byte, the LEFT texel in the low
+                // nibble; a 16-entry CLUT is stored linearly (8x2 in the
+                // PSMCT32 CLUT buffer -- the CSM1 block swap applies to
+                // 256-entry CLUTs only).
+                b.U32(FormatPsmt4);
+                b.U32(16);
+                for (int i = 0; i < 16; i++)
+                {
+                    uint e = 0;
+                    if (i < palette.Length)
+                    {
+                        Color32 c = palette[i];
+                        uint a = (uint)((c.a * 128 + 127) / 255);
+                        e = c.r | ((uint)c.g << 8) | ((uint)c.b << 16) | (a << 24);
+                    }
+                    b.U32(e);
+                }
+                var packed = new byte[Mathf.Max(1, w * h / 2)];
+                for (int i = 0; i < flipped.Length; i++)
+                {
+                    int nibble = flipped[i] & 0xF;
+                    if ((i & 1) == 0)
+                        packed[i >> 1] = (byte)nibble;
+                    else
+                        packed[i >> 1] |= (byte)(nibble << 4);
+                }
+                b.Bytes(packed);
+                return b.ToArray();
             }
 
             // Palette: PS2 alpha (0..128), then CSM1 storage order.
@@ -59,9 +133,6 @@ namespace Ps2.Editor
             }
             uint[] csm1 = Csm1Reorder(entries);
 
-            var b = new ByteBuffer();
-            b.U32((uint)w);
-            b.U32((uint)h);
             b.U32(FormatPsmt8);
             b.U32(256);
             foreach (uint e in csm1)
@@ -70,6 +141,20 @@ namespace Ps2.Editor
             }
             b.Bytes(flipped);
             return b.ToArray();
+        }
+
+        // Distinct RGBA values, counting up to 'limit' then stopping.
+        private static int DistinctColours(Color32[] pixels, int limit)
+        {
+            var seen = new HashSet<uint>();
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                Color32 c = pixels[i];
+                uint key = c.r | ((uint)c.g << 8) | ((uint)c.b << 16) | ((uint)c.a << 24);
+                if (seen.Add(key) && seen.Count >= limit)
+                    return seen.Count;
+            }
+            return seen.Count;
         }
 
         // Texture pixels, whether or not the asset is marked Read/Write

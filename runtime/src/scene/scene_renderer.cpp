@@ -1,4 +1,5 @@
 #include "ps2ur/scene_renderer.h"
+#include "ps2ur/phys.h"
 
 #include "ps2ur/gs_batch.h"
 #include "ps2ur/log.h"
@@ -128,6 +129,279 @@ bool SceneRenderer::init_ui(gfx::GsDevice& device)
     return m_ui_ready;
 }
 
+// ---- M14 lighting ----------------------------------------------------------
+//
+// The VU programs take THREE lights per batch as constants (directions as
+// the columns of one matrix, then a colour each) plus an ambient. Which
+// three is decided here, per object, every frame: every enabled Light in
+// the scene is scored against the object's bounding sphere and the
+// brightest three win. A directional light contributes its entity's
+// forward axis. A point light contributes the direction from itself to the
+// object's centre with a (1 - d/reach)^2 falloff, a spot light the same
+// inside its cone -- the per-object approximation the era used, since
+// nothing per-vertex is affordable beyond what the microprograms do.
+// Directions are read from the light entities' world matrices, so a light
+// parented to a moving thing, or one a script rotates, follows.
+
+struct LightPick {
+    Vec3 dir{0, 0, 1}; // world space, pointing FROM the light
+    Vec3 colour{0, 0, 0};
+    float weight = 0.0f;
+};
+
+static uint32_t pick_lights(const World& world, Vec3 centre, float radius,
+                            LightPick* out)
+{
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < world.light_count(); ++i) {
+        const Light& l = world.light_at(i);
+        if (!l.enabled || l.entity < 0 ||
+            !world.entity(static_cast<uint32_t>(l.entity)).alive ||
+            !world.entity_visible(l.entity)) {
+            continue;
+        }
+        const Mat4& lw = world.world_matrix(static_cast<uint32_t>(l.entity));
+        // Column-major: column 2 is the entity's +Z, column 3 its position.
+        Vec3 forward = normalize(Vec3{lw.m[8], lw.m[9], lw.m[10]});
+        if (length_sq(forward) < 1e-6f) {
+            forward = Vec3{0, 0, 1};
+        }
+        LightPick pick;
+        float att = 1.0f;
+        if (l.kind == 0u) {
+            pick.dir = forward;
+        } else {
+            const Vec3 pos{lw.m[12], lw.m[13], lw.m[14]};
+            const Vec3 to = sub(centre, pos);
+            const float d = length(to);
+            const float reach = l.range + radius;
+            if (l.range <= 0.0f || d >= reach) {
+                continue;
+            }
+            pick.dir = d > 1e-4f ? scale(to, 1.0f / d) : forward;
+            const float t = d / reach;
+            att = (1.0f - t) * (1.0f - t);
+            if (l.kind == 2u) {
+                const float c = dot(pick.dir, forward);
+                if (c <= l.spot_cos) {
+                    continue;
+                }
+                const float span = 1.0f - l.spot_cos;
+                att *= span > 1e-4f ? (c - l.spot_cos) / span : 1.0f;
+            }
+        }
+        pick.colour = scale(l.colour, att);
+        pick.weight = pick.colour.x * 0.30f + pick.colour.y * 0.59f + pick.colour.z * 0.11f;
+        if (pick.weight <= 0.002f) {
+            continue;
+        }
+        // Insert by weight, keeping the best three.
+        uint32_t slot = n < 3u ? n : 3u;
+        while (slot > 0u && out[slot - 1u].weight < pick.weight) {
+            if (slot < 3u) {
+                out[slot] = out[slot - 1u];
+            }
+            --slot;
+        }
+        if (slot < 3u) {
+            out[slot] = pick;
+            if (n < 3u) {
+                ++n;
+            }
+        }
+    }
+    return n;
+}
+
+// Fills constant qwords 7..16 for a lit program: the three light slots in
+// OBJECT space (the microprograms light against untransformed normals),
+// their colours, the ambient and the colour clamp.
+static void fill_light_constants(const World& world, const Mat4& w, Vec3 centre,
+                                 float radius, gfx::Qword* constants)
+{
+    LightPick picks[3];
+    const uint32_t n = pick_lights(world, centre, radius, picks);
+    float dx[3] = {0, 0, 0}, dy[3] = {0, 0, 0}, dz[3] = {0, 0, 0};
+    for (uint32_t i = 0; i < n; ++i) {
+        const Vec3 ld = picks[i].dir;
+        // Row i of the rotation is column i of the column-major matrix:
+        // this is R^T * (-ld), the light direction TOWARDS the light in the
+        // object's own frame, which is what N.L wants.
+        const Vec3 obj = normalize(Vec3{
+            -(w.m[0] * ld.x + w.m[1] * ld.y + w.m[2] * ld.z),
+            -(w.m[4] * ld.x + w.m[5] * ld.y + w.m[6] * ld.z),
+            -(w.m[8] * ld.x + w.m[9] * ld.y + w.m[10] * ld.z)});
+        dx[i] = obj.x;
+        dy[i] = obj.y;
+        dz[i] = obj.z;
+    }
+    set_float4(constants[7], 0, 0, 0, 0);
+    set_float4(constants[8], 0, 0, 0, 0);
+    set_float4(constants[9], dx[0], dx[1], dx[2], 0);
+    set_float4(constants[10], dy[0], dy[1], dy[2], 0);
+    set_float4(constants[11], dz[0], dz[1], dz[2], 0);
+    for (uint32_t i = 0; i < 3u; ++i) {
+        const Vec3 c = i < n ? picks[i].colour : Vec3{0, 0, 0};
+        // Scale discipline: exported vertex colours are 0..255, so the
+        // light factor stays ~0..1 (verify-log M8).
+        set_float4(constants[12 + i], c.x, c.y, c.z, 0);
+    }
+    const Vec3 amb = world.camera().ambient;
+    set_float4(constants[15], amb.x, amb.y, amb.z, 0);
+    set_float4(constants[16], 255.0f, 255.0f, 255.0f, 128.0f);
+}
+
+// Lights off: what a projected shadow draws with. Every light slot zero and
+// the ambient zero, so a lit program outputs black whatever the vertex
+// colours are, and the GS blend darkens the ground by the shadow's FIX.
+static void zero_light_constants(gfx::Qword* constants)
+{
+    for (uint32_t i = 7; i <= 15; ++i) {
+        set_float4(constants[i], 0, 0, 0, 0);
+    }
+    set_float4(constants[16], 255.0f, 255.0f, 255.0f, 128.0f);
+}
+
+// LODGroup levels (M14): Unity's relative screen height, size / distance
+// over the view's vertical extent, against the level's [min, max).
+static bool lod_visible(const World& world, uint32_t entity, Vec3 cam_pos,
+                        float view_extent_per_unit, bool orthographic,
+                        float ortho_size)
+{
+    const Entity& ent = world.entity(entity);
+    if (ent.lod < 0) {
+        return true;
+    }
+    const LodRef& lod = world.lod(static_cast<uint32_t>(ent.lod));
+    const Mat4& w = world.world_matrix(entity);
+    float rel;
+    if (orthographic) {
+        rel = ortho_size > 0.0f ? lod.size / (2.0f * ortho_size) : 1.0f;
+    } else {
+        const float d = length(sub(Vec3{w.m[12], w.m[13], w.m[14]}, cam_pos));
+        rel = d > 1e-3f ? lod.size / (d * view_extent_per_unit) : 10.0f;
+    }
+    return rel >= lod.min_height && rel < lod.max_height;
+}
+
+// The planar projection along light direction L onto the plane through P
+// with normal N (M14 projected shadows): x' = x - L * (N.x - N.P) / (N.L).
+// Column-major, like every Mat4 here.
+static Mat4 shadow_projection(Vec3 p, Vec3 n, Vec3 l)
+{
+    const float k = dot(n, l);
+    Mat4 s = mat4_identity();
+    const float ln[3] = {l.x, l.y, l.z};
+    const float nn[3] = {n.x, n.y, n.z};
+    for (uint32_t c = 0; c < 3; ++c) {
+        for (uint32_t r = 0; r < 3; ++r) {
+            s.m[c * 4 + r] = (r == c ? 1.0f : 0.0f) - ln[r] * nn[c] / k;
+        }
+    }
+    const float np = dot(n, p) / k;
+    s.m[12] = l.x * np;
+    s.m[13] = l.y * np;
+    s.m[14] = l.z * np;
+    s.m[15] = 1.0f;
+    return s;
+}
+
+// One skinned character through the chain: palette, batches, kick. Shared
+// by the skinned pass and the projected-shadow pass (M14), which draws the
+// same character through the shadow matrix with the lights off.
+struct SkinDraw {
+    gfx::GsDevice* device;
+    gfx::DmaChain* chain;
+    const World* world;
+    const RendererPrograms* programs;
+    SceneRenderer::BindTextureFn bind_texture;
+    void* bind_user;
+    const Mat4* viewproj;
+    float* vscale;
+    float* voffset;
+    float znear;
+    RenderStats* stats;
+};
+
+static bool draw_skinned(const SkinDraw& a, const SkinnedRenderer& renderer,
+                         const Mat4& w, Vec3 centre, float radius, bool lights_off)
+{
+    const World& world = *a.world;
+    const LoadedSkinnedMesh& mesh =
+        world.skinned_mesh(static_cast<uint32_t>(renderer.mesh));
+    const anim::Animator& animator = world.animator(renderer.animator);
+
+    // Textured characters (M12.5): the mesh's format decides the PROGRAM
+    // -- a 6-qword blob through the 5-qword program is garbage, whatever
+    // the material says -- and the material supplies the texture to bind.
+    // Binding happens here, before this renderer's chain traffic starts,
+    // the same between-kicks rule the queue's groups follow. The bind
+    // MUST be flushed before the chain kicks: set_texture_indexed only
+    // appends to the direct packet, and an unflushed TEX0 leaves the
+    // character drawing with whatever the previous pass bound last --
+    // in a scene with UI, the font atlas.
+    const int32_t skin_mat = renderer.material >= 0
+                                 ? renderer.material
+                                 : static_cast<int32_t>(mesh.material_index);
+    if (mesh.textured && a.bind_texture != nullptr && skin_mat >= 0 &&
+        static_cast<uint32_t>(skin_mat) < world.material_count()) {
+        const LoadedMaterial& sm = world.material(static_cast<uint32_t>(skin_mat));
+        if (sm.texture_index != 0xFFFFFFFFu) {
+            uint32_t tw = 0, th = 0;
+            a.device->packet().reset();
+            if (a.bind_texture(a.bind_user, sm.texture_index, &tw, &th)) {
+                a.device->flush_packet();
+            }
+        }
+    }
+    const uint32_t skin_program =
+        mesh.textured ? a.programs->skin_tex_addr : a.programs->skin_addr;
+
+    const Mat4 mvp = mat4_mul(*a.viewproj, w);
+    gfx::BatchBuilder::build_unlit_constants(mvp.m, a.vscale, a.voffset, 4095.0f,
+                                             a.znear, g_constants);
+    if (lights_off) {
+        zero_light_constants(g_constants);
+    } else {
+        fill_light_constants(world, w, centre, radius, g_constants);
+    }
+    set_float4(g_constants[17], 0, 0, 0, 0);
+
+    uint32_t last_table = 0xFFFFFFFFu;
+    a.chain->begin();
+    bool ok = true;
+    for (uint32_t b = 0; b < mesh.batch_count && ok; ++b) {
+        const uint32_t table_count = mesh.bone_count[b];
+        // Re-upload the palette only when this batch's bone table differs
+        // from the one already resident.
+        if (last_table == 0xFFFFFFFFu ||
+            mesh.bone_table[b][0] != mesh.bone_table[last_table][0] ||
+            table_count != mesh.bone_count[last_table]) {
+            anim::build_palette(animator, mesh.bone_table[b], table_count, g_palette);
+            for (uint32_t slot = 0; slot < table_count; ++slot) {
+                for (uint32_t c = 0; c < 4; ++c) {
+                    set_float4(g_constants[18u + slot * 4u + c],
+                               g_palette[slot].m[c * 4 + 0], g_palette[slot].m[c * 4 + 1],
+                               g_palette[slot].m[c * 4 + 2], g_palette[slot].m[c * 4 + 3]);
+                }
+            }
+            ok = a.chain->add_constants(g_constants, 18u + table_count * 4u, 0);
+            last_table = b;
+        }
+        if (ok) {
+            ok = a.chain->add_batch(mesh.batches[b], skin_program);
+            ++a.stats->skin_batches;
+        }
+    }
+    if (!ok || !a.chain->kick()) {
+        return false;
+    }
+    a.chain->wait();
+    ++a.stats->kicks;
+    ++a.stats->skinned_drawn;
+    return true;
+}
+
 bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
                            World& world, const RendererPrograms& programs,
                            BindTextureFn bind_texture, void* bind_user,
@@ -160,6 +434,12 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
     Mat4 flipz = mat4_identity();
     flipz.m[10] = -1.0f;
     const Mat4 view = mat4_rigid_inverse(world.world_matrix(cam_entity));
+    // The camera's world position: a follow-camera entity (the sky) draws
+    // with its translation replaced by this, so it can never be approached.
+    const Mat4& cam_world = world.world_matrix(cam_entity);
+    const Vec3 cam_pos{cam_world.m[12], cam_world.m[13], cam_world.m[14]};
+    // LOD: the view's vertical extent per unit of distance (M14).
+    const float view_extent_per_unit = 2.0f * __builtin_tanf(cam.fov * 0.5f);
     const Mat4 flipped_view = mat4_mul(flipz, view);
     const Mat4 viewproj = mat4_mul(proj, flipped_view);
     const FrustumPlanes frustum = frustum_from_viewproj(viewproj);
@@ -231,18 +511,33 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
             }
             continue;
         }
+        if (!lod_visible(world, e, cam_pos, view_extent_per_unit, cam.orthographic,
+                         cam.ortho_size)) {
+            ++local.culled;
+            continue;
+        }
         const LoadedMesh& mesh = world.mesh(static_cast<uint32_t>(ent.mesh));
         const uint32_t mat_index =
             ent.material >= 0 ? static_cast<uint32_t>(ent.material)
                               : mesh.material_index;
         const LoadedMaterial& mat = world.material(mat_index);
 
-        const Mat4& w = world.world_matrix(e);
+        Mat4 follow;
+        const Mat4* wp = &world.world_matrix(e);
+        if (ent.follow_camera) {
+            follow = *wp;
+            follow.m[12] = cam_pos.x;
+            follow.m[13] = cam_pos.y;
+            follow.m[14] = cam_pos.z;
+            wp = &follow;
+        }
+        const Mat4& w = *wp;
         const Vec4 c = mat4_mul_vec4(
             w, Vec4{mesh.bounds_center.x, mesh.bounds_center.y,
                     mesh.bounds_center.z, 1.0f});
         const float radius = world_radius(w, mesh.bounds_radius);
-        if (frustum_culls_sphere(frustum, Vec3{c.x, c.y, c.z}, radius)) {
+        if (!ent.follow_camera &&
+            frustum_culls_sphere(frustum, Vec3{c.x, c.y, c.z}, radius)) {
             ++local.culled;
             if (dbg) {
                 log(LogLevel::Info,
@@ -266,7 +561,7 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
 
         const Vec4 vz = mat4_mul_vec4(flipped_view, c);
         const float depth01 = (vz.z - cam.znear) * inv_depth_range;
-        const uint32_t pass = mat.transparent ? 1u : 0u;
+        const uint32_t pass = mat.sky ? 0u : mat.transparent ? 2u : 1u;
         const uint32_t tex1 =
             mat.texture_index == 0xFFFFFFFFu ? 0u : mat.texture_index + 1u;
         if (!m_queue.push(pass, mat.kind, tex1, depth01,
@@ -315,6 +610,7 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
             if (tex1 != 0u && bind_texture != nullptr) {
                 uint32_t tw = 0, th = 0;
                 bound = bind_texture(bind_user, mat.texture_index, &tw, &th);
+                device.set_texture_clamp(mat.clamp);
             }
             device.flush_packet();
             if (dbg) {
@@ -332,36 +628,27 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
             chain_open = true;
         }
 
-        const Mat4 mvp = mat4_mul(viewproj, world.world_matrix(cmd.entity));
+        Mat4 follow;
+        const Mat4* wp = &world.world_matrix(cmd.entity);
+        if (world.entity(cmd.entity).follow_camera) {
+            follow = *wp;
+            follow.m[12] = cam_pos.x;
+            follow.m[13] = cam_pos.y;
+            follow.m[14] = cam_pos.z;
+            wp = &follow;
+        }
+        const Mat4 mvp = mat4_mul(viewproj, *wp);
         bool ok;
-        if (kind_uses_lit_constants(mat.kind) && world.has_light()) {
-            const Mat4& w = world.world_matrix(cmd.entity);
-            const Vec3 ld = world.light().dir;
-            const Vec3 obj = normalize(Vec3{
-                -(w.m[0] * ld.x + w.m[1] * ld.y + w.m[2] * ld.z),
-                -(w.m[4] * ld.x + w.m[5] * ld.y + w.m[6] * ld.z),
-                -(w.m[8] * ld.x + w.m[9] * ld.y + w.m[10] * ld.z)});
-            const Vec3 lc = world.light().colour;
+        if (kind_uses_lit_constants(mat.kind)) {
+            const Mat4& w = *wp;
+            const Vec4 lc4 = mat4_mul_vec4(
+                w, Vec4{mesh.bounds_center.x, mesh.bounds_center.y,
+                        mesh.bounds_center.z, 1.0f});
             gfx::BatchBuilder::build_unlit_constants(mvp.m, vscale, voffset,
                                                      4095.0f, cam.znear,
                                                      g_constants);
-            set_float4(g_constants[7], 0, 0, 0, 0);
-            set_float4(g_constants[8], 0, 0, 0, 0);
-            set_float4(g_constants[9], obj.x, 0, 0, 0);
-            set_float4(g_constants[10], obj.y, 0, 0, 0);
-            set_float4(g_constants[11], obj.z, 0, 0, 0);
-            // Qwords 12..14 are the COLOURS OF LIGHTS 0..2 as (r,g,b,0) --
-            // the microprogram broadcasts N.L per light and spends its
-            // fourth MADD on ambient. Packing them per-channel instead lit
-            // only the red channel (verify-log M9).
-            //
-            // Scale discipline: exported vertex colours are 0..255, so the
-            // light factor stays ~0..1 (verify-log M8).
-            set_float4(g_constants[12], lc.x, lc.y, lc.z, 0);
-            set_float4(g_constants[13], 0, 0, 0, 0);
-            set_float4(g_constants[14], 0, 0, 0, 0);
-            set_float4(g_constants[15], 0.157f, 0.157f, 0.157f, 0);
-            set_float4(g_constants[16], 255.0f, 255.0f, 255.0f, 128.0f);
+            fill_light_constants(world, w, Vec3{lc4.x, lc4.y, lc4.z},
+                                 world_radius(w, mesh.bounds_radius), g_constants);
             if (mat.kind == kMaterialVertexLitFog) {
                 // f = clamp(w*scale + offset, 0, 255); disabled fog means
                 // scale 0 / offset 255: F=255 everywhere, i.e. no fog.
@@ -415,6 +702,8 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
         device.set_material_state(0, 0, false, true);
         device.flush_packet();
     }
+    SkinDraw skin_args{&device, &chain, &world, &programs, bind_texture, bind_user,
+                       &viewproj, vscale, voffset, cam.znear, &local};
     for (uint32_t s = 0; s < world.skinned_renderer_count(); ++s) {
         const SkinnedRenderer& renderer = world.skinned_renderer(s);
         if (renderer.entity < 0 || renderer.mesh < 0) {
@@ -425,9 +714,13 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
             !world.entity_visible(renderer.entity)) {
             continue;
         }
+        if (!lod_visible(world, entity, cam_pos, view_extent_per_unit,
+                         cam.orthographic, cam.ortho_size)) {
+            ++local.culled;
+            continue;
+        }
         const LoadedSkinnedMesh& mesh =
             world.skinned_mesh(static_cast<uint32_t>(renderer.mesh));
-        const anim::Animator& animator = world.animator(renderer.animator);
 
         // Cull the whole character on its bounding sphere, grown to cover
         // the animation: a posed limb reaches past the bind-pose bounds.
@@ -442,97 +735,218 @@ bool SceneRenderer::render(gfx::GsDevice& device, gfx::DmaChain& chain,
             ++local.culled;
             continue;
         }
-
-        // Textured characters (M12.5): the mesh's format decides the PROGRAM
-        // -- a 6-qword blob through the 5-qword program is garbage, whatever
-        // the material says -- and the material supplies the texture to bind.
-        // Binding happens here, before this renderer's chain traffic starts,
-        // the same between-kicks rule the queue's groups follow. The bind
-        // MUST be flushed before the chain kicks: set_texture_indexed only
-        // appends to the direct packet, and an unflushed TEX0 leaves the
-        // character drawing with whatever the previous pass bound last --
-        // in a scene with UI, the font atlas.
-        const int32_t skin_mat = renderer.material >= 0
-                                     ? renderer.material
-                                     : static_cast<int32_t>(mesh.material_index);
-        if (mesh.textured && bind_texture != nullptr && skin_mat >= 0 &&
-            static_cast<uint32_t>(skin_mat) < world.material_count()) {
-            const LoadedMaterial& sm =
-                world.material(static_cast<uint32_t>(skin_mat));
-            if (sm.texture_index != 0xFFFFFFFFu) {
-                uint32_t tw = 0, th = 0;
-                device.packet().reset();
-                if (bind_texture(bind_user, sm.texture_index, &tw, &th)) {
-                    device.flush_packet();
-                }
-            }
-        }
-        const uint32_t skin_program =
-            mesh.textured ? programs.skin_tex_addr : programs.skin_addr;
-
-        const Mat4 mvp = mat4_mul(viewproj, w);
-        gfx::BatchBuilder::build_unlit_constants(mvp.m, vscale, voffset, 4095.0f,
-                                                 cam.znear, g_constants);
-        if (world.has_light()) {
-            const Vec3 ld = world.light().dir;
-            const Vec3 obj = normalize(Vec3{
-                -(w.m[0] * ld.x + w.m[1] * ld.y + w.m[2] * ld.z),
-                -(w.m[4] * ld.x + w.m[5] * ld.y + w.m[6] * ld.z),
-                -(w.m[8] * ld.x + w.m[9] * ld.y + w.m[10] * ld.z)});
-            const Vec3 lc = world.light().colour;
-            set_float4(g_constants[9], obj.x, 0, 0, 0);
-            set_float4(g_constants[10], obj.y, 0, 0, 0);
-            set_float4(g_constants[11], obj.z, 0, 0, 0);
-            set_float4(g_constants[12], lc.x, lc.y, lc.z, 0);
-        } else {
-            set_float4(g_constants[9], 0, 0, 0, 0);
-            set_float4(g_constants[10], 0, 0, 0, 0);
-            set_float4(g_constants[11], 0, 0, 0, 0);
-            set_float4(g_constants[12], 0, 0, 0, 0);
-        }
-        set_float4(g_constants[13], 0, 0, 0, 0);
-        set_float4(g_constants[14], 0, 0, 0, 0);
-        set_float4(g_constants[15], 0.157f, 0.157f, 0.157f, 0);
-        set_float4(g_constants[16], 255.0f, 255.0f, 255.0f, 128.0f);
-        set_float4(g_constants[17], 0, 0, 0, 0);
-
-        uint32_t last_table = 0xFFFFFFFFu;
-        chain.begin();
-        chain_open = true;
-        bool ok = true;
-        for (uint32_t b = 0; b < mesh.batch_count && ok; ++b) {
-            const uint32_t table_count = mesh.bone_count[b];
-            // Re-upload the palette only when this batch's bone table
-            // differs from the one already resident.
-            if (last_table == 0xFFFFFFFFu ||
-                mesh.bone_table[b][0] != mesh.bone_table[last_table][0] ||
-                table_count != mesh.bone_count[last_table]) {
-                anim::build_palette(animator, mesh.bone_table[b], table_count,
-                                    g_palette);
-                for (uint32_t slot = 0; slot < table_count; ++slot) {
-                    for (uint32_t c = 0; c < 4; ++c) {
-                        set_float4(g_constants[18u + slot * 4u + c],
-                                   g_palette[slot].m[c * 4 + 0],
-                                   g_palette[slot].m[c * 4 + 1],
-                                   g_palette[slot].m[c * 4 + 2],
-                                   g_palette[slot].m[c * 4 + 3]);
-                    }
-                }
-                ok = chain.add_constants(g_constants, 18u + table_count * 4u, 0);
-                last_table = b;
-            }
-            if (ok) {
-                ok = chain.add_batch(mesh.batches[b], skin_program);
-                ++local.skin_batches;
-            }
-        }
-        if (!ok || !chain.kick()) {
+        if (!draw_skinned(skin_args, renderer, w, Vec3{centre.x, centre.y, centre.z},
+                          radius, false)) {
             return false;
         }
-        chain.wait();
         chain_open = false;
-        ++local.kicks;
-        ++local.skinned_drawn;
+    }
+
+    // --- Shadows (M14) ------------------------------------------------------
+    //
+    // Two techniques, both the era's. A BLOB: a fan of black triangles on
+    // the ground under the caster, alpha 1 at the centre and 0 at the rim,
+    // faded by height, found by a raycast straight down. PROJECTED (mode
+    // 1): the caster's own lit meshes and skinned renderers drawn again
+    // through a planar projection along the strongest directional light
+    // onto the ground plane the raycast found, with every light off so
+    // they come out black, blended as Cd * (1 - strength) through the GS
+    // FIX alpha. No Z write, depth-tested, lifted a little off the plane.
+    // Unlit and textured-unlit meshes cannot be turned black by constants,
+    // so they cast blobs only.
+    if (world.shadow_count() > 0) {
+        PS2UR_PROFILE_ZONE("shadows");
+        Vec3 sun{0, -1, 0};
+        float sun_weight = -1.0f;
+        for (uint32_t i = 0; i < world.light_count(); ++i) {
+            const Light& l = world.light_at(i);
+            if (!l.enabled || l.kind != 0u || l.entity < 0 ||
+                !world.entity(static_cast<uint32_t>(l.entity)).alive) {
+                continue;
+            }
+            const float wgt = l.colour.x * 0.30f + l.colour.y * 0.59f + l.colour.z * 0.11f;
+            if (wgt > sun_weight) {
+                const Mat4& lw = world.world_matrix(static_cast<uint32_t>(l.entity));
+                const Vec3 f = normalize(Vec3{lw.m[8], lw.m[9], lw.m[10]});
+                if (length_sq(f) > 1e-6f) {
+                    sun = f;
+                    sun_weight = wgt;
+                }
+            }
+        }
+        // 16-segment fan: 48 vertices, 2 qwords each, after the 2-qword header.
+        constexpr uint32_t kSegments = 16;
+        alignas(16) static gfx::Qword blob[2 + kSegments * 3 * 2];
+        static const float kCos[kSegments] = {
+            1.0f, 0.92388f, 0.70711f, 0.38268f, 0.0f, -0.38268f, -0.70711f, -0.92388f,
+            -1.0f, -0.92388f, -0.70711f, -0.38268f, 0.0f, 0.38268f, 0.70711f, 0.92388f};
+        static const float kSin[kSegments] = {
+            0.0f, 0.38268f, 0.70711f, 0.92388f, 1.0f, 0.92388f, 0.70711f, 0.38268f,
+            0.0f, -0.38268f, -0.70711f, -0.92388f, -1.0f, -0.92388f, -0.70711f, -0.38268f};
+
+        for (uint32_t si = 0; si < world.shadow_count(); ++si) {
+            const ShadowRef& sh = world.shadow(si);
+            if (sh.entity < 0 || !world.entity(static_cast<uint32_t>(sh.entity)).alive ||
+                !world.entity_visible(sh.entity)) {
+                continue;
+            }
+            const uint32_t caster = static_cast<uint32_t>(sh.entity);
+            const Mat4& cw = world.world_matrix(caster);
+            const Vec3 origin{cw.m[12], cw.m[13] + 0.1f, cw.m[14]};
+            phys::RaycastHit hit;
+            if (!phys::raycast(origin, Vec3{0, -1, 0}, sh.max_height + 1.0f,
+                               phys::kAllLayers, &hit)) {
+                continue;
+            }
+            float height = hit.distance - 0.1f;
+            if (height < 0.0f) {
+                height = 0.0f;
+            }
+            const float fade = sh.max_height > 0.0f ? 1.0f - height / sh.max_height : 1.0f;
+            if (fade <= 0.0f || sh.strength <= 0.0f) {
+                continue;
+            }
+            Vec3 n = normalize(hit.normal);
+            if (length_sq(n) < 1e-6f) {
+                n = Vec3{0, 1, 0};
+            }
+            const Vec3 p = add(hit.point, scale(n, 0.02f));
+            // A frustum test on the ground point keeps off-screen casters
+            // from spending a kick.
+            if (frustum_culls_sphere(frustum, p, sh.radius * 2.0f + 1.0f)) {
+                continue;
+            }
+
+            // Blob fan in the plane's own basis.
+            Vec3 t = __builtin_fabsf(n.y) < 0.9f ? cross(n, Vec3{0, 1, 0})
+                                                 : cross(n, Vec3{1, 0, 0});
+            t = normalize(t);
+            const Vec3 bt = cross(n, t);
+            const float alpha = sh.strength * fade * 128.0f;
+            const uint32_t verts = kSegments * 3;
+            // GIF tag: NREG=2 (RGBAQ, XYZ2), PRE, prim = tri | IIP | ABE.
+            const uint64_t prim = 3ull | (1ull << 3) | (1ull << 6);
+            blob[0].lo = (static_cast<uint64_t>(verts) & 0x7FFFull) | (1ull << 15) |
+                         (1ull << 46) | ((prim & 0x7FFull) << 47) | (2ull << 60);
+            blob[0].hi = 0x51ull;
+            blob[1].lo = verts;
+            blob[1].hi = 0;
+            gfx::Qword* v = blob + 2;
+            for (uint32_t k = 0; k < kSegments; ++k) {
+                const uint32_t k1 = (k + 1u) % kSegments;
+                const Vec3 r0 = add(p, add(scale(t, kCos[k] * sh.radius),
+                                           scale(bt, kSin[k] * sh.radius)));
+                const Vec3 r1 = add(p, add(scale(t, kCos[k1] * sh.radius),
+                                           scale(bt, kSin[k1] * sh.radius)));
+                v[0] = qword4f(p.x, p.y, p.z, 1.0f);
+                v[1] = qword4f(0, 0, 0, alpha);
+                v[2] = qword4f(r0.x, r0.y, r0.z, 1.0f);
+                v[3] = qword4f(0, 0, 0, 0);
+                v[4] = qword4f(r1.x, r1.y, r1.z, 1.0f);
+                v[5] = qword4f(0, 0, 0, 0);
+                v += 6;
+            }
+            gfx::BatchBlock blob_block{blob, blob + 2, verts * 2u, verts, 10u};
+
+            device.packet().reset();
+            // (Cs - Cd) * As + Cd with Cs black: the ground darkens by the
+            // vertex alpha. No Z write; depth-tested against the ground.
+            device.set_material_state(0, 0x44u, true, false);
+            device.flush_packet();
+            gfx::BatchBuilder::build_unlit_constants(viewproj.m, vscale, voffset,
+                                                     4095.0f, cam.znear, g_constants);
+            chain.begin();
+            bool ok = chain.add_constants(g_constants, 7, 0) &&
+                      chain.add_batch(blob_block, programs.unlit_addr);
+            if (!ok || !chain.kick()) {
+                return false;
+            }
+            chain.wait();
+            ++local.kicks;
+            ++local.drawn;
+
+            if (sh.mode != 1u || dot(n, sun) > -0.05f) {
+                continue;
+            }
+            const Mat4 proj = shadow_projection(p, n, sun);
+            uint8_t fix = static_cast<uint8_t>(sh.strength * fade * 128.0f);
+            if (fix > 128u) {
+                fix = 128u;
+            }
+            // (Cs - Cd) * FIX + Cd, Cs black: Cd * (1 - strength).
+            const uint64_t shadow_alpha = gfx::gs_alpha(0, 1, 2, 1, fix);
+
+            // The caster's rigid lit meshes, and its descendants' (chunks
+            // and submeshes ride on synthetic children).
+            for (uint32_t e = 0; e < world.entity_count(); ++e) {
+                const Entity& ent = world.entity(e);
+                if (!ent.alive || ent.mesh < 0 ||
+                    (e != caster && !world.is_descendant_of(static_cast<int32_t>(e),
+                                                            static_cast<int32_t>(caster))) ||
+                    !world.entity_visible(static_cast<int32_t>(e))) {
+                    continue;
+                }
+                const LoadedMesh& mesh = world.mesh(static_cast<uint32_t>(ent.mesh));
+                const uint32_t mi = ent.material >= 0 ? static_cast<uint32_t>(ent.material)
+                                                      : mesh.material_index;
+                const LoadedMaterial& mat = world.material(mi);
+                if (!kind_uses_lit_constants(mat.kind)) {
+                    continue;
+                }
+                const Mat4 sw = mat4_mul(proj, world.world_matrix(e));
+                const Mat4 mvp = mat4_mul(viewproj, sw);
+                device.packet().reset();
+                device.set_material_state(0, shadow_alpha, true, false);
+                device.flush_packet();
+                gfx::BatchBuilder::build_unlit_constants(mvp.m, vscale, voffset, 4095.0f,
+                                                         cam.znear, g_constants);
+                zero_light_constants(g_constants);
+                chain.begin();
+                ok = chain.add_constants(g_constants, 17, 0);
+                for (uint32_t b = 0; b < mesh.batch_count && ok; ++b) {
+                    ok = chain.add_batch(mesh.batches[b], programs.lit_addr);
+                }
+                if (!ok || !chain.kick()) {
+                    return false;
+                }
+                chain.wait();
+                ++local.kicks;
+                ++local.drawn;
+            }
+            // The caster's skinned renderers, through the same projection.
+            for (uint32_t s = 0; s < world.skinned_renderer_count(); ++s) {
+                const SkinnedRenderer& renderer = world.skinned_renderer(s);
+                if (renderer.entity < 0 || renderer.mesh < 0) {
+                    continue;
+                }
+                const uint32_t se = static_cast<uint32_t>(renderer.entity);
+                if (se != caster &&
+                    !world.is_descendant_of(renderer.entity, static_cast<int32_t>(caster))) {
+                    continue;
+                }
+                if (!world.entity(se).alive || !world.entity_visible(renderer.entity)) {
+                    continue;
+                }
+                const LoadedSkinnedMesh& smesh =
+                    world.skinned_mesh(static_cast<uint32_t>(renderer.mesh));
+                const Mat4& w = world.world_matrix(se);
+                const Mat4 sw = mat4_mul(proj, w);
+                const Vec4 centre = mat4_mul_vec4(
+                    w, Vec4{smesh.bounds_center.x, smesh.bounds_center.y,
+                            smesh.bounds_center.z, 1.0f});
+                device.packet().reset();
+                device.set_material_state(0, shadow_alpha, true, false);
+                device.flush_packet();
+                if (!draw_skinned(skin_args, renderer, sw,
+                                  Vec3{centre.x, centre.y, centre.z},
+                                  world_radius(w, smesh.bounds_radius), true)) {
+                    return false;
+                }
+            }
+        }
+        device.packet().reset();
+        device.set_material_state(0, 0, false, true); // restore opaque
+        device.flush_packet();
     }
 
     // --- Particles (M12.5 task 4, ADR-011) ----------------------------------
