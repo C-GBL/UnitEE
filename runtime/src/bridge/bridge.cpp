@@ -1,6 +1,7 @@
 #include "ps2ur/bridge.h"
 
 #include "ps2ur/log.h"
+#include "ps2ur/profiler_overlay.h"
 
 #include "generated_bridge.h"
 
@@ -52,4 +53,21 @@ extern "C" void ps2ur_debug_log(const char* utf8)
         utf8 = "(null)";
     }
     ps2ur::log(ps2ur::LogLevel::Info, "%s", utf8);
+}
+
+// The profiler overlay's page, from a script: the same pages Select cycles
+// through, so a scene can boot straight into the VRAM page when something
+// draws wrong and the boot log has already scrolled away.
+extern "C" void ps2ur_debug_overlay_set_page(int32_t page)
+{
+    const int32_t count = static_cast<int32_t>(ps2ur::prof::Page::Count);
+    if (page < 0 || page >= count) {
+        page = 0;
+    }
+    ps2ur::prof::set_page(static_cast<ps2ur::prof::Page>(page));
+}
+
+extern "C" int32_t ps2ur_debug_overlay_page(void)
+{
+    return static_cast<int32_t>(ps2ur::prof::page());
 }

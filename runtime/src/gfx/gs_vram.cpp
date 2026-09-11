@@ -252,6 +252,23 @@ uint32_t VramAllocator::largest_free_run() const
     return best;
 }
 
+bool VramAllocator::record(uint32_t i, uint32_t& page, uint32_t& page_count,
+                           const char*& name) const
+{
+    if (i >= kMaxAllocs || !m_records[i].in_use) {
+        return false;
+    }
+    page = m_records[i].page;
+    page_count = m_records[i].page_count;
+    name = m_records[i].name != nullptr ? m_records[i].name : "?";
+    return true;
+}
+
+bool VramAllocator::page_used(uint32_t p) const
+{
+    return p < kPageCount && ((m_bitmap[p / 32] >> (p % 32)) & 1u) != 0u;
+}
+
 void VramAllocator::debug_dump() const
 {
     log(LogLevel::Info, "vram: %u/%u pages used (%u KB / %u KB), largest free run %u",

@@ -3,7 +3,10 @@
 
 #include "ps2ur/gs_device.h"
 #include "ps2ur/gs_overlay.h"
+#include "ps2ur/gs_vram.h"
 #include "ps2ur/meminfo.h"
+
+#include <cstring>
 #include "ps2ur/profiler.h"
 
 namespace ps2ur {
@@ -239,6 +242,102 @@ void draw_memory_page(gfx::GsDevice& d, gfx::DebugOverlay& o, int32_t sw)
                 static_cast<double>(mem::heap_fragmentation() * 100.0f));
 }
 
+// The VRAM page: what the [vram] boot log says, live, plus every
+// allocation by name and an occupancy map. Textures that draw garbled or
+// vanish are nearly always a VRAM story -- an upload that did not fit, two
+// buffers that overlap, a CLUT in the wrong page -- and the boot log
+// scrolls away on real hardware. One char of the map is 8 pages (64 KB).
+void draw_vram_page(gfx::GsDevice& d, gfx::DebugOverlay& o, int32_t sw)
+{
+    const gfx::VramAllocator& vram = d.vram();
+    const uint32_t kb = gfx::kPageBytes / 1024u;
+
+    // Frame buffers are the device's own; everything else is content.
+    uint32_t frame_pages = 0, content_pages = 0, records = 0;
+    for (uint32_t i = 0; i < gfx::VramAllocator::kMaxAllocs; ++i) {
+        uint32_t page, count;
+        const char* name;
+        if (!vram.record(i, page, count, name)) {
+            continue;
+        }
+        ++records;
+        const bool is_frame = std::strncmp(name, "colour", 6) == 0 ||
+                              std::strncmp(name, "depth", 5) == 0;
+        (is_frame ? frame_pages : content_pages) += count;
+    }
+
+    const int32_t row_h = 10;
+    const int32_t x = 8, y = 8, w = sw - 16;
+    // Header, totals, map, column titles, then one row per record; the
+    // panel stops at the screen so a long list is clipped, not wrapped.
+    int32_t rows = static_cast<int32_t>(records);
+    const int32_t max_rows = (448 - 8 - 64) / row_h;
+    if (rows > max_rows) {
+        rows = max_rows;
+    }
+    panel(d, o, x, y, w, 64 + rows * row_h);
+
+    o.set_colour(0xE6, 0xE7, 0xEC);
+    o.printf_at(d, x + 8, y + 6, "VRAM  %u KB: frame %u  content %u  free %u",
+                static_cast<unsigned>(gfx::kPageCount * kb),
+                static_cast<unsigned>(frame_pages * kb),
+                static_cast<unsigned>(content_pages * kb),
+                static_cast<unsigned>(vram.free_pages() * kb));
+    o.set_colour(0xC8, 0xCC, 0xD6);
+    o.printf_at(d, x + 8, y + 16,
+                "CLUTs %u in %u pages  largest free run %u pages (%u KB)",
+                static_cast<unsigned>(vram.clut_slots_used()),
+                static_cast<unsigned>(vram.clut_pages()),
+                static_cast<unsigned>(vram.largest_free_run()),
+                static_cast<unsigned>(vram.largest_free_run() * kb));
+
+    // Occupancy map: '.' free, '+' partly used, '#' full, 64 KB per char.
+    char map[gfx::kPageCount / 8 + 1];
+    for (uint32_t g = 0; g < gfx::kPageCount / 8; ++g) {
+        uint32_t used = 0;
+        for (uint32_t p = g * 8; p < g * 8 + 8; ++p) {
+            used += vram.page_used(p) ? 1u : 0u;
+        }
+        map[g] = used == 0 ? '.' : used == 8 ? '#' : '+';
+    }
+    map[gfx::kPageCount / 8] = '\0';
+    o.set_colour(0x50, 0xD0, 0x70);
+    o.printf_at(d, x + 8, y + 28, "%s", map);
+
+    o.set_colour(0xE6, 0xE7, 0xEC);
+    o.printf_at(d, x + 8, y + 42, "page   KB  name");
+    int32_t row = y + 54;
+    int32_t shown = 0;
+    for (uint32_t i = 0; i < gfx::VramAllocator::kMaxAllocs && shown < rows;
+         ++i) {
+        uint32_t page, count;
+        const char* name;
+        if (!vram.record(i, page, count, name)) {
+            continue;
+        }
+        const bool is_frame = std::strncmp(name, "colour", 6) == 0 ||
+                              std::strncmp(name, "depth", 5) == 0;
+        if (is_frame) {
+            o.set_colour(0x90, 0x94, 0xA0);
+        } else if (count == 0) {
+            o.set_colour(0x70, 0xC0, 0xE0); // a CLUT slot inside a page
+        } else {
+            o.set_colour(0xE6, 0xE7, 0xEC);
+        }
+        o.printf_at(d, x + 8, row, "%3u..%-3u %4u  %s",
+                    static_cast<unsigned>(page),
+                    static_cast<unsigned>(count > 0 ? page + count - 1u : page),
+                    static_cast<unsigned>(count * kb), name);
+        row += row_h;
+        ++shown;
+    }
+    if (shown < static_cast<int32_t>(records)) {
+        o.set_colour(0xC8, 0xCC, 0xD6);
+        o.printf_at(d, x + 8, row, "... %u more",
+                    static_cast<unsigned>(records - shown));
+    }
+}
+
 } // namespace
 
 void set_page(Page p) { g_page = p; }
@@ -266,6 +365,9 @@ void draw_overlay(gfx::GsDevice& device, gfx::DebugOverlay& overlay,
             break;
         case Page::Memory:
             draw_memory_page(device, overlay, screen_w);
+            break;
+        case Page::Vram:
+            draw_vram_page(device, overlay, screen_w);
             break;
         default:
             break;

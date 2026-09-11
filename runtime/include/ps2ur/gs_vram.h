@@ -92,6 +92,15 @@ public:
     // actionable once you know which of those two is eating it (M13 task 3).
     void log_budget() const;
 
+    // Read-only view of allocation slot 'i' (0 <= i < kMaxAllocs) for the
+    // on-screen VRAM page: false for an unused slot. The debug name is the
+    // one the caller passed to alloc_*; the device names its own buffers
+    // "colour*" / "depth", content is "game-tex" / "game-clut" / fonts.
+    bool record(uint32_t i, uint32_t& page, uint32_t& page_count,
+                const char*& name) const;
+    // True when page 'p' is marked used in the occupancy bitmap.
+    bool page_used(uint32_t p) const;
+
 private:
     struct Record {
         uint32_t page = 0;

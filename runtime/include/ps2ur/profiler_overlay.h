@@ -32,6 +32,7 @@ enum class Page : uint8_t {
     Frame,
     Zones,
     Memory,
+    Vram, // every VRAM allocation by name, and the occupancy map
     Count,
 };
 
