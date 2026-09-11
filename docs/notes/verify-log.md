@@ -1322,3 +1322,111 @@ loader and jumps, and the game boots under it. And pthread-embedded's
 semaphore structures do leave the attr field unset on the stack, which
 would have been the kind of thing zeroed RAM hides, but the dirty launcher
 covers that too.
+
+## Three defects from one capybara scene (2026-09-08)
+
+A third-person demo -- an imported capybara with three SkinnedMeshRenderers,
+a scaled cube for a floor, an orbit camera -- reported three symptoms on
+target that the Editor never shows: the materials were wrong, the walk cycle
+"restarted" every fraction of a second, and the floor tore around the camera.
+Each was read out of the exported .p2b and the runtime source, not guessed.
+
+**Materials.** The body mesh has three submeshes -- body, teeth, lashes --
+and the rig exporter wrote ONE skinned section per mesh from `mesh.triangles`
+under material slot 0, so the teeth and lashes drew in the body colour. The
+rigid path had already been fixed for exactly this (a kit ground slab's lawn
+painted concrete); the skinned path repeated it. Now one SKMS per (mesh,
+submesh), each with its slot's colour and texture, and one renderer record
+per section on the same entity. A second rule changed with it: a renderer
+that HAS a material takes the material's colour, since Standard-family
+shaders ignore vertex colours; only a material-less mesh (the M9 rigs) paints
+by vertex. Verified by exporting the scene through a batchmode copy of the
+project: five SKMS sections (body 205 + 16 + 20 batches, eye 22, tearline 15)
+and five skinned records on the character entity.
+
+**The walk that restarted.** The controller, transitions and clips in the
+.p2b were correct -- the walk clip is a 0.5 s single cycle, looping. The
+animators were advanced TWICE a frame: once by the managed Tick
+(`ps2ur_anim_update` between Update and LateUpdate, M9 task 4) and once more
+by the native game loop right after Tick, a call that predates the managed
+one and was never removed when it arrived. Every clip, crossfade and
+transition ran at 2x, so the half-second cycle completed in a quarter second.
+The native call is gone; the loop only refreshes world matrices there. The
+comment on the removed call said the host "never called this" -- true when it
+was written, and the reason it looked load-bearing.
+
+**The floor tearing.** The VU1 programs reject a whole triangle when any
+vertex is behind the near plane or outside the guard band; there is no
+clipping (M4, staged). The exporter's subdivision existed for exactly that,
+at 6 world-unit edges. The geometry says 6 is too coarse for a third-person
+camera: a rejected floor triangle leaves a hole reaching up to one edge
+length in front of the camera, and the floor becomes visible at
+height / tan(pitch + half the vertical FOV) ahead -- for a camera 2 units up
+with a 60 degree FOV that is 1-2 units over the whole pitch range, with the
+guard band pulling the number lower still. The threshold is now 1.5, with the
+rule "edge below the camera's height above nearby surfaces" in
+supported-api. Subdivision also measures edges per axis now: the 17 x 1 x 15
+slab's 1-unit sides were being split as if they were 17 wide. True near-plane
+clipping remains the recorded follow-up (ADR-003).
+
+Also seen and not fixed here: the idle clip samples as a constant pose on
+this rig, so the capybara stands frozen between walks. Same sampler that
+bakes the walk correctly; the idle's motion may simply be under the key
+reduction tolerances.
+
+**A fourth, from the frame capture: the body walked ahead of its capsule and
+snapped back each cycle.** The avatar's Root node ("root") carries the walk's
+travel, and Unity extracts the channels the clip leaves unbaked (here XZ and
+orientation) as root motion, pinning the bone; with Apply Root Motion off
+the travel is simply dropped. The exporter samples bones raw, and "root" is
+not even a sampled bone -- the skinned skeleton starts at the pelvis, whose
+Animator-relative track therefore inherited 0.5 units of forward travel per
+cycle. The sampler now records the motion node per sample and re-expresses
+every top-level bone below it as pinned x inverse(sampled) x track, per the
+clip's Bake Into Pose settings, with "Center of Mass" references centring the
+body on its bind-pose position. That last part exposed a second defect: the
+bind pose was captured per clip from the live scene, which sampling leaves at
+the previous clip's last frame, so the turn clips were centred on the walk's
+last step. The skeleton export now captures the rest pose once and hands it
+to every clip. Pelvis Z over the walk went from -0.29..0.21 (travel) to
+-0.30..-0.28 (sway); both turn clips, authored 2.3 units down their take,
+now sit at the rest position too.
+
+## Lost to a hard reset, restored from the session's patch scripts (2026-09-09)
+
+Everything above from 2026-09-08 that had not been committed -- the banded
+texture upload and console text glow, the four capybara fixes, the VRAM
+overlay page and its bridge -- was wiped by `git reset --hard origin/main`
+when the boot-ladder commits were pulled from another machine. The build
+then failed to link: the shim assembly had been built with the new bridge
+calls and the runtime no longer defined them. The changes were re-applied
+from the patch scripts kept in the session scratchpad and re-verified the
+same way (bindgen check, shim build, EE syntax checks, exporter compile).
+The lesson is the obvious one: a fix the user has confirmed on the console
+is a fix to commit, the same day.
+
+## The emulator made accurate reproduces the console: errno was unaligned (M13, 2026-09-09)
+
+PCSX2 was set to its most faithful configuration -- every recompiler off, EE
+cache emulation on, no speed hacks, the software renderer, the console's own
+SCPH-39001 v1.60 ROM, full BIOS boot -- and the game ISO that boots in the
+default configuration stopped dead 36 ms after its entry point, with the log
+saying why: "Address Error, addr=0x5ab0e1", store and load, repeating. The
+symbol at 0x005ab0e1 is errno. ps2sdk's libkernel defines it weak in a
+.data section with byte alignment (objdump: 2**0), the linker placed it one
+byte after a bool, and libkernel's __errno() -- the accessor behind newlib's
+errno macro -- hands that odd address to every errno access in the program.
+A 4-byte access at an odd address is legal to the recompiler and an
+exception on the R5900. The probe never touches errno; the game does, in
+its first milliseconds; both launchers on the console showed nothing. The
+runtime now defines errno strong and 16-byte aligned in irx_blobs.S, which
+precedes libkernel on the link line and beats a weak definition anyway.
+The same ISO, rebuilt, boots in the accurate configuration through the
+BIOS to the title screen and into the 3D scene. The hardware result is the
+next thing to record here.
+
+The lesson is the one the plan wrote down as R7 and this project had not
+yet paid for: the emulator's default configuration is a different machine.
+The accurate configuration is slow (a quarter speed on a Ryzen 5800X) and
+worth one boot per milestone, because it is the only one that reports this
+class of bug.

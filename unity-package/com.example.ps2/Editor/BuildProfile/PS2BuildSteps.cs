@@ -771,6 +771,12 @@ namespace Ps2.Editor
             configure.Append(" -DM6_MAIN=main_game.cpp");
             configure.Append($" -DPS2_GAME_CONFIG_DIR=\"{Path.GetFullPath(gameBuild)}\"");
             configure.Append(" -DCMAKE_BUILD_TYPE=Release");
+            // Always stated, never omitted: the CMake cache remembers the
+            // last value, and a ladder build that outlived its profile
+            // toggle would be a game that takes a minute to boot for no
+            // visible reason.
+            configure.Append(ctx.Profile.bootLadder ? " -DPS2_BOOT_LADDER=ON"
+                                                    : " -DPS2_BOOT_LADDER=OFF");
 
             string output;
             int code = PS2Process.Run(ctx.Toolchain.CMakeExe, configure.ToString(),
@@ -1270,9 +1276,15 @@ namespace Ps2.Editor
             if (ctx.Profile.hostFilesystem)
                 EnsurePcsx2HostFs(pcsx2);
 
+            // A console build boots the way a console does: through the
+            // BIOS, which reads SYSTEM.CNF and the boot ELF the way the
+            // silicon will (-slowboot). A host: build is an iteration loop
+            // and skips that (-fastboot). Either flag overrides PCSX2's own
+            // Fast Boot setting, so the profile decides, not the ini.
+            string boot = ctx.Profile.hostFilesystem ? "-fastboot" : "-slowboot";
             string args = target.EndsWith(".iso", StringComparison.OrdinalIgnoreCase)
-                              ? $"-batch -fastboot -- \"{target}\""
-                              : $"-batch -fastboot -elf \"{target}\"";
+                              ? $"-batch {boot} -- \"{target}\""
+                              : $"-batch {boot} -elf \"{target}\"";
             System.Diagnostics.Process.Start(
                 new System.Diagnostics.ProcessStartInfo(pcsx2, args)
                 {

@@ -62,3 +62,25 @@ mcserv_irx_start:
     .incbin "mcserv.irx"
     .global mcserv_irx_end
 mcserv_irx_end:
+
+/* errno, aligned.
+ *
+ * ps2sdk's libkernel defines errno WEAK in errno.o, in a .data section with
+ * byte alignment (objdump: 2**0), and its __errno() -- the accessor behind
+ * newlib's errno macro -- returns that symbol's address. The linker drops a
+ * byte-aligned section wherever the previous input ended: in the game, one
+ * byte after a bool, at 0x005ab0e1. Every errno read or write was then a
+ * 4-byte access at an odd address. PCSX2's recompiler performs it anyway;
+ * its interpreter and the R5900 raise an Address Error, and the console's
+ * boot died before its first colour (verify-log, 2026-09-09). A strong,
+ * aligned definition here takes the symbol for every ELF that links the
+ * runtime, since libps2ur.a precedes libkernel.a on the link line and a
+ * strong definition beats the weak one regardless.
+ */
+    .data
+    .balign 16
+    .global errno
+    .type errno, @object
+    .size errno, 4
+errno:
+    .word 0

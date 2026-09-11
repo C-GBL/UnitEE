@@ -132,6 +132,17 @@ namespace Ps2.Editor
                         "off for a disc-only boot, which is what a console sees.",
                         MessageType.Warning);
                 }
+                Field("bootLadder");
+                if (profile.bootLadder)
+                {
+                    EditorGUILayout.HelpBox(
+                        "Boot ladder: the console paints a colour per start-up step " +
+                        "before the GS comes up (about a minute to boot), then red twice " +
+                        "at main() and orange when the GS returns. Read the sequence " +
+                        "against the table in docs/hardware-bring-up.md. Turn Host " +
+                        "Filesystem off so this is the console boot. Diagnostic only.",
+                        MessageType.Warning);
+                }
             }
 
             if (Group(9))

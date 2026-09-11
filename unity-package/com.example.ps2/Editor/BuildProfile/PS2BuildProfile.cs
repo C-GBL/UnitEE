@@ -198,6 +198,13 @@ namespace Ps2.Editor
                  "is complete either way.")]
         public bool hostFilesystem = true;
 
+        [Tooltip("Diagnostic for a console that shows nothing: the game paints " +
+                 "register-only colour marks through its start-up, before the GS is " +
+                 "up, one per step, so the step that dies is named by the last colour " +
+                 "(docs/hardware-bring-up.md, 'The boot ladder build'). Boot takes about " +
+                 "a minute. Never ship with this on.")]
+        public bool bootLadder = false;
+
         // ---- Packaging ----------------------------------------------------
 
         [Tooltip("If enabled, the Package stage writes SYSTEM.CNF and runs mkps2iso " +

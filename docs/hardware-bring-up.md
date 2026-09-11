@@ -53,6 +53,12 @@ the ones to check first when a console does something the emulator did not.
 | VRAM overcommit | May silently succeed | Writes outside the 4 MB corrupt the framebuffer or the Z buffer | Handled: the allocator refuses and the texture is reported as skipped rather than uploaded on top of something else |
 | CLUT format quirk (CSM1) | Matches | Requires the documented 8-entry swap within each 32-entry group | Handled and covered by a host test |
 
+### CPU
+
+| Item | Emulator | Hardware | State |
+|---|---|---|---|
+| Unaligned load or store | The recompiler performs a 4-byte access at an odd address as if it were legal; only the interpreter raises the exception | The R5900 raises an Address Error and the kernel's handler stops the thread: a black screen with no colour ever | **Found in the emulator, interpreter mode.** ps2sdk's libkernel defines `errno` weak in a byte-aligned section, so the linker placed it at 0x005ab0e1, and `__errno()` hands that address to every errno access. The runtime now defines `errno` strong and 16-byte aligned (irx_blobs.S). Run PCSX2 with the EE interpreter and EE cache emulation on, at least once per milestone: it is the only configuration that reports this class of bug |
+
 ### Timing and boot
 
 | Item | Emulator | Hardware | State |
@@ -152,8 +158,8 @@ the load is not the problem. The decompiled ROM loader agrees: it reads the
 ELF header and program headers, streams the load segment through a ring
 buffer, and never touches section headers or the file's size.
 
-**The boot ladder build** of the game (`-DPS2_BOOT_LADDER=ON` on the
-il2cpp-port tree) paints the stretch before boot stage 1 with the probe's
+**The boot ladder build** of the game (Boot Ladder in the PS2 build
+profile, or `-DPS2_BOOT_LADDER=ON` on the il2cpp-port tree by hand) paints the stretch before boot stage 1 with the probe's
 register-only trick, so the place that hangs or dies is named by the colour
 it stops on. Linker wraps put marks around the two calls crt0 makes before
 the constructors, and count the mutexes, TLS keys and destructor
