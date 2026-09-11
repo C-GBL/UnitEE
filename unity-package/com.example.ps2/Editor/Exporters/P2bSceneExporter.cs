@@ -50,7 +50,11 @@ namespace Ps2.Editor
         // the M9 acceptance scene supplies a procedurally built character.
         internal sealed class SkinPayload
         {
-            public byte[] Skeleton;
+            // One SKEL per animator (character). A lone character is one
+            // entry; two instances of the same rig are two skeletons, so
+            // their bones never share a name and the name-keyed runtime
+            // binding cannot cross-drive them (verify-log 2026-09-11).
+            public List<byte[]> Skeletons = new List<byte[]>();
             public List<byte[]> Clips = new List<byte[]>();
             public byte[] Controller;
             // One SKMS section per exported renderer. A character imported
@@ -551,7 +555,8 @@ namespace Ps2.Editor
             // meshes (each validates against the previous).
             if (PendingSkin != null)
             {
-                writer.AddSection(P2bWriter.SectionSkeleton, PendingSkin.Skeleton);
+                foreach (byte[] skel in PendingSkin.Skeletons)
+                    writer.AddSection(P2bWriter.SectionSkeleton, skel);
                 foreach (byte[] clip in PendingSkin.Clips)
                 {
                     writer.AddSection(P2bWriter.SectionClip, clip);

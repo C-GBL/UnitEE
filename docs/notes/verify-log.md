@@ -1495,3 +1495,40 @@ blob's soft edge around it, and the second capybara small in the distance.
 The first capture was of the wrong window: CopyFromScreen takes whatever
 is in front, and a chat client was; PrintWindow with PW_RENDERFULLCONTENT
 reads the window's own surface and does not need to bring it forward.
+
+## Two capybaras tore apart: one skeleton for two characters (2026-09-11)
+
+A user's scene with two Herobara instances -- the player and a pickup
+target -- drew both skinned meshes as exploded fans of shards on the
+console. They blamed the PS2Shadow they had just added. Four builds ruled
+that out: removing the shadow did not help, and a build of the same scene
+from the package as it stood BEFORE this week's lighting/shadow milestone
+exploded identically. Setting the second capybara's scale from 0.4 to 1.0
+did not help either. So it was neither the shadow nor M14 nor scale.
+
+The exported skeleton told it plainly: 80 bones, but only 40 distinct name
+hashes -- every capybara bone name appeared twice. The rig baker unions
+every skinned renderer's bones into ONE skeleton, keyed by Transform. Two
+instances of one rig are two sets of Transforms with the same names, so the
+union held both, 80 bones, 40 names doubled. The runtime binds animation
+and entities to bones BY NAME (deviation 24), so with each name appearing
+twice the two characters cross-drove each other's bones and both meshes
+tore apart. The exporter even warned "two bones named 'pelvis'" and "a
+second animated character shares the first's skeleton reference space" --
+the warnings were right and the export was wrong anyway.
+
+The runtime already supported the fix: it reads several SKEL sections
+(kMaxSkeletons = 2), each SKMS names its skeleton, and each animator binds
+to its renderer's skeleton. Only the exporter merged them. The rig baker
+now detects two or more Animators driving skinned renderers and takes a
+separate path: each character builds its OWN skeleton from its own bones in
+its own reference space, and its own skinned meshes with that skeleton's
+index; the controller and clips are built once and shared, since the
+characters are the same rig with the same bone order and clip tracks are
+keyed by bone index. A lone character takes the original path unchanged and
+exports byte-for-byte as before. Verified: the same scene now exports two
+40-bone skeletons, zero duplicated names, the ten skinned meshes split
+five-and-five onto skeletons 0 and 1, and both capybaras render as solid
+meshes in PCSX2 with the shadow intact. Cost: two characters of one rig now
+cost two skeletons and two mesh sets rather than one; kMaxSkinnedMeshes (24)
+and the per-mesh batch ceiling (256) both hold.

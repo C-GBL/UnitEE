@@ -75,6 +75,10 @@ bool World::load(const io::P2bFile& file)
     m_font_count = 0;
     m_camera = Camera{};
     m_light = DirectionalLight{};
+    // M14 tables: same rule as the animation tables above.
+    m_light_count = 0;
+    m_shadow_count = 0;
+    m_lod_count = 0;
     m_error = "";
     for (uint32_t i = 0; i < kMaxEntities; ++i) {
         m_generation[i] = 1;

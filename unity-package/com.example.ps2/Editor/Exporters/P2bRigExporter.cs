@@ -154,6 +154,26 @@ namespace Ps2.Editor
                     "renaming a bone after export breaks its binding.");
             }
 
+            // Two or more distinct Animators each driving skinned renderers
+            // are separate characters: each gets its OWN skeleton, its own
+            // skinned meshes in its own space, and its own animator; the
+            // controller and clips are shared (same rig, same bone order).
+            // The single-character path below is left exactly as it was, so
+            // a lone character exports byte-for-byte as before.
+            if (usable.Count > 0)
+            {
+                var distinctAnimators = new HashSet<Transform>();
+                foreach (SkinnedMeshRenderer smr in usable)
+                {
+                    Animator a = smr.GetComponentInParent<Animator>();
+                    distinctAnimators.Add(a != null ? a.transform : smr.transform.root);
+                }
+                if (distinctAnimators.Count > 1)
+                {
+                    return BakeMultiCharacter(usable, warnings);
+                }
+            }
+
             Animator animator = usable.Count > 0
                 ? usable[0].GetComponentInParent<Animator>()
                 : hierarchyAnimator;
@@ -244,7 +264,7 @@ namespace Ps2.Editor
 
             P2bAnimExporter.SkeletonExport skeleton = P2bAnimExporter.ExportSkeleton(
                 unionBones.ToArray(), unionBind.ToArray(), reference);
-            payload.Skeleton = skeleton.Bytes;
+            payload.Skeletons.Add(skeleton.Bytes);
             if (usable.Count > 0)
             {
                 BuildDiagnosis(payload, usable, reference);
@@ -404,6 +424,201 @@ namespace Ps2.Editor
             }
             return payload;
         }
+
+        // Several characters, each its own skeleton (verify-log 2026-09-11).
+        // Renderers are grouped by their Animator; every group builds a
+        // skeleton from ITS OWN bones relative to ITS OWN animator, and
+        // exports ITS OWN skinned meshes to that space with that skeleton
+        // index -- so nothing about one character's transform, scale or
+        // pose reaches another's. The controller and its clips are built
+        // once, from the first group, and shared: the characters are the
+        // same rig, so every skeleton has the same bones in the same order,
+        // and a clip's per-bone-INDEX tracks apply correctly to each.
+        private static P2bSceneExporter.SkinPayload BakeMultiCharacter(
+            List<SkinnedMeshRenderer> usable, List<string> warnings)
+        {
+            var groupsInOrder = new List<Transform>();
+            var byGroup = new Dictionary<Transform, List<SkinnedMeshRenderer>>();
+            foreach (SkinnedMeshRenderer smr in usable)
+            {
+                Animator owner = smr.GetComponentInParent<Animator>();
+                Transform key = owner != null ? owner.transform : smr.transform.root;
+                if (!byGroup.TryGetValue(key, out List<SkinnedMeshRenderer> list))
+                {
+                    list = new List<SkinnedMeshRenderer>();
+                    byGroup[key] = list;
+                    groupsInOrder.Add(key);
+                }
+                list.Add(smr);
+            }
+
+            var payload = new P2bSceneExporter.SkinPayload();
+            P2bAnimExporter.SkeletonExport firstSkeleton = null;
+            GameObject firstClipRoot = null;
+            Animator firstController = null;
+            int firstBoneCount = -1;
+
+            for (int g = 0; g < groupsInOrder.Count; g++)
+            {
+                Transform key = groupsInOrder[g];
+                Animator groupAnimator = key.GetComponent<Animator>();
+                Transform reference = groupAnimator != null ? groupAnimator.transform : key;
+                List<SkinnedMeshRenderer> rends = byGroup[key];
+
+                // This group's skeleton, from this group's bones, relative to
+                // this group's reference -- the same union as the single
+                // character path, but scoped to one animator.
+                var unionBones = new List<Transform>();
+                var unionBind = new List<Matrix4x4>();
+                var boneAt = new Dictionary<Transform, int>();
+                foreach (SkinnedMeshRenderer smr in rends)
+                {
+                    Transform[] bones = smr.bones;
+                    for (int i = 0; i < bones.Length; i++)
+                    {
+                        Matrix4x4 bind = bones[i].worldToLocalMatrix *
+                                         reference.localToWorldMatrix;
+                        if (boneAt.TryGetValue(bones[i], out int at))
+                        {
+                            if (!BindposesAgree(unionBind[at], bind))
+                                warnings.Add(
+                                    $"{PathOf(smr.gameObject)}: bone '{bones[i].name}' has a " +
+                                    "different bind pose than on an earlier renderer of the " +
+                                    "same character; this mesh may be skinned off its axis.");
+                            continue;
+                        }
+                        boneAt[bones[i]] = unionBones.Count;
+                        unionBones.Add(bones[i]);
+                        unionBind.Add(bind);
+                    }
+                }
+                if (unionBones.Count > MaxBones)
+                {
+                    warnings.Add(
+                        $"'{PathOf(key.gameObject)}': the character needs {unionBones.Count} " +
+                        $"bones, over the runtime's limit of {MaxBones}. It is not exported.");
+                    return null;
+                }
+
+                P2bAnimExporter.SkeletonExport skeleton = P2bAnimExporter.ExportSkeleton(
+                    unionBones.ToArray(), unionBind.ToArray(), reference);
+                payload.Skeletons.Add(skeleton.Bytes);
+
+                if (g == 0)
+                {
+                    firstSkeleton = skeleton;
+                    firstController = groupAnimator;
+                    firstClipRoot = groupAnimator != null ? groupAnimator.gameObject
+                                                          : rends[0].gameObject;
+                    firstBoneCount = unionBones.Count;
+                    BuildDiagnosis(payload, rends, reference);
+                }
+                else if (unionBones.Count != firstBoneCount)
+                {
+                    warnings.Add(
+                        $"'{PathOf(key.gameObject)}': this character has {unionBones.Count} " +
+                        $"bones but the first has {firstBoneCount}. They share one controller, " +
+                        "so its clips may drive the wrong bones here; give each its own rig " +
+                        "or make them identical imports.");
+                }
+
+                // This group's skinned meshes, deduped WITHIN the group, in
+                // this group's space and skeleton index.
+                var meshAt = new Dictionary<(Mesh, int), int>();
+                foreach (SkinnedMeshRenderer smr in rends)
+                {
+                    Mesh mesh = smr.sharedMesh;
+                    Material[] mats = smr.sharedMaterials;
+                    Matrix4x4 toReference = reference.worldToLocalMatrix *
+                                            smr.transform.localToWorldMatrix;
+                    var drawn = new List<int>();
+                    int slots = Mathf.Max(1, mesh.subMeshCount);
+                    for (int s = 0; s < slots; s++)
+                    {
+                        if (mesh.subMeshCount > 0 && mesh.GetSubMesh(s).indexCount == 0)
+                            continue;
+                        if (!meshAt.TryGetValue((mesh, s), out int at))
+                        {
+                            Material mat = null;
+                            if (mats.Length > 0)
+                            {
+                                mat = s < mats.Length ? mats[s] : mats[mats.Length - 1];
+                                if (mat == null) mat = mats[0];
+                            }
+                            Texture2D tex = mat != null ? mat.mainTexture as Texture2D : null;
+                            bool textured = tex != null && mesh.uv != null &&
+                                            mesh.uv.Length == mesh.vertexCount;
+                            at = payload.SkinnedMeshes.Count;
+                            payload.SkinnedMeshes.Add(P2bAnimExporter.ExportSkinnedMesh(
+                                mesh, 0, FallbackColour(mat),
+                                skeleton.Ordered, skeleton.Index, smr.bones, g,
+                                textured, toReference, toReference,
+                                mesh.subMeshCount > 1 ? s : -1,
+                                /*preferVertexColours=*/ mat == null));
+                            payload.MeshTextures.Add(textured ? tex : null);
+                            meshAt[(mesh, s)] = at;
+                        }
+                        drawn.Add(at);
+                    }
+                    if (drawn.Count == 0)
+                    {
+                        warnings.Add(
+                            $"{PathOf(smr.gameObject)}: mesh '{mesh.name}' has no triangles; " +
+                            "nothing exported for it.");
+                        continue;
+                    }
+                    payload.RendererMesh[smr] = drawn[0];
+                    payload.RendererMeshes[smr] = drawn;
+                    payload.RendererGroup[smr] = g;
+                }
+                payload.GroupAnimators.Add(reference);
+            }
+
+            // The controller and clips, once, from the first character.
+            if (payload.SkinnedMeshes.Count > kMaxMultiSkinnedMeshes)
+            {
+                warnings.Add(
+                    $"{payload.SkinnedMeshes.Count} skinned meshes across " +
+                    $"{groupsInOrder.Count} characters, over the runtime's {kMaxMultiSkinnedMeshes}; " +
+                    "the extra ones will not load. Use fewer characters or fewer materials.");
+            }
+            var controller = firstController != null
+                ? firstController.runtimeAnimatorController as AnimatorController : null;
+            var states = new List<P2bAnimExporter.StateExport>();
+            var transitions = new List<P2bAnimExporter.TransitionExport>();
+            var trees = new List<P2bAnimExporter.BlendTreeExport>();
+            var parameters = new List<string>();
+            var stateIndex = new Dictionary<AnimatorState, int>();
+            var clipLengths = new List<float>();
+            if (controller != null)
+            {
+                ReadController(controller, firstClipRoot, firstSkeleton, payload, states,
+                               transitions, parameters, stateIndex, clipLengths,
+                               trees, warnings);
+            }
+            if (states.Count == 0)
+            {
+                if (payload.Clips.Count == 0)
+                {
+                    payload.Clips.Add(P2bAnimExporter.ExportClip(
+                        StaticPoseClip(), firstClipRoot, firstSkeleton.Ordered,
+                        firstSkeleton.Index, firstSkeleton.RestRef, SampleRate, false,
+                        PositionTolerance, RotationDotTolerance, ScaleTolerance, null,
+                        firstSkeleton.RestPos, firstSkeleton.RestRot));
+                    clipLengths.Add(0.0f);
+                }
+                states.Add(new P2bAnimExporter.StateExport
+                {
+                    Name = "Default", Clip = 0, Speed = 1.0f, Loop = true,
+                });
+            }
+            payload.Controller = P2bAnimExporter.ExportController(
+                states.ToArray(), transitions.ToArray(), parameters.ToArray(), trees);
+            return payload;
+        }
+
+        // The runtime's kMaxSkinnedRenderers ceiling on distinct SKMS.
+        private const int kMaxMultiSkinnedMeshes = 24;
 
         // Measurements, not inferences: Unity's own matrices for the rig
         // as it stands, plus one vertex pushed through BOTH skinning

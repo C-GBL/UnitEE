@@ -84,7 +84,7 @@ namespace Ps2.Editor
 
             var payload = new P2bSceneExporter.SkinPayload
             {
-                Skeleton = skeleton.Bytes,
+                Skeletons = new System.Collections.Generic.List<byte[]> { skeleton.Bytes },
                 Controller = P2bAnimExporter.ExportController(
                     new[]
                     {
