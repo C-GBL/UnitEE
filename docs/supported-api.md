@@ -22,7 +22,7 @@ presumed to be the explicit "not supported" list. TODO(spec missing: section
 | Physics | `Physics.Raycast`/`SphereCast`/`OverlapSphereNonAlloc` against a baked BVH and primitives; `Rigidbody` (semi-implicit Euler); `BoxCollider`, `SphereCollider`, `CapsuleCollider`, `MeshCollider` (static, baked to world space offline); `CharacterController` (swept capsule, step + slope); trigger + collision callbacks (deviations 16-21) |
 | Audio | `AudioSource` (2D + simple 3D pan/attenuation), `AudioClip` (streamed music, resident SFX), `AudioListener` |
 | Input | `Input.GetAxis`/`GetAxisRaw`/`GetButton*` over Unity's default axis and button names, mapped to DualShock 2; `PS2Input` for per-button access, analog pressure, rumble and port 2 (deviations 11-12) |
-| UI | An immediate-mode-backed subset of uGUI: `Canvas` (screen space overlay), `Image`, `RawImage`, `Text` (bitmap fonts baked offline), `Button`, `Slider` |
+| UI | An immediate-mode-backed subset of uGUI: `Canvas` (screen space overlay), `Image`, `RawImage`, `Text` (bitmap fonts baked offline), `Button`, `Slider`. Console-only extras like `PS2Input`: `PS2TextGlow` draws a `Text` again in an additive ring under itself, the era's bloom, for boot-style wordmarks; `PS2DebugOverlay` shows the runtime's on-screen diagnostics (frame timing, profiler zones, memory, VRAM allocations), the pages Select cycles through (deviation 38) |
 | Persistence | `PlayerPrefs`-equivalent on memory card, plus a save API with icon support |
 | Scene management | `SceneManager.LoadScene`/`LoadSceneAsync` by name, `AsyncOperation` (yieldable from a coroutine, with `progress` and `allowSceneActivation`), additive loading (deviations 13-14) |
 | Resources | An `Addressables`-like async load from a build-ordered disc layout |
@@ -134,7 +134,12 @@ These are listed prominently here and asserted in the conformance suite
     per event.** A 4 MB managed heap with a 2 ms GC budget cannot afford one
     allocation per contact per frame. Do not cache it -- copy what you need.
     `OnTrigger*` receives a `Collision` too, not a `Collider`, since a
-    Collider here is an index rather than a component.
+    Collider here is an index rather than a component. Contacts, trigger
+    or not, are reported only for pairs where at least one side has a
+    `Rigidbody`; a `CharacterController` has none, so a trigger volume
+    never fires against the player -- test the player's capsule by
+    distance instead (the demo's Pickupbara does exactly that, from the
+    SphereCollider's radius and centre).
 21. **Physics is deterministic per build, not across builds.** The step is
     fixed, iteration order is array order, and there is no `double` -- so
     the same inputs give the same result every run of the same binary. The
@@ -247,10 +252,13 @@ These are listed prominently here and asserted in the conformance suite
     the surface ignores scene lighting (bake lighting into the texture
     or vertex colours, the PS2-era norm). An untextured cutout keeps
     vertex lighting, as before. Large triangles are subdivided at export
-    (max edge ~6 world units) because the VU1 pipeline REJECTS
-    near-plane-crossing triangles rather than clipping them; meshes over
-    ~1,600 triangles after subdivision are refused at load and warned
-    about at export.
+    (max edge 1.5 world units) because the VU1 pipeline REJECTS
+    near-plane-crossing triangles rather than clipping them: a rejected
+    floor triangle leaves a hole reaching up to one edge length in front
+    of the camera, so the edge has to stay below the camera's height
+    above nearby surfaces (6 units put a hole in the bottom of every
+    frame of a third-person view). A subdivided mesh over ~1,600
+    triangles is split into several sections, each culled on its own.
 
 34. **CharacterController configures before first use.** The native
     capsule is created on the first `Move()`/`isGrounded`, taking the
@@ -273,3 +281,40 @@ These are listed prominently here and asserted in the conformance suite
     fades out its dominant child only. Layers beyond the first are still
     not baked (the second layer in stock controllers is usually facial
     animation, which needs blendshapes this runtime does not model).
+
+36. **A `SkinnedMeshRenderer` exports one section per material slot,
+    coloured by the material.** Each submesh becomes its own skinned
+    mesh with that slot's `color` and main texture, so a body mesh whose
+    further slots are teeth and lashes draws them in their own colours
+    (they used to take slot 0's). Renderers with a material take the
+    material colour, as Standard-family shaders do; mesh vertex colours
+    paint a skinned mesh only when it has no material at all. Slot rule
+    is Unity's: fewer materials than submeshes means the last material
+    repeats. Shader Graph and URP materials whose texture is not the
+    `mainTexture` (`_MainTex`, or `[MainTexture]`) export untextured in
+    the material colour.
+
+37. **Root motion is stripped from the pose, never applied to the
+    entity.** For a Generic rig, the channels of the avatar's Root node
+    (or the importer's Motion node) that the clip's import settings leave
+    unbaked -- Root Transform Position (XZ), Position (Y), Rotation --
+    are pinned at export, as Unity pins them in the pose: "Original"
+    pins at the clip's first frame, otherwise at the clip's average
+    (standing in for Unity's centre of mass). A walk clip that travels
+    therefore animates in place, as it does in Unity with Apply Root
+    Motion off. With it ON, Unity would move the transform by that
+    travel; the console does not, and the build warns. Move the
+    character from a script instead. Loop pose blending (`loopBlend`)
+    is not modelled: a clip whose last frame differs from its first pops
+    at the loop.
+
+38. **`PS2DebugOverlay` is the on-screen diagnostics switch.** The runtime
+    draws its own profiler overlay in its own font, independent of the
+    scene's UI, with pages for frame timing, profiler zones, memory
+    regions and (M13) VRAM: every allocation by name with page range and
+    size, the CLUT count, the largest free run and a 64-character
+    occupancy map. Select on the pad cycles Off, Frame, Zones, Memory,
+    Vram; `PS2DebugOverlay.Show(PS2DebugPage.Vram)` from a script picks a
+    page directly, so a scene can boot into it. The page is runtime
+    state and survives scene loads. Nothing of this exists in the Editor;
+    a script that calls it there should guard with `UNITY_PS2`.

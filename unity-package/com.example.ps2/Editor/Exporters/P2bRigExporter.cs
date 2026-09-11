@@ -293,7 +293,8 @@ namespace Ps2.Editor
                         StaticPoseClip(), clipRoot, skeleton.Ordered,
                         skeleton.Index, skeleton.RestRef, SampleRate, false,
                         PositionTolerance, RotationDotTolerance,
-                        ScaleTolerance));
+                        ScaleTolerance, null, skeleton.RestPos,
+                        skeleton.RestRot));
                     clipLengths.Add(0.0f);
                     if (controller != null)
                     {
@@ -315,37 +316,69 @@ namespace Ps2.Editor
                 states.ToArray(), transitions.ToArray(), parameters.ToArray(),
                 trees);
 
-            // One SKMS per distinct mesh; renderers sharing a mesh share the
-            // entry, so a crowd of the same character costs one mesh.
-            var meshAt = new Dictionary<Mesh, int>();
+            // One SKMS per distinct (mesh, submesh). A renderer's submeshes
+            // are its material slots -- a body mesh carries its teeth and
+            // lashes as further slots -- so each gets its own section with
+            // its own colour and texture; exporting mesh.triangles under
+            // slot 0 drew every slot in the body's colour. Renderers sharing
+            // a mesh share the entries, so a crowd of one character costs
+            // one set of meshes.
+            var meshAt = new Dictionary<(Mesh, int), int>();
             var groupAt = new Dictionary<Transform, int>();
             foreach (SkinnedMeshRenderer smr in usable)
             {
-                int at;
-                if (!meshAt.TryGetValue(smr.sharedMesh, out at))
+                Mesh mesh = smr.sharedMesh;
+                Material[] mats = smr.sharedMaterials;
+                // Bakes the renderer's node transform into the vertices:
+                // every mesh lands in reference space, matching the
+                // reference-relative binds above.
+                Matrix4x4 toReference = reference.worldToLocalMatrix *
+                                        smr.transform.localToWorldMatrix;
+                var drawn = new List<int>();
+                int slots = Mathf.Max(1, mesh.subMeshCount);
+                for (int s = 0; s < slots; s++)
                 {
-                    // The texture is the renderer's main texture; without one
-                    // (or without UVs) the mesh exports in the 5-qword
-                    // vertex-coloured format the M9 rigs use.
-                    Texture2D tex = smr.sharedMaterial != null
-                        ? smr.sharedMaterial.mainTexture as Texture2D : null;
-                    bool textured = tex != null && smr.sharedMesh.uv != null &&
-                                    smr.sharedMesh.uv.Length ==
-                                        smr.sharedMesh.vertexCount;
-                    at = payload.SkinnedMeshes.Count;
-                    // Bakes the renderer's node transform into the vertices:
-                    // every mesh lands in reference space, matching the
-                    // reference-relative binds above.
-                    Matrix4x4 toReference = reference.worldToLocalMatrix *
-                                            smr.transform.localToWorldMatrix;
-                    payload.SkinnedMeshes.Add(P2bAnimExporter.ExportSkinnedMesh(
-                        smr.sharedMesh, 0, FallbackColour(smr),
-                        skeleton.Ordered, skeleton.Index, smr.bones, 0,
-                        textured, toReference, toReference));
-                    payload.MeshTextures.Add(textured ? tex : null);
-                    meshAt[smr.sharedMesh] = at;
+                    if (mesh.subMeshCount > 0 && mesh.GetSubMesh(s).indexCount == 0)
+                        continue; // the runtime refuses a zero-batch mesh
+                    int at;
+                    if (!meshAt.TryGetValue((mesh, s), out at))
+                    {
+                        // Unity's slot rule: material s, or the last one
+                        // when the renderer has fewer materials than slots.
+                        Material mat = null;
+                        if (mats.Length > 0)
+                        {
+                            mat = s < mats.Length ? mats[s] : mats[mats.Length - 1];
+                            if (mat == null) mat = mats[0];
+                        }
+                        // The texture is the slot's main texture; without
+                        // one (or without UVs) the mesh exports in the
+                        // 5-qword vertex-coloured format the M9 rigs use.
+                        Texture2D tex = mat != null
+                            ? mat.mainTexture as Texture2D : null;
+                        bool textured = tex != null && mesh.uv != null &&
+                                        mesh.uv.Length == mesh.vertexCount;
+                        at = payload.SkinnedMeshes.Count;
+                        payload.SkinnedMeshes.Add(P2bAnimExporter.ExportSkinnedMesh(
+                            mesh, 0, FallbackColour(mat),
+                            skeleton.Ordered, skeleton.Index, smr.bones, 0,
+                            textured, toReference, toReference,
+                            mesh.subMeshCount > 1 ? s : -1,
+                            /*preferVertexColours=*/ mat == null));
+                        payload.MeshTextures.Add(textured ? tex : null);
+                        meshAt[(mesh, s)] = at;
+                    }
+                    drawn.Add(at);
                 }
-                payload.RendererMesh[smr] = at;
+                if (drawn.Count == 0)
+                {
+                    warnings.Add(
+                        $"{PathOf(smr.gameObject)}: mesh '{mesh.name}' has no " +
+                        "triangles in any submesh, so nothing is exported for it.");
+                    continue;
+                }
+                payload.RendererMesh[smr] = drawn[0];
+                payload.RendererMeshes[smr] = drawn;
 
                 // Group by the Animator that drives this renderer -- the same
                 // question Unity answers with GetComponentInParent. Without an
@@ -575,7 +608,8 @@ namespace Ps2.Editor
                         clip, clipRoot, skeleton.Ordered, skeleton.Index,
                         skeleton.RestRef, SampleRate, clip.isLooping,
                         PositionTolerance, RotationDotTolerance,
-                        ScaleTolerance, warnings));
+                        ScaleTolerance, warnings, skeleton.RestPos,
+                        skeleton.RestRot));
                     clipLengths.Add(clip.length);
                     clipIndex.Add(clip, ci);
                 }
@@ -830,7 +864,8 @@ namespace Ps2.Editor
                         clip, clipRoot, skeleton.Ordered, skeleton.Index,
                         skeleton.RestRef, SampleRate, true,
                         PositionTolerance, RotationDotTolerance,
-                        ScaleTolerance, warnings));
+                        ScaleTolerance, warnings, skeleton.RestPos,
+                        skeleton.RestRot));
                     clipLengths.Add(clip.length);
                     clipIndex.Add(clip, ci);
                 }
@@ -897,9 +932,8 @@ namespace Ps2.Editor
             return clip;
         }
 
-        private static Color32 FallbackColour(SkinnedMeshRenderer renderer)
+        private static Color32 FallbackColour(Material material)
         {
-            Material material = renderer.sharedMaterial;
             return material != null ? (Color32)material.color
                                     : new Color32(255, 255, 255, 255);
         }

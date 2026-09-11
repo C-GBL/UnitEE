@@ -45,6 +45,14 @@ namespace Ps2.Editor
             // the rig, and raw locals silently drop them, which put a whole
             // character behind the near plane (verify-log M12.5).
             public Transform[] RestRef;
+            // The rest pose in RestRef space, captured ONCE from the scene
+            // (which must be posed at the bind pose when the rig exports).
+            // Clip export takes its bind reference from here: sampling
+            // leaves the scene transforms at the last sampled frame, so a
+            // capture made per clip saw the PREVIOUS clip's final pose --
+            // a turn clip centred on the walk's last step, 2 units off.
+            public Vector3[] RestPos;
+            public Quaternion[] RestRot;
         }
 
         // Position/rotation/scale out of a TRS matrix. Exact for the
@@ -100,6 +108,10 @@ namespace Ps2.Editor
             }
 
             var restRef = new Transform[ordered.Count];
+
+            var restPos = new Vector3[ordered.Count];
+
+            var restRot = new Quaternion[ordered.Count];
             var b = new ByteBuffer();
             b.U32((uint)ordered.Count);
             b.U32(0);
@@ -129,6 +141,8 @@ namespace Ps2.Editor
                     : bone.localToWorldMatrix;
                 Decompose(rel, out Vector3 rp, out Quaternion rr,
                           out Vector3 rs);
+                restPos[i] = rp;
+                restRot[i] = rr;
                 b.F32(rp.x);
                 b.F32(rp.y);
                 b.F32(rp.z);
@@ -146,6 +160,8 @@ namespace Ps2.Editor
                 Ordered = ordered.ToArray(),
                 Index = index,
                 RestRef = restRef,
+                RestPos = restPos,
+                RestRot = restRot,
             };
         }
 
@@ -179,7 +195,9 @@ namespace Ps2.Editor
                                         float positionTolerance,
                                         float rotationDotTolerance,
                                         float scaleTolerance,
-                                        List<string> warnings = null)
+                                        List<string> warnings = null,
+                                        Vector3[] restPos = null,
+                                        Quaternion[] restRot = null)
         {
             int sampleCount = Mathf.Max(2, Mathf.RoundToInt(clip.length * sampleRate) + 1);
             // An active Animation window / Timeline preview (AnimationMode)
@@ -203,13 +221,27 @@ namespace Ps2.Editor
             // rig exporter requires it); captured before sampling moves
             // anything, it is the reference the partial-freeze guard below
             // compares against.
+            // Preferably the skeleton's own capture (see SkeletonExport):
+            // by the second clip the scene is posed at the previous clip's
+            // last sample, not the bind pose.
             var bindRot = new Quaternion[ordered.Length];
+            var bindPos = new Vector3[ordered.Length];
             for (int i = 0; i < ordered.Length; i++)
             {
+                if (restPos != null && restRot != null &&
+                    i < restPos.Length && i < restRot.Length)
+                {
+                    bindPos[i] = restPos[i];
+                    bindRot[i] = restRot[i];
+                    continue;
+                }
                 Transform refT0 = restRef != null ? restRef[i] : null;
                 bindRot[i] = refT0 != null
                     ? Quaternion.Inverse(refT0.rotation) * ordered[i].rotation
                     : ordered[i].localRotation;
+                bindPos[i] = refT0 != null
+                    ? refT0.InverseTransformPoint(ordered[i].position)
+                    : ordered[i].localPosition;
             }
             var tracks = new SampledTrack[ordered.Length];
             for (int i = 0; i < ordered.Length; i++)
@@ -254,8 +286,18 @@ namespace Ps2.Editor
                 // and makes sampling immune to session history.
                 animator.Rebind();
             }
+            // The motion node is usually NOT a sampled bone (the skinned
+            // skeleton starts at the pelvis; "root" sits above it), so its
+            // transform is recorded alongside the bones and its unbaked
+            // channels are taken back out of every top-level bone below it
+            // afterwards (StripRootMotion).
+            Transform motionNode = FindMotionNode(root, animator, ordered);
+            var nodePos = new Vector3[sampleCount];
+            var nodeRot = new Quaternion[sampleCount];
+            var nodeScale = new Vector3[sampleCount];
             SampleTracks(clip, root, ordered, restRef, animator, viaGraph,
-                         sampleCount, tracks);
+                         sampleCount, tracks, motionNode, nodePos, nodeRot,
+                         nodeScale);
 
             // The partial-freeze signature: most rotation tracks pinned at
             // the bind pose for the whole clip. Rebind alone has been seen
@@ -312,7 +354,8 @@ namespace Ps2.Editor
                     {
                         animator.Rebind();
                         SampleTracks(clip, root, ordered, restRef, animator,
-                                     viaGraph, sampleCount, tracks);
+                                     viaGraph, sampleCount, tracks, motionNode,
+                                     nodePos, nodeRot, nodeScale);
                         frozen = CountRotationTracksAtBind(tracks, bindRot,
                                                            sampleCount) * 100 >=
                                  ordered.Length * FreezeThresholdPercent;
@@ -328,6 +371,10 @@ namespace Ps2.Editor
             {
                 animator.cullingMode = wasCulling;
             }
+
+            StripRootMotion(clip, root, animator, motionNode, ordered, restRef,
+                            tracks, bindPos, nodePos, nodeRot, nodeScale,
+                            sampleCount, warnings);
 
             // A clip whose every sampled track is a constant produced a
             // character frozen in one pose. That is legitimate for a
@@ -457,11 +504,256 @@ namespace Ps2.Editor
         // live entirely inside it, so a caller that has just repaired the
         // Editor session (reimport, rebind) gets a genuinely fresh pass, not
         // a re-evaluation through stale playable state.
+        // Unity does not play a clip's root motion through the pose. For a
+        // Generic rig the avatar's Root node (or the importer's Motion node)
+        // carries the character's travel; the Animator EXTRACTS the channels
+        // the clip's import settings leave unbaked -- Root Transform
+        // Position (XZ) and (Y), Root Transform Rotation -- and either moves
+        // the transform by them (Apply Root Motion) or drops them. Either
+        // way the bone is pinned. This sampler reads the bone raw, so a walk
+        // whose root travels forward walked ahead of its own capsule and
+        // snapped back at the loop (the demo capybara). Strip what Unity
+        // strips: the unbaked channels of the motion node, pinned at the
+        // clip's reference ("Original" = the first sample; otherwise the
+        // clip's average, standing in for Unity's centre of mass).
+        //
+        // Humanoid rigs derive root motion from the body's centre of mass
+        // rather than a node; they are sampled through the Animator, which
+        // already applies these settings, so nothing is done for them.
+        private static void StripRootMotion(AnimationClip clip, GameObject root,
+                                            Animator animator,
+                                            Transform motionNode,
+                                            Transform[] ordered,
+                                            Transform[] restRef,
+                                            SampledTrack[] tracks,
+                                            Vector3[] bindPos,
+                                            Vector3[] nodePos,
+                                            Quaternion[] nodeRot,
+                                            Vector3[] nodeScale,
+                                            int sampleCount,
+                                            List<string> warnings)
+        {
+            if (motionNode == null || sampleCount < 2)
+            {
+                return;
+            }
+            UnityEditor.AnimationClipSettings s =
+                UnityEditor.AnimationUtility.GetAnimationClipSettings(clip);
+            bool stripXZ = !s.loopBlendPositionXZ;
+            bool stripY = !s.loopBlendPositionY;
+            bool stripYaw = !s.loopBlendOrientation;
+            if (!stripXZ && !stripY && !stripYaw)
+            {
+                return; // everything baked into the pose: Unity plays it too
+            }
+
+            // The node's reference: "Original" pins at the first sample,
+            // otherwise at the clip's average (for Unity's centre of mass).
+            Vector3 mean = Vector3.zero;
+            for (int k = 0; k < sampleCount; k++) mean += nodePos[k];
+            mean /= sampleCount;
+            float refX = s.keepOriginalPositionXZ ? nodePos[0].x : mean.x;
+            float refZ = s.keepOriginalPositionXZ ? nodePos[0].z : mean.z;
+            float refY = s.keepOriginalPositionY ? nodePos[0].y : mean.y;
+            float refYaw = 0f;
+            if (stripYaw)
+            {
+                if (s.keepOriginalOrientation)
+                {
+                    refYaw = Yaw(nodeRot[0]);
+                }
+                else
+                {
+                    float sx = 0f, sy = 0f;
+                    for (int k = 0; k < sampleCount; k++)
+                    {
+                        float y = Yaw(nodeRot[k]) * Mathf.Deg2Rad;
+                        sx += Mathf.Cos(y);
+                        sy += Mathf.Sin(y);
+                    }
+                    refYaw = Mathf.Atan2(sy, sx) * Mathf.Rad2Deg;
+                }
+            }
+
+            // Per sample: the node as sampled, and the node with the
+            // unbaked channels pinned. Every top-level track below the node
+            // (its runtime parent is the Animator) is re-expressed as
+            // pinned x inverse(sampled) x track, which leaves the bone's
+            // own motion relative to the node untouched and removes only
+            // what Unity would have extracted.
+            var affected = new List<int>();
+            for (int i = 0; i < ordered.Length; i++)
+            {
+                bool topLevel = restRef == null || restRef[i] == null ||
+                                restRef[i] == root.transform;
+                if (topLevel && ordered[i] != null &&
+                    (ordered[i] == motionNode ||
+                     ordered[i].IsChildOf(motionNode)))
+                {
+                    affected.Add(i);
+                }
+            }
+            if (affected.Count == 0)
+            {
+                return;
+            }
+
+            float travelled = 0f;
+            for (int k = 0; k < sampleCount; k++)
+            {
+                Vector3 p = nodePos[k];
+                Quaternion r = nodeRot[k];
+                Matrix4x4 sampled = Matrix4x4.TRS(p, r, nodeScale[k]);
+                if (stripXZ)
+                {
+                    travelled = Mathf.Max(travelled,
+                        Mathf.Abs(p.x - refX) + Mathf.Abs(p.z - refZ));
+                    p.x = refX;
+                    p.z = refZ;
+                }
+                if (stripY) p.y = refY;
+                if (stripYaw)
+                {
+                    // Only the yaw delta about the Animator's up goes; the
+                    // node's pitch and roll animation survives.
+                    float delta = Mathf.DeltaAngle(refYaw, Yaw(r));
+                    r = Quaternion.AngleAxis(-delta, Vector3.up) * r;
+                }
+                Matrix4x4 fix = Matrix4x4.TRS(p, r, nodeScale[k]) *
+                                sampled.inverse;
+                foreach (int i in affected)
+                {
+                    Matrix4x4 rel = Matrix4x4.TRS(tracks[i].Position[k],
+                                                  tracks[i].Rotation[k],
+                                                  tracks[i].Scale[k]);
+                    Decompose(fix * rel, out tracks[i].Position[k],
+                              out tracks[i].Rotation[k],
+                              out tracks[i].Scale[k]);
+                }
+            }
+
+            // Unity's "Center of Mass" reference keeps the body centred on
+            // the transform rather than wherever the take happened to be
+            // authored (a turn clip cut from frame 60 of a walking take
+            // sits 2.3 units down the track). Pinning at the clip average
+            // above still leaves the body at that offset; shift the
+            // affected bones so their average over the clip is their
+            // bind-pose position, the place the scene shows the character.
+            bool centreXZ = stripXZ && !s.keepOriginalPositionXZ;
+            bool centreY = stripY && !s.keepOriginalPositionY;
+            if (centreXZ || centreY)
+            {
+                Vector3 shift = Vector3.zero;
+                foreach (int i in affected)
+                {
+                    Vector3 avg = Vector3.zero;
+                    for (int k = 0; k < sampleCount; k++) avg += tracks[i].Position[k];
+                    avg /= sampleCount;
+                    shift += bindPos[i] - avg;
+                }
+                shift /= affected.Count;
+                if (!centreXZ) { shift.x = 0f; shift.z = 0f; }
+                if (!centreY) shift.y = 0f;
+                foreach (int i in affected)
+                {
+                    for (int k = 0; k < sampleCount; k++)
+                    {
+                        tracks[i].Position[k] += shift;
+                    }
+                }
+            }
+
+            if (warnings != null && animator != null &&
+                animator.applyRootMotion && travelled > 0.01f)
+            {
+                warnings.Add(
+                    $"clip '{clip.name}': Apply Root Motion is on, but the " +
+                    "console never moves an entity by a clip's root motion; " +
+                    "the character animates in place. Drive movement from a " +
+                    "script (CharacterController.Move), as this demo does.");
+            }
+        }
+
+        // The Generic rig's motion source, or null when Unity would use the
+        // model root itself (which is the Animator: not a sampled bone, and
+        // nothing below it inherits travel from it). Humanoid rigs derive
+        // root motion from the body's centre of mass and are sampled
+        // through the Animator, which applies the settings itself.
+        private static Transform FindMotionNode(GameObject root,
+                                                Animator animator,
+                                                Transform[] ordered)
+        {
+            if (animator == null || animator.avatar == null || animator.isHuman)
+            {
+                return null;
+            }
+            string node = MotionNodeName(animator.avatar);
+            if (string.IsNullOrEmpty(node))
+            {
+                return null;
+            }
+            Transform t = root.transform.Find(node);
+            if (t == null)
+            {
+                int slash = node.LastIndexOf('/');
+                string leaf = slash >= 0 ? node.Substring(slash + 1) : node;
+                foreach (Transform any in root.GetComponentsInChildren<Transform>(true))
+                {
+                    if (any.name == leaf)
+                    {
+                        t = any;
+                        break;
+                    }
+                }
+            }
+            return t == root.transform ? null : t;
+        }
+
+        // The importer's Motion node when set, else the avatar's Root node
+        // (humanDescription's root motion bone, reachable only through
+        // serialization).
+        private static string MotionNodeName(Avatar avatar)
+        {
+            string path = UnityEditor.AssetDatabase.GetAssetPath(avatar);
+            var importer = UnityEditor.AssetImporter.GetAtPath(path)
+                               as UnityEditor.ModelImporter;
+            if (importer == null)
+            {
+                return null;
+            }
+            if (!string.IsNullOrEmpty(importer.motionNodeName))
+            {
+                return importer.motionNodeName;
+            }
+            var so = new UnityEditor.SerializedObject(importer);
+            UnityEditor.SerializedProperty p =
+                so.FindProperty("m_HumanDescription.m_RootMotionBoneName");
+            return p != null ? p.stringValue : null;
+        }
+
+        // Heading of a rotation about the parent's up axis, in degrees.
+        private static float Yaw(Quaternion q)
+        {
+            Vector3 f = q * Vector3.forward;
+            f.y = 0f;
+            if (f.sqrMagnitude < 1e-8f)
+            {
+                Vector3 u = q * Vector3.up;
+                f = new Vector3(u.x, 0f, u.z);
+                if (f.sqrMagnitude < 1e-8f) return 0f;
+            }
+            return Mathf.Atan2(f.x, f.z) * Mathf.Rad2Deg;
+        }
+
         private static void SampleTracks(AnimationClip clip, GameObject root,
                                          Transform[] ordered,
                                          Transform[] restRef,
                                          Animator animator, bool viaGraph,
-                                         int sampleCount, SampledTrack[] tracks)
+                                         int sampleCount, SampledTrack[] tracks,
+                                         Transform motionNode = null,
+                                         Vector3[] nodePos = null,
+                                         Quaternion[] nodeRot = null,
+                                         Vector3[] nodeScale = null)
         {
             PlayableGraph graph = default;
             AnimationClipPlayable playable = default;
@@ -493,6 +785,15 @@ namespace Ps2.Editor
                 else
                 {
                     clip.SampleAnimation(root, t);
+                }
+                if (motionNode != null && nodePos != null)
+                {
+                    // Animator-relative, the space Unity extracts root
+                    // motion in and the space of every top-level track.
+                    Matrix4x4 nrel = root.transform.worldToLocalMatrix *
+                                     motionNode.localToWorldMatrix;
+                    Decompose(nrel, out nodePos[s], out nodeRot[s],
+                              out nodeScale[s]);
                 }
                 for (int i = 0; i < ordered.Length; i++)
                 {
@@ -769,7 +1070,9 @@ namespace Ps2.Editor
                                                int skeletonIndex,
                                                bool textured = false,
                                                Matrix4x4? boundsTransform = null,
-                                               Matrix4x4? vertexTransform = null)
+                                               Matrix4x4? vertexTransform = null,
+                                               int submesh = -1,
+                                               bool preferVertexColours = true)
         {
             Vector3[] positions = mesh.vertices;
             Vector3[] normals = mesh.normals;
@@ -793,7 +1096,14 @@ namespace Ps2.Editor
             Color32[] colours = mesh.colors32;
             Vector2[] uvs = textured ? mesh.uv : null;
             BoneWeight[] weights = mesh.boneWeights;
-            int[] indices = mesh.triangles;
+            // 'submesh' selects one material slot's triangles; -1 takes them
+            // all (single-material meshes and the M9 callers). A renderer's
+            // submeshes ARE its material slots, so exporting mesh.triangles
+            // under material 0 painted a character's teeth and lashes in its
+            // body colour.
+            int[] indices = submesh >= 0 && submesh < mesh.subMeshCount
+                                ? mesh.GetTriangles(submesh)
+                                : mesh.triangles;
             int triangleCount = indices.Length / 3;
             // 6 qwords need 42 vertices to stay under the 8-bit VIF NUM
             // limit of 255 unpacked qwords; 5-qword batches keep their 48.
@@ -952,7 +1262,12 @@ namespace Ps2.Editor
                         blobs.F32(n.z);
                         blobs.F32(0.0f);
 
-                        Color32 c = colours.Length > src ? colours[src] : fallbackColour;
+                        // Standard-family shaders ignore vertex colours, so
+                        // a renderer WITH a material takes the material's
+                        // colour (preferVertexColours false); the M9 rigs,
+                        // which have no material, keep painting by vertex.
+                        Color32 c = preferVertexColours && colours.Length > src
+                                        ? colours[src] : fallbackColour;
                         // Textured characters MODULATE: the lit vertex colour
                         // multiplies the texel with 0x80 as 1.0, so it lives
                         // in 0..128 (same rule as the rigid tex layout;

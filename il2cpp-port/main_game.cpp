@@ -641,12 +641,14 @@ bool upload_scene_textures(gfx::GsDevice& device, const io::P2bFile& file,
     }
     uint32_t skipped = 0;
     for (uint32_t t = 0; t < tex_count; ++t) {
-        // ONE PACKET PER TEXTURE. A 256x256 PSMT8 upload is 4096 qwords of
-        // IMAGE data; several in one frame packet overflow it, and the
-        // overflow reads exactly like running out of VRAM (verify-log
-        // M12.5).
-        device.begin_frame();
-        device.clear(0, 0, 0);
+        // ONE TEXTURE PER PACKET, AND ONE PACKET PER BAND. A 256x256 PSMT8
+        // upload is 4096 qwords of IMAGE data; several in one frame packet
+        // overflow it, and the overflow reads exactly like running out of
+        // VRAM (verify-log M12.5). A single big texture overflows on its
+        // own: a 256x1024 baked font atlas is 16384 qwords against an
+        // 8192-qword packet, which is how every Unity font degraded to the
+        // builtin 8x8 -- so the rows are split into bands sized from the
+        // packet's real capacity, each in a packet of its own.
         const io::P2bSection* sec = file.find(io::kSectionTex, t);
         const uint8_t* p = sec->data;
         GpuTexture& gt = textures[base + t];
@@ -655,11 +657,32 @@ bool upload_scene_textures(gfx::GsDevice& device, const io::P2bFile& file,
         gt.tex = device.vram().alloc_buffer(gt.w, gt.h, gfx::PixelFormat::PSMT8,
                                             "game-tex");
         gt.clut = device.vram().alloc_clut("game-clut");
-        if (!gt.tex.valid() || !gt.clut.valid() ||
-            !device.upload_texture(p + 16u + 1024u, gt.tex, gt.w, gt.h,
-                                   gfx::PixelFormat::PSMT8) ||
-            !device.upload_clut(reinterpret_cast<const uint32_t*>(p + 16u),
-                                gt.clut, 256)) {
+        bool ok = gt.tex.valid() && gt.clut.valid();
+        if (ok) {
+            const uint32_t row_qwords = gt.w / 16u; // PSMT8: one byte per texel
+            uint32_t rows_per_band =
+                row_qwords > 0u ? (device.packet_capacity() - 64u) / row_qwords : gt.h;
+            if (rows_per_band == 0u) {
+                rows_per_band = 1u;
+            }
+            for (uint32_t y = 0; y < gt.h && ok; y += rows_per_band) {
+                const uint32_t rows =
+                    (gt.h - y) < rows_per_band ? (gt.h - y) : rows_per_band;
+                device.begin_frame();
+                device.clear(0, 0, 0);
+                ok = device.upload_texture_rows(p + 16u + 1024u, gt.tex, gt.w, gt.h,
+                                                gfx::PixelFormat::PSMT8, y, rows);
+                device.end_frame();
+            }
+        }
+        if (ok) {
+            device.begin_frame();
+            device.clear(0, 0, 0);
+            ok = device.upload_clut(reinterpret_cast<const uint32_t*>(p + 16u),
+                                    gt.clut, 256);
+            device.end_frame();
+        }
+        if (!ok) {
             // A texture that does not fit is a QUALITY loss, not a fatal
             // one: free whatever half-landed, leave the slot unbound (the
             // renderer's bind returns false and the mesh draws untextured)
@@ -677,7 +700,6 @@ bool upload_scene_textures(gfx::GsDevice& device, const io::P2bFile& file,
             gt = GpuTexture{};
             ++skipped;
         }
-        device.end_frame();
     }
     // Always report the split, not just on failure: "textures did not fit" is
     // only actionable once you can see whether the framebuffer or the content
@@ -1365,12 +1387,17 @@ int main(void)
             }
         }
 
-        // Animation runs between Update and LateUpdate, which is the
-        // ordering Unity users rely on (M9 task 4). The host never called
-        // this, so a scene's animators advanced by nothing at all.
+        // Animation ran INSIDE Tick: the managed frame calls
+        // ps2ur_anim_update between Update and LateUpdate, the ordering
+        // Unity users rely on (M9 task 4), so scripts that set parameters
+        // in Update see them applied and camera scripts in LateUpdate see
+        // the posed skeleton. This loop used to advance the animators a
+        // second time here, which ran every clip, crossfade and transition
+        // at twice speed -- a 0.5 s walk cycle completed in a quarter
+        // second and looked like it restarted. Only the world matrices are
+        // refreshed here, with the frame's final transforms.
         {
             PS2UR_PROFILE_ZONE("animation");
-            world.update_animators(dt);
             world.update_world_matrices();
         }
         {

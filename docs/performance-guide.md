@@ -55,9 +55,13 @@ Realistic targets for a homebrew engine of this kind, at 30 fps, 512x448:
   while the microprogram processes batch N). Buffer size drives maximum batch
   size: realistically **64-96 vertices per batch** with position + normal +
   UV + colour.
-- There is **no hardware clipping**; the microprogram does frustum/near-plane
-  clipping (guard band + trivial batch rejection + true near-plane clipping
-  only for straddling triangles).
+- There is **no hardware clipping**; the microprogram does guard-band and
+  near-plane REJECTION per triangle (a triangle with any vertex behind the
+  near plane or outside the 4095-unit guard band is dropped whole; true
+  clipping of straddling triangles is the recorded follow-up). The exporter
+  subdivides triangles to 1.5 world-unit edges so the holes that leaves stay
+  below the screen edge for a camera at least that far above the surface it
+  looks along.
 - Skinned batches carry a matrix palette in VU1 data memory: **<=24 bones per
   batch**.
 

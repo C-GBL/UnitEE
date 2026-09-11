@@ -76,6 +76,11 @@ namespace Ps2.Editor
             // mesh and one controller.
             public Dictionary<SkinnedMeshRenderer, int> RendererMesh =
                 new Dictionary<SkinnedMeshRenderer, int>();
+            // EVERY SkinnedMeshes index a renderer draws, one per submesh
+            // (material slot), in slot order. RendererMesh holds the first;
+            // a renderer absent here draws that one alone (the M9 menu).
+            public Dictionary<SkinnedMeshRenderer, List<int>> RendererMeshes =
+                new Dictionary<SkinnedMeshRenderer, List<int>>();
             // Which CHARACTER each renderer belongs to. Renderers in one group
             // share an animator; separate groups animate independently. The
             // runtime cannot work this out for itself -- one character's many
@@ -140,6 +145,9 @@ namespace Ps2.Editor
             // object-space and shared, and the near-rejection subdivision
             // threshold is a WORLD-space size (see P2bMeshExporter).
             public float MaxUserScale = 1f;
+            // The same, per axis: the subdivision measures edges in world
+            // units, and a flat slab is not as thick as it is wide.
+            public Vector3 MaxUserScaleAxes = Vector3.one;
         }
 
         public static void ExportActiveScene(string path)
@@ -348,7 +356,8 @@ namespace Ps2.Editor
                 MeshKey key = meshes[k];
                 List<byte[]> chunks = P2bMeshExporter.Export(
                     key.Mesh, EffectiveKind(key.Kind), key.MaterialIndex,
-                    key.Fallback, key.MaxUserScale, key.Submesh);
+                    key.Fallback, key.MaxUserScale, key.Submesh,
+                    key.MaxUserScaleAxes);
                 firstSectionOf[k] = meshSections.Count;
                 chunkCountOf[k] = chunks.Count;
                 foreach (byte[] c in chunks)
@@ -652,6 +661,11 @@ namespace Ps2.Editor
                                                 Mathf.Abs(ls.z)));
                     if (userScale > meshes[meshIndex].MaxUserScale)
                         meshes[meshIndex].MaxUserScale = userScale;
+                    Vector3 axes = meshes[meshIndex].MaxUserScaleAxes;
+                    meshes[meshIndex].MaxUserScaleAxes = new Vector3(
+                        Mathf.Max(axes.x, Mathf.Abs(ls.x)),
+                        Mathf.Max(axes.y, Mathf.Abs(ls.y)),
+                        Mathf.Max(axes.z, Mathf.Abs(ls.z)));
                     if (record.Mesh < 0)
                     {
                         record.Mesh = meshIndex;
@@ -1047,12 +1061,23 @@ namespace Ps2.Editor
                         {
                             if (kv.Value != g)
                                 continue;
-                            var p = new ByteBuffer();
-                            p.U32((uint)PendingSkin.RendererMesh[kv.Key]);
-                            p.U32(0xFFFFFFFF); // no material override
-                            p.U32((uint)g);    // which character -> animator
-                            p.U32(0);          // controller index
-                            comps.Add((5, p.ToArray()));
+                            // One record per SKMS the renderer draws: a
+                            // multi-material renderer is several sections
+                            // (one per submesh) on the same entity, which
+                            // the runtime already handles as it handles a
+                            // character's many renderers.
+                            List<int> drawn;
+                            if (!PendingSkin.RendererMeshes.TryGetValue(kv.Key, out drawn))
+                                drawn = new List<int> { PendingSkin.RendererMesh[kv.Key] };
+                            foreach (int skms in drawn)
+                            {
+                                var p = new ByteBuffer();
+                                p.U32((uint)skms);
+                                p.U32(0xFFFFFFFF); // no material override
+                                p.U32((uint)g);    // which character -> animator
+                                p.U32(0);          // controller index
+                                comps.Add((5, p.ToArray()));
+                            }
                         }
                     }
                 }

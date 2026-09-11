@@ -38,11 +38,21 @@ namespace Ps2.Editor
         // make that invisible; an authored level's 40-unit floor quad makes
         // it a hole that swallows the foreground (M12.5). Subdividing at
         // export until no edge exceeds this WORLD-space length keeps the
-        // holes at most one small triangle deep. 6 world units against the
-        // usual 0.3-0.5 near plane keeps rejection artifacts under a few
-        // pixels; the cost is vertices, paid only by meshes with big
-        // triangles.
-        public const float MaxTriangleEdgeWorld = 6f;
+        // holes at most one small triangle deep.
+        //
+        // How deep that is: a rejected floor triangle reaches up to one
+        // edge length IN FRONT of the camera, and the floor becomes visible
+        // at (camera height / tan(pitch + half the vertical FOV)) ahead.
+        // For the usual third-person camera -- 2 units above the floor, 60
+        // degree FOV -- that visible line sits 1-2 units ahead over the
+        // whole pitch range, so 6-unit edges left a hole in the bottom of
+        // every frame (the demo's orbit camera, verify-log). Below ~1.5 the
+        // hole stays under the screen edge; the rule of thumb for a scene's
+        // author is "edge length below the camera's height above nearby
+        // surfaces". True near-plane clipping is the recorded follow-up
+        // (ADR-003); until then the cost is vertices, paid only by meshes
+        // with big triangles.
+        public const float MaxTriangleEdgeWorld = 1.5f;
         // One MESH section holds at most this many triangles: 62 batches of
         // 26 in the worst layout, inside the runtime's kMaxBatchesPerMesh
         // of 64. A subdivided mesh over it is CHUNKED into several sections
@@ -65,7 +75,8 @@ namespace Ps2.Editor
         // (single-material meshes and the legacy callers).
         public static System.Collections.Generic.List<byte[]> Export(
             Mesh mesh, uint kind, uint materialIndex, Color32 fallbackColour,
-            float maxUserScale = 1f, int submesh = -1)
+            float maxUserScale = 1f, int submesh = -1,
+            Vector3? userScaleAxes = null)
         {
             Vector3[] positions = mesh.vertices;
             Vector3[] normals = mesh.normals;
@@ -90,9 +101,17 @@ namespace Ps2.Editor
                     C = colours.Length > src ? colours[src] : fallbackColour,
                 });
             }
-            float maxEdge = MaxTriangleEdgeWorld /
-                            Mathf.Max(maxUserScale, 0.0001f);
-            verts = Subdivide(verts, maxEdge);
+            // Edges are measured in WORLD units: object-space lengths scaled
+            // per axis by the largest user of the mesh. The single-scalar
+            // form (largest axis on every axis) is kept for callers without
+            // a scale vector; it over-splits anything flat -- a 17 x 1 x 15
+            // floor slab's 1-unit sides were split as if they were 17 wide.
+            Vector3 axes = userScaleAxes ??
+                           new Vector3(maxUserScale, maxUserScale, maxUserScale);
+            axes = new Vector3(Mathf.Max(Mathf.Abs(axes.x), 0.0001f),
+                               Mathf.Max(Mathf.Abs(axes.y), 0.0001f),
+                               Mathf.Max(Mathf.Abs(axes.z), 0.0001f));
+            verts = Subdivide(verts, MaxTriangleEdgeWorld, axes);
 
             int totalTris = verts.Count / 3;
             if (totalTris > MaxTrisPerChunk * MaxChunks)
@@ -248,7 +267,8 @@ namespace Ps2.Editor
         // seams land on interpolated values of the SAME plane, so nothing
         // cracks visually; lighting is per-vertex either way.
         private static System.Collections.Generic.List<Vert> Subdivide(
-            System.Collections.Generic.List<Vert> tris, float maxEdge)
+            System.Collections.Generic.List<Vert> tris, float maxEdge,
+            Vector3 axes)
         {
             float maxSq = maxEdge * maxEdge;
             var work = new System.Collections.Generic.Stack<(Vert, Vert, Vert)>();
@@ -260,9 +280,9 @@ namespace Ps2.Editor
             while (work.Count > 0)
             {
                 (Vert a, Vert b, Vert c) = work.Pop();
-                float ab = (a.P - b.P).sqrMagnitude;
-                float bc = (b.P - c.P).sqrMagnitude;
-                float ca = (c.P - a.P).sqrMagnitude;
+                float ab = Vector3.Scale(a.P - b.P, axes).sqrMagnitude;
+                float bc = Vector3.Scale(b.P - c.P, axes).sqrMagnitude;
+                float ca = Vector3.Scale(c.P - a.P, axes).sqrMagnitude;
                 float longest = Mathf.Max(ab, Mathf.Max(bc, ca));
                 bool budget = outv.Count / 3 + work.Count + 2 <=
                               MaxTrisPerChunk * MaxChunks;

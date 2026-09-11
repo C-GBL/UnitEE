@@ -164,7 +164,9 @@ Camera (M8, 64B) { ...v1...; u32 orthographic; f32 ortho_size;
                    u32 fog_enabled; u32 fog_rgb; f32 fog_near; f32 fog_far }
 DirectionalLight { f32 dir[3]; f32 colour[3] }   // dir points FROM the light
 Script (M7)      { u32 scrp_offset }             // into the SCRP section
-SkinnedMeshRenderer (M9, 16B) {
+SkinnedMeshRenderer (M9, 16B) {   // one record per SKMS the renderer
+                                  // draws: a multi-material renderer is
+                                  // one record per submesh, same entity
                    u32 skms_index;
                    u32 material_index;       // 0xFFFFFFFF = the mesh's own
                    u32 animator_group;       // see below
